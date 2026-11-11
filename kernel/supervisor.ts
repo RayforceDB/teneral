@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git, runGates, type GateResult } from './gates';
+import { git, linkModules, runGates, type GateResult } from './gates';
 import { appendEvent, readEvents, type JournalEvent } from './journal';
 
 /** The agent exits with this code to ask for a molt. */
@@ -60,12 +60,6 @@ function saveState(p: Paths, state: State): void {
   const tmp = `${p.state}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
   renameSync(tmp, p.state);
-}
-
-function linkModules(root: string, dir: string): void {
-  const source = join(root, 'node_modules');
-  const target = join(dir, 'node_modules');
-  if (existsSync(source) && !existsSync(target)) symlinkSync(source, target);
 }
 
 /** First run: create both worktrees at HEAD. Later runs: read the state back. */
