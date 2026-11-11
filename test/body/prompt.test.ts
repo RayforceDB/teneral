@@ -39,7 +39,7 @@ test('it says how the body is started and that the live checkout does not last',
 });
 
 test('it names every variable the kernel gives the body', () => {
-  for (const name of ['GEN', 'JOURNAL', 'WORKSPACE', 'SOUL', 'PEERS', 'INBOX', 'OWNER', 'ID', 'BASE_URL', 'API_KEY', 'MODEL']) {
+  for (const name of ['GEN', 'JOURNAL', 'WORKSPACE', 'SOUL', 'PEERS', 'INBOX', 'OWNER', 'ID', 'BASE_URL', 'API_KEY', 'MODEL', 'PROVIDER', 'AUTH']) {
     expect(flat).toContain(`\`TENERAL_${name}\``);
   }
 });
@@ -82,7 +82,7 @@ test('it describes the smoke gate and the bare environment the checks run in', (
   expect(flat).toMatch(/throwaway journal holding one message/);
   expect(flat).toMatch(/stub model on localhost/);
   expect(flat).toMatch(/`generation\.ready` and then a reply within 30 seconds/);
-  expect(flat).toMatch(/OpenAI-compatible endpoint at `TENERAL_BASE_URL`/);
+  expect(flat).toMatch(/cannot answer over that provider's protocol at `TENERAL_BASE_URL` is rejected/);
   expect(flat).toMatch(/fresh checkout of the commit/);
   expect(flat).toMatch(/only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on, and `TMPDIR` points at a temporary directory made for that run/);
   expect(flat).toMatch(/a file that is not committed fails there/);
@@ -145,4 +145,39 @@ test('it says the owner can send it back to an earlier generation, and how that 
   // The reason is quoted as the kernel writes it.
   expect(flat).toContain(`"${OWNER_REASON}"`);
   expect(flat).toMatch(/rollback note/);
+});
+
+// The model provider: which protocols exist, and whose the sign-in credentials are.
+import * as providerCode from '../../body/provider';
+import { PROVIDERS } from '../../kernel/providers';
+import * as signinCode from '../../kernel/signin';
+
+test('it names both wire protocols by the functions that speak them, and says which one is the default', () => {
+  expect(new Set(PROVIDERS.map((p) => p.wire))).toEqual(new Set(['chat', 'responses']));
+  for (const name of ['openAiProvider', 'responsesProvider', 'connect'] as const) {
+    expect(typeof providerCode[name]).toBe('function');
+    expect(flat).toContain(`\`${name}\``);
+  }
+  expect(flat).toMatch(/Chat-completions \(`openAiProvider`\) is what an unset or unknown `TENERAL_PROVIDER` gets/);
+  expect(flat).toMatch(/streamed and stateless/);
+  expect(flat).toMatch(/system prompt goes as `instructions`/);
+  expect(flat).toMatch(/reasoning is not carried from one request to the next/);
+  expect(flat).toMatch(/setup \(`kernel\/setup\.ts`\) calls it too/);
+});
+
+test('it says that sign-in credentials are the owner\'s, where they live, and that a token stays in memory', () => {
+  expect(typeof signinCode.accessToken).toBe('function');
+  expect(flat).toMatch(/those credentials are your owner's, not yours/);
+  expect(flat).toMatch(/They live in `TENERAL_AUTH`, outside your workspace/);
+  expect(flat).toMatch(/`accessToken` in `kernel\/signin\.ts`/);
+  expect(flat).toMatch(/keep it in memory only/);
+  expect(flat).toMatch(/Never put a token in the journal, a file, a message or a command/);
+  // And plainly: the shell can read them.
+  expect(flat).toMatch(/It can read the files in `TENERAL_AUTH`/);
+});
+
+test('it says the smoke run is made as the configured provider, with a key and without the sign-in', () => {
+  expect(flat).toMatch(/The stub speaks both wire protocols, and the run is made as the provider your owner configured/);
+  expect(flat).toMatch(/`TENERAL_AUTH` is not set in that run/);
+  expect(flat).toMatch(/must use that key at `TENERAL_BASE_URL` and never look for a sign-in/);
 });

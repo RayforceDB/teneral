@@ -7,7 +7,10 @@ usage() {
   cat <<'EOF'
 usage: ./box <command>
 
-  up              start the agent in the background; it outlives this terminal
+  setup           choose the model provider, sign in or enter a key, and test it; writes .env.
+                  Run again to change provider or to sign in again
+  up              start the agent in the background; it outlives this terminal.
+                  The first time, with no .env yet, it runs the setup first
   talk            attach this terminal to it: type to speak, /quit to leave. The agent goes on
   down            stop the agent
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
@@ -16,6 +19,9 @@ usage: ./box <command>
   logs            follow what the kernel and the agent print
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
+
+Only setup ever opens a port, and only for the ChatGPT sign-in: 127.0.0.1:1455 on this machine,
+where your browser is sent back to after you sign in. TENERAL_CALLBACK_PORT chooses another.
 EOF
 }
 
@@ -53,11 +59,7 @@ clear_stopped() {
 # The (${x[@]+...}) form below is for bash before 4.4, where an empty array counts as unset.
 tty=()
 extra=()
-prepare() {
-  if [ ! -f .env ]; then
-    echo "No .env here. Copy .env.example to .env and fill it in." >&2
-    exit 1
-  fi
+build() {
   docker build --quiet --tag teneral \
     --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >/dev/null
   # No -t when stdin is not a terminal, so this also works from a script or a service.
@@ -68,14 +70,66 @@ prepare() {
   if [ -n "${BOX_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$BOX_DOCKER_ARGS"; fi
 }
 
+prepare() {
+  if [ ! -f .env ]; then
+    echo "No .env here, so no model provider is configured. ./box setup makes one." >&2
+    exit 1
+  fi
+  build
+}
+
 # --init puts a small init at pid 1: it passes signals on to the kernel and reaps what the
 # agent's shell leaves behind.
 # No memory or process limit is set here; an owner who wants one passes it in BOX_DOCKER_ARGS.
-cage=(--init
-  --env-file .env
+bare=(--init
   --volume "$PWD":/teneral
   --cap-drop ALL
   --security-opt no-new-privileges)
+# The agent and its commands also get the owner's configuration. The setup, which writes it, does not.
+cage=("${bare[@]}" --env-file .env)
+
+# The owner's setup (kernel/setup.ts), in a container of its own. It asks questions, so it needs a terminal.
+# No port is published for it, unless the provider chosen signs in through the browser: the setup
+# then ends with status 76, and is run again with the one port that sign-in comes back on, published
+# on this machine's loopback address only. Inside the container the listener has to bind every
+# interface for the published port to reach it; outside, nothing but 127.0.0.1 leads there.
+setup() {
+  if [ ! -t 0 ]; then
+    echo "./box setup asks questions and needs a terminal." >&2
+    return 1
+  fi
+  build
+  local port="${TENERAL_CALLBACK_PORT:-1455}" status=0
+  docker run --rm --interactive --tty "${bare[@]}" ${extra[@]+"${extra[@]}"} \
+    teneral bun kernel/setup.ts --no-callback "$@" || status=$?
+  if [ "$status" -eq 76 ]; then
+    status=0
+    docker run --rm --interactive --tty "${bare[@]}" ${extra[@]+"${extra[@]}"} \
+      --publish "127.0.0.1:$port:$port" --env TENERAL_CALLBACK_HOST=0.0.0.0 --env "TENERAL_CALLBACK_PORT=$port" \
+      teneral bun kernel/setup.ts --resume "$@" || status=$?
+  fi
+  return "$status"
+}
+
+# Before the agent starts: with no configuration yet, the setup comes first when there is someone
+# at a terminal to answer it; otherwise this says what to do and stops.
+configure() {
+  [ ! -f .env ] || return 0
+  if [ ! -t 0 ]; then
+    echo "No .env here, so no model provider is configured. Run ./box setup from a terminal, then this again." >&2
+    exit 1
+  fi
+  echo "No configuration here yet (.env), so the setup comes first."
+  setup || exit "$?"
+  if [ ! -f .env ]; then exit 1; fi
+}
+
+# The gates type-check a candidate with the project's own TypeScript, which is installed here once.
+install() {
+  [ ! -e node_modules ] || return 0
+  echo "Installing the project's dependencies, once."
+  once bun install
+}
 
 # Start the agent's container in the background and say whether it stayed up.
 start() {
@@ -108,12 +162,18 @@ command="${1:-}"
 [ "$#" -eq 0 ] || shift
 
 case "$command" in
+  setup)
+    setup "$@"
+    ;;
+
   up)
     if alive; then
       echo "Already running, as $name."
       exit 0
     fi
+    configure
     prepare
+    install
     clear_stopped
     start
     ;;
@@ -123,7 +183,9 @@ case "$command" in
       echo "Already running in the background, as $name. ./box talk attaches to it; ./box down stops it." >&2
       exit 1
     fi
+    configure
     prepare
+    install
     clear_stopped
     exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} --name "$name" \
       "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral
