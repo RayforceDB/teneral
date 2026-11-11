@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { ProviderError } from '../../body/provider';
-import { describeDelay, failureKind, refusalNote, retryDelayMs, saysTooLong, verdict } from '../../body/retry';
+import { describeDelay, failureKind, refusalNote, retryDelayMs, saysNoImages, saysTooLong, verdict } from '../../body/retry';
 
 test('the wait after a failed turn grows: 10 s, 1 min, 5 min, then every 15 min', () => {
   expect([1, 2, 3, 4, 5, 100].map(retryDelayMs)).toEqual([10_000, 60_000, 300_000, 900_000, 900_000, 900_000]);
@@ -72,4 +72,26 @@ test('the note for a refusal names the status, the start of what the provider sa
   expect(note).toMatch(/owner/i);
   expect(note.length).toBeLessThan(900);
   expect(note.isWellFormed()).toBe(true);
+});
+
+test('a refusal of the images in a request is told from other refusals', () => {
+  const refusals = [
+    new ProviderError('x', 400, '{"error":{"message":"Invalid content type. image_url is only supported by certain models.","type":"invalid_request_error"}}'),
+    new ProviderError('x', 400, 'this model does not support vision'),
+    new ProviderError('x', 400, '{"error":{"message":"Unsupported content: input_image"}}'),
+    new ProviderError('x', 422, 'messages.1.content: multimodal input is not enabled'),
+    new ProviderError('x', 415, 'unsupported image format'),
+    // The plan route's code for an input it does not carry, before the stream (400) or in it (mapped to 400).
+    new ProviderError('x', 400, '{"error":{"code":"subscription_sharing_unsupported_capability","message":null}}'),
+  ];
+  for (const err of refusals) expect(saysNoImages(err)).toBe(true);
+  const others = [
+    new ProviderError('x', 400, 'unknown model'),
+    new ProviderError('x', 400, 'This model\'s maximum context length is 8192 tokens'),
+    new ProviderError('x', 429, 'image rate limit'),
+    new ProviderError('x', 500, 'image decoder crashed'),
+    new ProviderError('x', null, 'image'),
+    new Error('400 image not supported'),
+  ];
+  for (const err of others) expect(saysNoImages(err)).toBe(false);
 });

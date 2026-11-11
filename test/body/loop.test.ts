@@ -262,3 +262,96 @@ test('at the round limit, something the model was never shown keeps the turn owe
   expect(needsTurn(events)).toBe(true);
   expect(s.seen).toHaveLength(1);
 });
+
+// --- usage, reasoning and images ---
+
+import { imageStore } from '../../body/images';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+test('the usage and the summary of the reasoning are journaled with the reply, and left out when the provider gave none', async () => {
+  const s = setup([
+    { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: {} }], usage: { input: 1200, output: 40, cached: 1000 }, reasoning: 'First I echo.' },
+    { text: 'done', toolCalls: [], usage: { input: 1300, output: 5 } },
+  ], [echo]);
+  await runTurn(s.deps);
+  const replies = readEvents(s.journal).filter((e) => e.type === 'assistant');
+  expect(replies[0]).toMatchObject({ text: '', usage: { input: 1200, output: 40, cached: 1000 }, reasoning: 'First I echo.' });
+  expect(replies[1]).toMatchObject({ text: 'done', usage: { input: 1300, output: 5 } });
+  expect('reasoning' in replies[1]!).toBe(false);
+  // The second request shows the first reply without either.
+  expect(JSON.stringify(s.seen[1])).not.toContain('First I echo.');
+  expect(JSON.stringify(s.seen[1])).not.toContain('1200');
+
+  const bare = setup([{ text: 'hello', toolCalls: [] }]);
+  await runTurn(bare.deps);
+  const reply = readEvents(bare.journal).at(-1)!;
+  expect(Object.keys(reply).sort()).toEqual(['gen', 'id', 'text', 'toolCalls', 'ts', 'type', 'v']);
+});
+
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+
+/** A turn's journal at `<root>/memory/journal.jsonl`, with one image in the store and the owner's message naming it. */
+function withImage(provider: Provider) {
+  const root = mkdtempSync(join(tmpdir(), 'teneral-loop-img-'));
+  const journal = join(root, 'memory', 'journal.jsonl');
+  const path = `memory/images/${'5'.repeat(64)}.png`;
+  mkdirSync(dirname(join(root, path)), { recursive: true });
+  writeFileSync(join(root, path), PNG_BYTES);
+  appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: `what is this?\n[image: ${path}]` });
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', moltCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  return { journal, path, deps: { journal, gen: 'g1', provider, tools: [echo], system: () => 'SYS', ctx, sight: { load: imageStore(root) } } };
+}
+
+test('the owner\'s image goes out with the message, read from the store beside the journal', async () => {
+  const seen: ChatMessage[][] = [];
+  const s = withImage(async (messages) => { seen.push(messages); return { text: 'a dot', toolCalls: [] }; });
+  await runTurn(s.deps);
+  expect(seen[0]![1]).toEqual({ role: 'user', content: 'what is this?', images: [{ name: `${'5'.repeat(64)}.png`, mime: 'image/png', data: PNG_BYTES.toString('base64') }] });
+  // The journal holds the marker, as it was typed, and no image data.
+  expect(readEvents(s.journal)[0]).toMatchObject({ text: `what is this?\n[image: ${s.path}]` });
+});
+
+test('a request refused because of its image is asked once more with a note in its place, and the turn goes on without images', async () => {
+  const seen: ChatMessage[][] = [];
+  const s = withImage(async (messages) => {
+    seen.push(messages);
+    if (messages.some((m) => m.images)) throw new ProviderError('refused', 400, '{"error":{"message":"image_url is only supported by certain models"}}');
+    return seen.length === 2 ? { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: {} }] } : { text: 'I cannot see it.', toolCalls: [] };
+  });
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(seen).toHaveLength(3);
+  expect(seen[0]![1]!.images).toHaveLength(1);
+  expect(seen[1]![1]).toEqual({ role: 'user', content: `what is this?\n[image not shown: the model or the route in use does not take images: ${'5'.repeat(64)}.png]` });
+  // The round after the tool call does not try the image again.
+  expect(seen[2]![1]).toEqual(seen[1]![1]!);
+  // Journaled as any turn is: the refusal left no trace, and nothing is owed.
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'assistant']);
+  expect(needsTurn(readEvents(s.journal))).toBe(false);
+});
+
+test('a refusal that stays after the images are gone is passed on, and one about images without any in the request is not retried', async () => {
+  let calls = 0;
+  const always = new ProviderError('refused', 400, 'vision is not supported');
+  const s = withImage(async () => { calls += 1; throw always; });
+  await expect(runTurn(s.deps)).rejects.toBe(always);
+  expect(calls).toBe(2);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus']);
+
+  const plain = setup([]);
+  let asked = 0;
+  await expect(runTurn({ ...plain.deps, provider: async () => { asked += 1; throw always; } })).rejects.toBe(always);
+  expect(asked).toBe(1);
+});
+
+test('an image refused and then a request too long: each is answered once, in turn', async () => {
+  const seen: ChatMessage[][] = [];
+  const s = withImage(async (messages) => {
+    seen.push(messages);
+    if (messages.some((m) => m.images)) throw new ProviderError('refused', 400, 'unsupported image');
+    if (seen.length === 2) throw new ProviderError('refused', 400, 'maximum context length is 10 tokens');
+    return { text: 'ok', toolCalls: [] };
+  });
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(seen).toHaveLength(3);
+});

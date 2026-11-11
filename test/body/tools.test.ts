@@ -22,8 +22,8 @@ function context(workspace: string, gen = 'gen'): ToolContext {
   };
 }
 
-test('the six seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'molt', 'read', 'send', 'write']);
+test('the seed tools exist', () => {
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'look', 'molt', 'read', 'send', 'write']);
 });
 
 test('write creates parent directories and read returns the content', async () => {
@@ -343,4 +343,55 @@ test('send names the peers file when it is malformed', async () => {
   await expect(tool('send').run({ to: 'bob', text: 'hi' }, ctx)).rejects.toThrow(ctx.peers);
   writeFileSync(ctx.peers, '["bob"]');
   await expect(tool('send').run({ to: 'bob', text: 'hi' }, ctx)).rejects.toThrow(ctx.peers);
+});
+
+// --- look ---
+
+import { existsSync, mkdirSync } from 'node:fs';
+import { buildMessages } from '../../body/context';
+import { imageStore } from '../../body/images';
+import { appendEvent } from '../../kernel/journal';
+
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+
+/** A workspace, and a journal at `<root>/memory/journal.jsonl` as an individual has it. */
+function lookContext(): { ctx: ToolContext; root: string; workspace: string } {
+  const root = mkdtempSync(join(tmpdir(), 'teneral-look-'));
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace);
+  return { root, workspace, ctx: { ...context(workspace), journal: join(root, 'memory', 'journal.jsonl') } };
+}
+
+test('look keeps a copy of the image under memory/images and returns the line it is shown by', async () => {
+  const { ctx, root, workspace } = lookContext();
+  writeFileSync(join(workspace, 'shot.png'), PNG_BYTES);
+  const output = await tool('look').run({ path: 'shot.png' }, ctx);
+  const lines = output.split('\n');
+  expect(lines[0]).toBe(`shot.png: image/png, ${PNG_BYTES.length} bytes`);
+  expect(lines[1]).toMatch(/^\[image: memory\/images\/[0-9a-f]{64}\.png\]$/);
+  expect(readFileSync(join(root, lines[1]!.slice(8, -1))).equals(PNG_BYTES)).toBe(true);
+
+  // From the journal, the model then sees the image with the result of its call.
+  appendEvent(ctx.journal, 'gen', { type: 'stimulus', source: 'terminal', text: 'look at shot.png' });
+  appendEvent(ctx.journal, 'gen', { type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'look', args: { path: 'shot.png' } }] });
+  appendEvent(ctx.journal, 'gen', { type: 'tool.result', callId: 'c1', ok: true, output });
+  const messages = buildMessages(readEvents(ctx.journal), 'S', undefined, { load: imageStore(root) });
+  expect(messages.at(-1)).toEqual({
+    role: 'tool', tool_call_id: 'c1', content: lines[0]!, images: [{ name: lines[1]!.slice(22, -1), mime: 'image/png', data: PNG_BYTES.toString('base64') }],
+  });
+});
+
+test('look takes an image from memory by its absolute path, and refuses what is not an image, by its bytes', async () => {
+  const { ctx, root, workspace } = lookContext();
+  mkdirSync(join(root, 'memory', 'notes'), { recursive: true });
+  writeFileSync(join(root, 'memory', 'notes', 'drawing'), PNG_BYTES);
+  expect(await tool('look').run({ path: join(root, 'memory', 'notes', 'drawing') }, ctx)).toContain('[image: memory/images/');
+  writeFileSync(join(workspace, 'fake.png'), 'TENERAL_API_KEY=secret');
+  await expect(tool('look').run({ path: 'fake.png' }, ctx)).rejects.toThrow(/cannot be shown: it is not a PNG, JPEG, GIF or WebP image/);
+  await expect(tool('look').run({ path: 'gone.png' }, ctx)).rejects.toThrow(/the file is missing/);
+  await expect(tool('look').run({}, ctx)).rejects.toThrow(/missing string argument: path/);
+  // Nothing but the one image was kept.
+  expect(existsSync(join(root, 'memory', 'images'))).toBe(true);
+  const { readdirSync } = await import('node:fs');
+  expect(readdirSync(join(root, 'memory', 'images'))).toHaveLength(1);
 });

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  ProviderError, connect, readResponsesStream, responsesProvider, toResponsesInput, toResponsesTools, type ChatMessage,
+  ProviderError, connect, readResponsesStream, responsesProvider, tidyReasoning, toResponsesInput, toResponsesTools, type ChatMessage,
 } from '../../body/provider';
 import { failureKind, saysTooLong, verdict } from '../../body/retry';
 import { bashEnv } from '../../body/tools';
@@ -216,7 +216,9 @@ test('the request is stateless and streamed, carries only supported fields, and 
   expect(sent[0]!.url).not.toContain('backend-api');
   expect(sent[0]!.headers.authorization).toBe('Bearer tok');
   expect(sent[0]!.headers['user-agent']).toBe(`teneral/${version}`);
-  expect(Object.keys(sent[0]!.body).sort()).toEqual(['input', 'instructions', 'model', 'store', 'stream', 'tools']);
+  expect(Object.keys(sent[0]!.body).sort()).toEqual(['input', 'instructions', 'model', 'reasoning', 'store', 'stream', 'tools']);
+  // The one field added for the owner's sake: a summary of the reasoning. It is not among the fields the plan route says to omit.
+  expect(sent[0]!.body.reasoning).toEqual({ summary: 'auto' });
   expect(sent[0]!.body).toMatchObject({ model: 'm', store: false, stream: true, instructions: 'SYSTEM' });
   expect((sent[0]!.body.tools as { type: string }[])[0]!.type).toBe('namespace');
 });
@@ -224,7 +226,7 @@ test('the request is stateless and streamed, carries only supported fields, and 
 test('without tools none are sent', async () => {
   const sent: Sent[] = [];
   await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([okStream], sent) })([{ role: 'user', content: 'x' }], []);
-  expect(Object.keys(sent[0]!.body).sort()).toEqual(['input', 'model', 'store', 'stream']);
+  expect(Object.keys(sent[0]!.body).sort()).toEqual(['input', 'model', 'reasoning', 'store', 'stream']);
 });
 
 test('after a 401 a token is asked for once more, naming the one refused, and the request is sent again', async () => {
@@ -344,4 +346,98 @@ test('a shell command sees neither the key nor a token: the sign-in provider put
   expect(JSON.stringify(process.env)).toBe(snapshot);
   expect(JSON.stringify(bashEnv(env))).not.toContain('secret');
   expect(JSON.stringify(bashEnv(env))).not.toContain('at-real');
+});
+
+// --- images, usage and the summary of the reasoning ---
+
+const PICTURE = { name: `${'a'.repeat(64)}.png`, mime: 'image/png', data: 'AAAA' };
+
+test('an image beside a user message is an input_image part after the text; alone, it is the only part', () => {
+  const { input } = toResponsesInput([
+    { role: 'user', content: 'what is this?', images: [PICTURE, { ...PICTURE, mime: 'image/jpeg', data: 'BBBB' }] },
+    { role: 'user', content: null, images: [PICTURE] },
+  ]);
+  expect(input).toEqual([
+    { role: 'user', content: [
+      { type: 'input_text', text: 'what is this?' },
+      { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+      { type: 'input_image', image_url: 'data:image/jpeg;base64,BBBB' },
+    ] },
+    { role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] },
+  ]);
+  expect(JSON.stringify(input)).not.toContain('"images"');
+});
+
+test('an image a tool returned goes in the output of its call, as a list of parts', () => {
+  const { input } = toResponsesInput([
+    { role: 'user', content: 'look at it' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'look', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: 'a.png: image/png, 3 bytes', images: [PICTURE] },
+  ], 'teneral');
+  expect(input[2]).toEqual({ type: 'function_call_output', call_id: 'c1', output: [
+    { type: 'input_text', text: 'a.png: image/png, 3 bytes' }, { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+  ] });
+});
+
+const summary = (...texts: string[]) => ({ type: 'reasoning', id: 'rs_1', summary: texts.map((text) => ({ type: 'summary_text', text })) });
+const USAGE = { input_tokens: 1200, input_tokens_details: { cached_tokens: 1000 }, output_tokens: 80, output_tokens_details: { reasoning_tokens: 64 }, total_tokens: 1280 };
+
+test('the usage the stream ends with is returned, with the cached part of the input', () => {
+  const done = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: USAGE } };
+  expect(readResponsesStream(sse(CREATED, done))).toEqual({ text: 'hi', toolCalls: [], usage: { input: 1200, output: 80, cached: 1000 } });
+  const bare = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: { input_tokens: 5, output_tokens: 1 } } };
+  expect(readResponsesStream(sse(CREATED, bare)).usage).toEqual({ input: 5, output: 1 });
+  // Not numbers, or not there: no usage, rather than a made-up one.
+  for (const usage of [null, 'much', { input_tokens: '5', output_tokens: 1 }, { input_tokens: -1, output_tokens: 1 }]) {
+    const odd = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage } };
+    expect('usage' in readResponsesStream(sse(CREATED, odd))).toBe(false);
+  }
+});
+
+test('the summaries of the reasoning items are returned as one text; an item without a summary gives none', () => {
+  const reply = readResponsesStream(sse(CREATED, completed([summary('**Reading the file**\n\nFirst part.', 'Second part.'), call(1, 'read', '{}'), summary('Later.')])));
+  expect(reply.reasoning).toBe('**Reading the file**\n\nFirst part.\n\nSecond part.\n\nLater.');
+  expect('reasoning' in readResponsesStream(sse(CREATED, completed([REASONING, message('hi')])))).toBe(false);
+});
+
+test('a summary is made safe for a terminal and the journal: no control characters, no lone surrogate, a few thousand characters at most', () => {
+  expect(tidyReasoning('a\u001b[31mred\u0007\r\nnext\tcol \ud800 end')).toBe('a[31mred\nnext\tcol � end');
+  const long = tidyReasoning('x'.repeat(50_000))!;
+  expect(long.length).toBeLessThan(4100);
+  expect(long).toContain('characters dropped here');
+  for (const nothing of ['', '  \n ', undefined, null, 7, ['a']]) expect(tidyReasoning(nothing)).toBeUndefined();
+});
+
+test('where the provider refuses the summary field, the request is sent again without it, and it is not asked for again', async () => {
+  const sent: Sent[] = [];
+  const refusals = [
+    '{"error":{"message":"Unsupported parameter: \'reasoning.summary\' is not supported with this model.","param":"reasoning.summary","code":"unsupported_parameter"}}',
+    '{"error":{"message":"Your organization must be verified to generate reasoning summaries.","code":"unsupported_value"}}',
+    '{"error":{"code":"subscription_sharing_unsupported_capability","param": "reasoning"}}',
+  ];
+  for (const refusal of refusals) {
+    sent.length = 0;
+    const provider = responsesProvider({
+      baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm',
+      fetch: recorder([() => new Response(refusal, { status: 400 }), okStream, okStream], sent),
+    });
+    expect((await provider([{ role: 'user', content: 'x' }], [])).text).toBe('hi');
+    await provider([{ role: 'user', content: 'y' }], []);
+    expect(sent.map((s) => 'reasoning' in s.body)).toEqual([true, false, false]);
+  }
+});
+
+test('a refusal that is not about the summary, or a second one, is passed on; and the field can be left out from the start', async () => {
+  const sent: Sent[] = [];
+  const bad = () => new Response('{"error":{"message":"unknown model"}}', { status: 400 });
+  await expect(responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([bad], sent) })([{ role: 'user', content: 'x' }], []))
+    .rejects.toThrow(/unknown model/);
+  expect(sent).toHaveLength(1);
+  const noSummary = () => new Response('{"error":{"message":"reasoning summaries are not available"}}', { status: 400 });
+  await expect(responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([noSummary, noSummary], sent) })([{ role: 'user', content: 'x' }], []))
+    .rejects.toThrow(/not available/);
+  expect(sent).toHaveLength(3);
+  sent.length = 0;
+  await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', summaries: false, fetch: recorder([okStream], sent) })([{ role: 'user', content: 'x' }], []);
+  expect('reasoning' in sent[0]!.body).toBe(false);
 });

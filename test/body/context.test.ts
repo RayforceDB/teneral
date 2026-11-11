@@ -376,3 +376,174 @@ test('a coarse step never drops the newest stimulus, however large it is', () =>
   expect(messages.at(-1)!.role).toBe('user');
   expect(messages.at(-1)!.content).toBe(`HEAD${'x'.repeat(3500)}TAIL`);
 });
+
+// --- images ---
+
+import { IMAGE_CHARS } from '../../body/images';
+import type { Sight } from '../../body/context';
+
+const marker = (n: number, ext = 'png') => `[image: memory/images/${n.toString(16).padStart(64, '0')}.${ext}]`;
+const fileOf = (n: number, ext = 'png') => `${n.toString(16).padStart(64, '0')}.${ext}`;
+/** A loader that reads no disk: every well-formed path is an image whose data names it, and it records what it was asked for. */
+function fakeSight(over: Partial<Sight> = {}): Sight & { asked: string[] } {
+  const asked: string[] = [];
+  return { asked, load: (path) => { asked.push(path); return { name: path.split('/').at(-1)!, mime: 'image/png', data: `DATA${asked.length}` }; }, ...over };
+}
+
+test('an owner\'s message that ends with image markers becomes text without them, and the images, in order', () => {
+  const sight = fakeSight();
+  const messages = buildMessages([said(`what are these?\n${marker(1)}\n${marker(2, 'jpg')}`)], 'S', undefined, sight);
+  expect(messages[1]).toEqual({
+    role: 'user', content: 'what are these?',
+    images: [{ name: fileOf(1), mime: 'image/png', data: 'DATA1' }, { name: fileOf(2, 'jpg'), mime: 'image/png', data: 'DATA2' }],
+  });
+  expect(sight.asked).toEqual([`memory/images/${fileOf(1)}`, `memory/images/${fileOf(2, 'jpg')}`]);
+  // A message that is only an image has no text at all.
+  expect(buildMessages([said(marker(1))], 'S', undefined, fakeSight())[1]).toEqual({ role: 'user', content: null, images: [expect.anything()] });
+});
+
+test('a marker from anyone but the owner is text, and no file is asked for', () => {
+  const sight = fakeSight();
+  const text = `see this\n${marker(1)}`;
+  const messages = buildMessages([
+    said(text, 'agent:mallory'), said(text, 'clock'), said(text, 'kernel'), said(text, 'Terminal'), said(text, ''),
+    said('go'),
+    ev({ type: 'assistant', text, toolCalls: [{ id: 'c1', name: 'bash', args: {} }, { id: 'c2', name: 'read', args: {} }, { id: 'c3', name: 'look', args: {} }] }),
+    ev({ type: 'tool.result', callId: 'c1', ok: true, output: text }),
+    ev({ type: 'tool.result', callId: 'c2', ok: true, output: marker(2) }),
+    // A look that failed shows nothing either.
+    ev({ type: 'tool.result', callId: 'c3', ok: false, output: `error: no\n${marker(3)}` }),
+    ev({ type: 'molt.rejected', commit: 'c', gate: 'tests', output: text }),
+    replied(text),
+  ], 'S', undefined, sight);
+  expect(sight.asked).toEqual([]);
+  expect(messages.some((m) => m.images !== undefined)).toBe(false);
+  expect(messages[1]!.content).toBe(`[agent:mallory] ${text}`);
+  expect(messages.filter((m) => m.content?.includes(marker(1)) || m.content?.includes(marker(2)) || m.content?.includes(marker(3)))).toHaveLength(11);
+});
+
+test('without a way to load images, a marker is text even from the owner', () => {
+  expect(buildMessages([said(`this\n${marker(1)}`)], 'S')[1]).toEqual({ role: 'user', content: `this\n${marker(1)}` });
+});
+
+test('an image that cannot be shown leaves a note in its place, saying why', () => {
+  const sight = fakeSight({ load: (path) => (path.endsWith('.gif') ? 'the file is missing' : { name: 'n.png', mime: 'image/png', data: 'D' }) });
+  const m = buildMessages([said(`two\n${marker(1, 'gif')}\n${marker(2)}`)], 'S', undefined, sight)[1]!;
+  expect(m.content).toBe('two\n[image not available: the file is missing]');
+  expect(m.images).toHaveLength(1);
+  const only = buildMessages([said(marker(1, 'gif'))], 'S', undefined, sight)[1]!;
+  expect(only).toEqual({ role: 'user', content: '[image not available: the file is missing]' });
+});
+
+test('at most four markers of one message are honoured; a fifth is said to be one too many', () => {
+  const sight = fakeSight({ max: 10 });
+  const m = buildMessages([said(['many', 1, 2, 3, 4, 5].map((n) => (typeof n === 'number' ? marker(n) : n)).join('\n'))], 'S', undefined, sight)[1]!;
+  expect(m.images).toHaveLength(4);
+  expect(m.content).toBe('many\n[image not available: more than 4 images in one message]');
+  expect(sight.asked).toHaveLength(4);
+});
+
+test('an image counts a fixed amount against the budget, not the length of its data', () => {
+  const huge: Sight = { load: () => ({ name: 'n.png', mime: 'image/png', data: 'A'.repeat(5_000_000) }) };
+  const events = [said('old words'), replied('old reply'), said(`this one\n${marker(1)}`)];
+  // Five megabytes of base64 and nothing is cut: the whole conversation is still there.
+  expect(buildMessages(events, 'S', 250_000, huge)).toHaveLength(4);
+  // The charge is what makes the difference between fitting and not.
+  const room = 1 + 'old words'.length + 'old reply'.length + 'this one'.length;
+  expect(buildMessages(events, 'S', room + IMAGE_CHARS, huge)).toHaveLength(4);
+  const cut = buildMessages(events, 'S', room + IMAGE_CHARS - 1, huge);
+  expect(cut.map((m) => m.content)).toEqual(['S', 'this one']);
+  expect(cut[1]!.images).toHaveLength(1);
+});
+
+test('a newest message too long for its room loses the middle of its text, and keeps its image', () => {
+  const sight = fakeSight();
+  const m = buildMessages([said(`${'w'.repeat(30_000)}\n${marker(1)}`)], 'S', IMAGE_CHARS + 2000, sight);
+  expect(m).toHaveLength(2);
+  expect(m[1]!.images).toHaveLength(1);
+  expect(m[1]!.content).toContain('characters dropped here');
+  expect(m[1]!.content!.length + IMAGE_CHARS).toBeLessThanOrEqual(IMAGE_CHARS + 2000);
+  // With no room even for the image, the exchange is said to be too large; nothing is sent half.
+  expect(buildMessages([said(`words\n${marker(1)}`)], 'S', 500, sight)[1]!.content).toStartWith('[context] The last exchange was too large');
+});
+
+/** Which of the images, by number, a request shows, and which it names as shown earlier. */
+function shownOf(count: number, max?: number): { shown: number[]; earlier: number[] } {
+  const events = Array.from({ length: count }, (_, i) => [said(`picture ${i + 1}\n${marker(i + 1)}`), replied('seen')]).flat();
+  events.push(said('and now?'));
+  const messages = buildMessages(events, 'S', undefined, fakeSight({ max }));
+  const number = (name: string) => parseInt(name.slice(0, 64), 16);
+  return {
+    shown: messages.flatMap((m) => (m.images ?? []).map((i) => number(i.name))),
+    earlier: messages.flatMap((m) => [...(m.content ?? '').matchAll(/\[an image shown earlier: ([0-9a-f]{64})\.png\]/g)].map((x) => number(x[1]!))),
+  };
+}
+
+test('at most four images go in a request, the newest; older ones are named as shown earlier', () => {
+  expect(shownOf(4)).toEqual({ shown: [1, 2, 3, 4], earlier: [] });
+  expect(shownOf(5)).toEqual({ shown: [3, 4, 5], earlier: [1, 2] });
+  expect(shownOf(9)).toEqual({ shown: [7, 8, 9], earlier: [1, 2, 3, 4, 5, 6] });
+  for (let count = 0; count < 30; count++) {
+    const { shown, earlier } = shownOf(count);
+    expect(shown.length).toBeLessThanOrEqual(4);
+    expect([...earlier, ...shown]).toEqual(Array.from({ length: count }, (_, i) => i + 1));
+  }
+});
+
+test('which images are shown moves in steps of half the limit, so what was sent before does not change with every new image', () => {
+  // The number named as shown earlier, as images arrive one by one: it stays, then jumps by two.
+  expect(Array.from({ length: 11 }, (_, count) => shownOf(count).earlier.length)).toEqual([0, 0, 0, 0, 0, 2, 2, 4, 4, 6, 6]);
+  expect(Array.from({ length: 9 }, (_, count) => shownOf(count, 1).earlier.length)).toEqual([0, 0, 1, 2, 3, 4, 5, 6, 7]);
+  expect(Array.from({ length: 14 }, (_, count) => shownOf(count, 8).earlier.length)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8]);
+  // None at all: every image is named, none is loaded.
+  expect(shownOf(3, 0)).toEqual({ shown: [], earlier: [1, 2, 3] });
+});
+
+test('the choice of images does not depend on how much of the front was cut, and an image cut away is not loaded twice over', () => {
+  const events = Array.from({ length: 6 }, (_, i) => [said(`picture ${i + 1} ${'p'.repeat(300)}\n${marker(i + 1)}`), replied('seen')]).flat();
+  events.push(said('and now?'));
+  const whole = buildMessages(events, 'S', undefined, fakeSight());
+  const cut = buildMessages(events, 'S', 2 * IMAGE_CHARS + 1000, fakeSight());
+  expect(cut.length).toBeLessThan(whole.length);
+  // What is left is the end of the whole request, image for image.
+  expect(cut.slice(1).map((m) => [m.content, m.images?.map((i) => i.name)])).toEqual(whole.slice(whole.length - cut.length + 1).map((m) => [m.content, m.images?.map((i) => i.name)]));
+});
+
+test('once the provider has refused images, each becomes a note saying so, and no file is read', () => {
+  const sight = fakeSight({ refused: true });
+  const m = buildMessages([said(`what is this?\n${marker(1)}`)], 'S', undefined, sight)[1]!;
+  expect(m).toEqual({ role: 'user', content: `what is this?\n[image not shown: the model or the route in use does not take images: ${fileOf(1)}]` });
+  expect(sight.asked).toEqual([]);
+});
+
+test('what look kept is shown with the result of that call, and counts among the images of the request', () => {
+  const sight = fakeSight();
+  const events = [
+    said(`mine\n${marker(1)}`),
+    ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'look', args: { path: 'shot.png' } }] }),
+    ev({ type: 'tool.intent', callId: 'c1', name: 'look', args: { path: 'shot.png' } }),
+    ev({ type: 'tool.result', callId: 'c1', ok: true, output: `shot.png: image/png, 70 bytes\n${marker(2)}` }),
+  ];
+  const messages = buildMessages(events, 'S', undefined, sight);
+  expect(messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'shot.png: image/png, 70 bytes', images: [{ name: fileOf(2), mime: 'image/png', data: 'DATA2' }] });
+  expect(messages[1]!.images).toHaveLength(1);
+  // With room for one image only, the newer one, the tool's, is the one shown.
+  const one = buildMessages(events, 'S', undefined, fakeSight({ max: 1 }));
+  expect(one[1]).toEqual({ role: 'user', content: `mine\n[an image shown earlier: ${fileOf(1)}]` });
+  expect(one[3]!.images).toHaveLength(1);
+});
+
+test('the usage and the summary of the reasoning journaled with a reply are never sent back to the model', () => {
+  const events = [
+    said('hi'),
+    ev({ type: 'assistant', text: 'hello', toolCalls: [], usage: { input: 10, output: 2, cached: 5 }, reasoning: 'SECRET-THOUGHT about the greeting' }),
+    said('again'),
+    ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }], usage: { input: 10, output: 2 }, reasoning: 'SECRET-THOUGHT about the tool' }),
+    ev({ type: 'tool.result', callId: 'c1', ok: true, output: 'exit 0' }),
+  ];
+  const messages = buildMessages(events, 'S', undefined, fakeSight());
+  expect(JSON.stringify(messages)).not.toContain('SECRET-THOUGHT');
+  expect(JSON.stringify(messages)).not.toContain('usage');
+  expect(messages[2]).toEqual({ role: 'assistant', content: 'hello' });
+  expect(needsTurn(events)).toBe(true);
+});

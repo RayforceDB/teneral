@@ -22,6 +22,16 @@ export function saysTooLong(err: unknown): boolean {
 }
 
 /**
+ * The provider's way of saying it will not take the images in a request: the model has no vision, or the route
+ * does not carry them (the ChatGPT plan route answers with its unsupported-capability code). Only asked about a
+ * request that held images; the loop then asks again with a note in their place (body/loop.ts).
+ */
+export function saysNoImages(err: unknown): boolean {
+  return err instanceof ProviderError && (err.status === 400 || err.status === 415 || err.status === 422)
+    && /image|vision|multi-?modal|unsupported[ _]content|invalid[ _]content|content[ _]type|subscription_sharing_unsupported_capability/i.test(err.body);
+}
+
+/**
  * Why a turn failed, as far as it decides what to do next:
  * - 'own': not the provider at all. This code threw, which no waiting will mend.
  * - 'refused': the provider will not take this request and would not take it again.

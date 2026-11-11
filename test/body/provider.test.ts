@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { openAiProvider, ProviderError } from '../../body/provider';
+import { openAiProvider, ProviderError, toChatMessages, type ChatMessage } from '../../body/provider';
 
 function fakeFetch(status: number, body: unknown, seen: { url?: string; init?: RequestInit } = {}) {
   return (async (url: string, init?: RequestInit) => {
@@ -156,4 +156,74 @@ test('every way a request can fail is a ProviderError that carries the status an
   const html = (async () => new Response('<html>', { status: 200 })) as unknown as typeof fetch;
   expect(await caught(openAiProvider({ ...cfg, fetch: html })([], []))).toBeInstanceOf(ProviderError);
   expect(await caught(openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [] }) })([], []))).toBeInstanceOf(ProviderError);
+});
+
+// --- images, usage and reasoning ---
+
+const PICTURE = { name: `${'a'.repeat(64)}.png`, mime: 'image/png', data: 'AAAA' };
+
+test('a message without images goes on the wire as it is; one with images becomes text and image_url parts', async () => {
+  const seen: { init?: RequestInit } = {};
+  const provider = openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'ok' } }] }, seen) });
+  await provider([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: 'what is this?', images: [PICTURE, { ...PICTURE, mime: 'image/webp', data: 'BBBB' }] },
+    { role: 'user', content: null, images: [PICTURE] },
+  ], []);
+  expect((JSON.parse(seen.init!.body as string) as { messages: unknown }).messages).toEqual([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: [
+      { type: 'text', text: 'what is this?' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      { type: 'image_url', image_url: { url: 'data:image/webp;base64,BBBB' } },
+    ] },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
+  ]);
+  expect(seen.init!.body as string).not.toContain('"images"');
+});
+
+test('a tool message takes only text on this protocol: what look returned follows as a user message, after every result of that reply', () => {
+  const messages: ChatMessage[] = [
+    { role: 'user', content: 'compare them' },
+    { role: 'assistant', content: null, tool_calls: [
+      { id: 'c1', type: 'function', function: { name: 'look', arguments: '{}' } },
+      { id: 'c2', type: 'function', function: { name: 'bash', arguments: '{}' } },
+    ] },
+    { role: 'tool', tool_call_id: 'c1', content: 'a.png: image/png, 3 bytes', images: [PICTURE] },
+    { role: 'tool', tool_call_id: 'c2', content: 'exit 0' },
+    { role: 'assistant', content: 'so' },
+  ];
+  expect(toChatMessages(messages)).toEqual([
+    messages[0], messages[1],
+    { role: 'tool', tool_call_id: 'c1', content: 'a.png: image/png, 3 bytes' },
+    { role: 'tool', tool_call_id: 'c2', content: 'exit 0' },
+    { role: 'user', content: [
+      { type: 'text', text: `[the result of look, as an image: ${PICTURE.name}]` },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+    ] },
+    messages[4],
+  ]);
+  // At the very end of the list too.
+  expect(toChatMessages(messages.slice(0, 4)).at(-1)).toMatchObject({ role: 'user' });
+});
+
+test('the usage the endpoint reports is returned, with the cached part of the prompt when it says', async () => {
+  const answer = (usage: unknown) => openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'ok' } }], usage }) })([], []);
+  expect(await answer({ prompt_tokens: 900, completion_tokens: 30, total_tokens: 930, prompt_tokens_details: { cached_tokens: 512 } }))
+    .toEqual({ text: 'ok', toolCalls: [], usage: { input: 900, output: 30, cached: 512 } });
+  expect((await answer({ prompt_tokens: 900, completion_tokens: 30 })).usage).toEqual({ input: 900, output: 30 });
+  expect((await answer({ prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: null })).usage).toEqual({ input: 900, output: 30 });
+  for (const odd of [undefined, null, 'x', {}, { prompt_tokens: 'many', completion_tokens: 1 }, { prompt_tokens: NaN, completion_tokens: 1 }]) {
+    expect('usage' in await answer(odd)).toBe(false);
+  }
+});
+
+test('reasoning the endpoint shows with the message is returned, under either of the names in use, made safe and clipped', async () => {
+  const answer = (message: unknown) => openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message }] }) })([], []);
+  expect((await answer({ content: 'ok', reasoning_content: 'I thought\u001b[2J about it.' })).reasoning).toBe('I thought[2J about it.');
+  expect((await answer({ content: 'ok', reasoning: 'Another name.' })).reasoning).toBe('Another name.');
+  expect((await answer({ content: 'ok', reasoning: 'x'.repeat(30_000) })).reasoning!.length).toBeLessThan(4100);
+  for (const none of [{ content: 'ok' }, { content: 'ok', reasoning: '' }, { content: 'ok', reasoning_content: { effort: 'high' } }]) {
+    expect('reasoning' in await answer(none)).toBe(false);
+  }
 });

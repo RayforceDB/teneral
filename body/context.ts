@@ -1,4 +1,5 @@
 import type { JournalEvent } from '../kernel/journal';
+import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from './images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from './text';
 
@@ -66,8 +67,66 @@ function wireArgs(args: unknown): string {
   return JSON.stringify({ _raw: asText(args).toWellFormed() });
 }
 
+/** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
 function size(m: ChatMessage): number {
-  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
+}
+
+/** How images get into a request. Without one, a marker is text like any other and no file is read. */
+export interface Sight {
+  /** The image a marker's path names, or, as text, why it cannot be shown (body/images.ts). */
+  load: (path: string) => Image | string;
+  /** Images in one request at most. Default: DEFAULT_IMAGES. */
+  max?: number;
+  /** Set once the provider refused a request because of its images: every image becomes a note. */
+  refused?: boolean;
+}
+
+/** A place in the conversation where an image belongs: the message, and the path its marker named (null: one marker too many). */
+interface Slot { message: ChatMessage; path: string | null }
+
+/**
+ * Takes the marker lines off the end of `message` and records a slot for each. Called only for
+ * what may show images: a stimulus whose source is `terminal`, which is the owner, and the result
+ * of a `look` call that ran. A marker anywhere else is never looked for, so nobody else's text can
+ * make a file be read and sent to the provider.
+ */
+function takeMarkers(message: ChatMessage, slots: Slot[]): void {
+  const { text, paths } = splitMarkers(message.content ?? '');
+  if (paths.length === 0) return;
+  message.content = text;
+  paths.forEach((path, i) => slots.push({ message, path: i < IMAGES_PER_MESSAGE ? path : null }));
+}
+
+/**
+ * Puts an image, or a line saying why there is none, in every slot.
+ *
+ * At most `max` images go in a request, the newest ones. Which ones those are must not change with
+ * every request, or the start of the request would, and with it what a provider can reuse (see
+ * `fit`). So slots are counted from the start of the whole journal, not of what is sent, and the
+ * number of older ones turned into a line moves in steps of half of `max`: it is the smallest
+ * multiple of the step that leaves at most `max`. With the default of 4, images 1 and 2 become
+ * lines when the 5th arrives, 3 and 4 when the 7th does: between those moments nothing already
+ * sent changes. A file that cannot be shown still fills its slot, so its going missing moves nothing.
+ */
+function fillSlots(slots: Slot[], sight: Sight): void {
+  const max = Math.max(0, Math.floor(sight.max ?? DEFAULT_IMAGES));
+  const step = Math.max(1, Math.floor(max / 2));
+  const earlier = slots.length > max ? Math.ceil((slots.length - max) / step) * step : 0;
+  slots.forEach(({ message, path }, i) => {
+    const name = path?.split('/').at(-1) ?? '';
+    const image = path === null ? `[image not available: more than ${IMAGES_PER_MESSAGE} images in one message]`
+      : sight.refused ? `[image not shown: the model or the route in use does not take images: ${name}]`
+      : i < earlier ? `[an image shown earlier: ${name}]`
+      : sight.load(path);
+    if (typeof image !== 'string') (message.images ??= []).push(image);
+    else {
+      const line = image.startsWith('[') ? image : `[image not available: ${image}]`;
+      message.content = message.content ? `${message.content}\n${line}` : line;
+    }
+  });
+  // No provider takes an empty text part; a message that is only images has no text at all. A tool's result is always text, if empty.
+  for (const { message } of slots) if (message.content === '' && message.role === 'user') message.content = null;
 }
 
 const TOO_LARGE =
@@ -101,7 +160,9 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   if (newest !== -1) {
     const room = budgetChars - messages.slice(newest + 1).reduce((sum, m) => sum + size(m), 0);
     const m = messages[newest]!;
-    if (size(m) > room && room >= CLIP_MIN) messages[newest] = { ...m, content: clip(m.content ?? '', room - CLIP_NOTE) };
+    // Only its text can be cut; its images count in full.
+    const text = room - (m.images?.length ?? 0) * IMAGE_CHARS;
+    if (size(m) > room && text >= CLIP_MIN) messages[newest] = { ...m, content: clip(m.content ?? '', text - CLIP_NOTE) };
   }
   // What stands before the first user message can never be sent, so it is not counted as something to make room for.
   let start = Math.max(0, messages.findIndex((m) => m.role === 'user'));
@@ -140,24 +201,26 @@ function stimulusText(source: unknown, text: unknown): string {
  * Call ids are the model's and may repeat, in a later reply or within one, so an id alone does
  * not say which call a result belongs to. Calls run in order: the nth call with an id gets the nth result.
  */
-function answers(events: JournalEvent[], at: number): { results: Map<unknown, string[]>; started: Map<unknown, number> } {
-  const results = new Map<unknown, string[]>();
+function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean }[]>; started: Map<unknown, number> } {
+  const results = new Map<unknown, { output: string; ok: boolean }[]>();
   const started = new Map<unknown, number>();
   for (let j = at + 1; j < events.length; j++) {
     const e = events[j]!;
     if (e.type === 'assistant') break;
     if (e.type === 'tool.intent') started.set(e.callId, (started.get(e.callId) ?? 0) + 1);
-    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), asText(e.output)]);
+    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true }]);
   }
   return { results, started };
 }
 
 /**
  * The request for this journal: the system prompt, then the conversation, cut from the front to
- * `budgetChars` (which the system prompt counts against).
+ * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
+ * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight): ChatMessage[] {
   const out: ChatMessage[] = [];
+  const slots: Slot[] = [];
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
   const used = new Set<string>();
@@ -173,7 +236,9 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   for (let i = 0; i < events.length; i++) {
     const e = events[i]!;
     if (e.type === 'stimulus') {
-      out.push({ role: 'user', content: stimulusText(e.source, e.text) });
+      const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
+      if (sight && e.source === 'terminal') takeMarkers(message, slots);
+      out.push(message);
     } else if (e.type === 'assistant') {
       const { text, calls } = reply(e);
       const said = text.trim() === '' ? null : text;
@@ -193,10 +258,13 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
         const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown; args?: unknown };
         const id = wireId(c.id);
         wire.push({ id, type: 'function', function: { name: wireName(c.name), arguments: wireArgs(c.args) } });
-        const output = results.get(c.id)?.shift();
+        const result = results.get(c.id)?.shift();
         const began = (started.get(c.id) ?? 0) > 0;
         started.set(c.id, (started.get(c.id) ?? 0) - 1);
-        answered.push({ role: 'tool', tool_call_id: id, content: output ?? (began ? INTERRUPTED : NOT_STARTED) });
+        const answer: ChatMessage = { role: 'tool', tool_call_id: id, content: result?.output ?? (began ? INTERRUPTED : NOT_STARTED) };
+        // What `look` kept for the agent to see (body/tools.ts). The same line in any other tool's output is only text.
+        if (sight && c.name === 'look' && result?.ok) takeMarkers(answer, slots);
+        answered.push(answer);
       }
       // Results are placed here, right after their call, whatever was journaled in between.
       out.push({ role: 'assistant', content, tool_calls: wire }, ...answered);
@@ -207,6 +275,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   }
   // A request that ends with a finished reply asks for nothing. See LATE for when that happens.
   if (isPlainReply(out.at(-1))) out.push({ role: 'user', content: LATE });
+  if (sight) fillSlots(slots, sight);
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   const prompt = system.toWellFormed();

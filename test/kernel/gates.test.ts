@@ -551,6 +551,36 @@ test('the stub endpoint answers a chat-completions request, plain or streamed, a
   await expect(fetch(`${stub.url}/chat/completions`, { method: 'POST', body: '{}' })).rejects.toThrow();
 });
 
+test('the stub endpoint takes a request that carries image parts, over either protocol', async () => {
+  const stub = startStubProvider();
+  const url = `data:image/png;base64,${Buffer.from('\x89PNG\r\n\x1a\n', 'latin1').toString('base64')}`;
+  try {
+    const post = (path: string, body: unknown) => fetch(`${stub.url}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const chat = await post('/chat/completions', {
+      model: 'smoke', messages: [{ role: 'user', content: [{ type: 'text', text: 'what is this?' }, { type: 'image_url', image_url: { url } }] }],
+    });
+    expect(chat.status).toBe(200);
+    expect((await chat.json() as { choices: { message: { content: string } }[] }).choices[0]!.message.content.length).toBeGreaterThan(0);
+    const responses = await post('/responses', {
+      model: 'smoke', store: false, stream: true, reasoning: { summary: 'auto' },
+      input: [
+        { role: 'user', content: [{ type: 'input_text', text: 'what is this?' }, { type: 'input_image', image_url: url }] },
+        { type: 'function_call', call_id: 'c1', name: 'look', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: [{ type: 'input_text', text: 'a.png' }, { type: 'input_image', image_url: url }] },
+      ],
+    });
+    expect(responses.status).toBe(200);
+    const reply = readResponsesStream(await responses.text());
+    expect(reply.text.length).toBeGreaterThan(0);
+    // The stub reports a usage, as a provider does, so a candidate's reading of it is tried too.
+    expect(reply.usage).toEqual({ input: 0, output: 0 });
+  } finally {
+    stub.stop();
+  }
+});
+
 // --- the smoke gate and the Responses protocol ---
 
 test('the stub endpoint answers a Responses request as an event stream that ends completed', async () => {

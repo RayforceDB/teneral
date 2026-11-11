@@ -1,6 +1,8 @@
-import type { ToolCall } from '../kernel/journal';
+import type { ToolCall, Usage } from '../kernel/journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
 import { accessToken, apiBase } from '../kernel/signin';
+import type { Image } from './images';
+import { clip } from './text';
 
 export interface WireToolCall {
   id: string;
@@ -13,6 +15,12 @@ export interface ChatMessage {
   content: string | null;
   tool_calls?: WireToolCall[];
   tool_call_id?: string;
+  /**
+   * Images that go with this message: on a user message what the owner sent, on a tool message
+   * what `look` returned (body/context.ts puts them nowhere else). Not a wire field: each protocol
+   * turns it into its own image parts, below.
+   */
+  images?: Image[];
 }
 
 export interface ToolSpec {
@@ -24,6 +32,68 @@ export interface ToolSpec {
 export interface Reply {
   text: string;
   toolCalls: ToolCall[];
+  /** What the provider says the request cost, when it says. */
+  usage?: Usage;
+  /** A summary of the model's reasoning, when the provider gives one. For the owner's terminal: it is journaled and never sent back. */
+  reasoning?: string;
+}
+
+/** The longest reasoning summary that is journaled. */
+const REASONING_CAP = 4000;
+
+/** A reasoning summary as it may be journaled and shown on a terminal: well-formed, no control characters but newline and tab, clipped. */
+export function tidyReasoning(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const clean = raw.toWellFormed().replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').trim();
+  return clean === '' ? undefined : clip(clean, REASONING_CAP);
+}
+
+/** Token counts from a provider's `usage`, under whichever names it uses; undefined unless both are numbers. */
+function readUsage(raw: unknown): Usage | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const u = raw as Record<string, unknown>;
+  const count = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const input = count(u.prompt_tokens ?? u.input_tokens);
+  const output = count(u.completion_tokens ?? u.output_tokens);
+  if (input === undefined || output === undefined) return undefined;
+  const cached = count(((u.prompt_tokens_details ?? u.input_tokens_details) as { cached_tokens?: unknown } | null | undefined)?.cached_tokens);
+  return cached === undefined ? { input, output } : { input, output, cached };
+}
+
+/** A reply without the keys it has nothing for. */
+function withExtras(reply: Reply, usage: Usage | undefined, reasoning: string | undefined): Reply {
+  if (usage !== undefined) reply.usage = usage;
+  if (reasoning !== undefined) reply.reasoning = reasoning;
+  return reply;
+}
+
+const dataUrl = (image: Image): string => `data:${image.mime};base64,${image.data}`;
+const names = (images: Image[]): string => images.map((image) => image.name).join(', ');
+
+/**
+ * The list as chat-completions takes it. A user message with images becomes text and `image_url`
+ * parts. A tool message may hold only text there, so what `look` returned follows as a user
+ * message of its own, after the last result of that reply: results must not be parted from their calls.
+ */
+export function toChatMessages(messages: ChatMessage[]): unknown[] {
+  const out: unknown[] = [];
+  let held: Image[] = [];
+  const part = (image: Image) => ({ type: 'image_url', image_url: { url: dataUrl(image) } });
+  const flush = (): void => {
+    if (held.length > 0) out.push({ role: 'user', content: [{ type: 'text', text: `[the result of look, as an image: ${names(held)}]` }, ...held.map(part)] });
+    held = [];
+  };
+  for (const m of messages) {
+    if (m.role !== 'tool') flush();
+    const { images, ...rest } = m;
+    if (!images || images.length === 0) out.push(rest);
+    else if (m.role === 'tool') {
+      out.push(rest);
+      held.push(...images);
+    } else out.push({ ...rest, content: [...(m.content ? [{ type: 'text', text: m.content }] : []), ...images.map(part)] });
+  }
+  flush();
+  return out;
 }
 
 export type Provider = (messages: ChatMessage[], tools: ToolSpec[]) => Promise<Reply>;
@@ -104,7 +174,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return async (messages, tools) => {
-    const body: Record<string, unknown> = { model: cfg.model, messages };
+    const body: Record<string, unknown> = { model: cfg.model, messages: toChatMessages(messages) };
     if (tools.length > 0) body.tools = tools.map((t) => ({ type: 'function', function: t }));
     const signal = AbortSignal.timeout(timeoutMs);
     let res: Response;
@@ -123,7 +193,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
     }
     if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text);
-    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown } }[] } | null;
+    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -131,7 +201,9 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
     }
     const message = parsed?.choices?.[0]?.message;
     if (!message) throw new ProviderError(`provider reply has no message: ${text.slice(0, 2000)}`, res.status, text);
-    return { text: contentText(message.content), toolCalls: readCalls(message.tool_calls) };
+    // Endpoints that show a model's reasoning do it under one of two names; neither is in the protocol itself.
+    const reasoning = tidyReasoning(message.reasoning_content) ?? tidyReasoning(message.reasoning);
+    return withExtras({ text: contentText(message.content), toolCalls: readCalls(message.tool_calls) }, readUsage(parsed?.usage), reasoning);
   };
 }
 
@@ -141,6 +213,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
 // here it becomes Responses input, and the reply is put together from the event stream. Nothing
 // is stored on the provider's side (`store: false`), so every request carries the whole history.
 // Reasoning items the model returns are not kept or sent back: the journal has no field for them.
+// Only the summary of the reasoning is asked for and read, for the owner to see.
 
 export interface ResponsesConfig {
   /** Where requests go; asked before each one. */
@@ -150,6 +223,8 @@ export interface ResponsesConfig {
   model: string;
   /** Set where the provider wants function tools grouped in a namespace (kernel/providers.ts). */
   namespace?: string;
+  /** False where a summary of the reasoning must not be asked for. Default: asked for, and no longer once the provider refuses the field. */
+  summaries?: boolean;
   fetch?: typeof fetch;
   timeoutMs?: number;
 }
@@ -160,17 +235,22 @@ type Item = Record<string, unknown>;
  * The system text goes in `instructions`: the ChatGPT plan route rejects system messages among the
  * input. A call is a `function_call` item and its result a `function_call_output`, paired by
  * `call_id`. No item has an `id`: ids name items stored at the provider, and nothing is stored.
+ * Images are `input_image` parts: beside the text in a user message, and in the output of a call,
+ * which on this protocol may be a list of parts instead of a string.
  */
 export function toResponsesInput(messages: ChatMessage[], namespace?: string): { instructions: string; input: Item[] } {
   const system: string[] = [];
   const input: Item[] = [];
+  const part = (image: Image): Item => ({ type: 'input_image', image_url: dataUrl(image) });
   for (const m of messages) {
     if (m.role === 'system') {
       if (m.content) system.push(m.content);
     } else if (m.role === 'tool') {
-      input.push({ type: 'function_call_output', call_id: m.tool_call_id ?? '', output: m.content ?? '' });
+      const text = m.content ?? '';
+      input.push({ type: 'function_call_output', call_id: m.tool_call_id ?? '', output: m.images?.length ? [...(text ? [{ type: 'input_text', text }] : []), ...m.images.map(part)] : text });
     } else {
-      if (m.content) input.push({ role: m.role, content: m.content });
+      if (m.images?.length) input.push({ role: m.role, content: [...(m.content ? [{ type: 'input_text', text: m.content }] : []), ...m.images.map(part)] });
+      else if (m.content) input.push({ role: m.role, content: m.content });
       for (const c of m.tool_calls ?? []) {
         input.push({ type: 'function_call', call_id: c.id, name: c.function.name, arguments: c.function.arguments, ...(namespace ? { namespace } : {}) });
       }
@@ -241,7 +321,19 @@ export function readResponsesStream(stream: string): Reply {
     text += `${text === '' ? '' : '\n'}[this reply was cut off by the provider: ${String(reason ?? 'no reason given')}]`;
   }
   const calls = output.filter((item) => item.type === 'function_call');
-  return { text, toolCalls: readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } }))) };
+  // A reasoning item carries its summary as a list of `summary_text` parts; one item per stretch of reasoning.
+  const summaries = output.filter((item) => item.type === 'reasoning').map((item) => contentText(
+    Array.isArray(item.summary) ? item.summary.flatMap((s: unknown) => [s, { text: '\n\n' }]) : null,
+  ));
+  return withExtras(
+    { text, toolCalls: readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } }))) },
+    readUsage(last.response?.usage), tidyReasoning(summaries.join('')),
+  );
+}
+
+/** The provider's way of saying it will not give a reasoning summary here: this model, this account, or this route. */
+function saysNoSummary(err: unknown): boolean {
+  return err instanceof ProviderError && err.status === 400 && /summar|"param":\s*"reasoning/i.test(err.body);
 }
 
 export function responsesProvider(cfg: ResponsesConfig): Provider {
@@ -255,11 +347,14 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       throw new ProviderError(`no token for the provider: ${err instanceof Error ? err.message : String(err)}`, 401);
     }
   };
-  return async (messages, tools) => {
+  let summaries = cfg.summaries !== false;
+  const once = async (messages: ChatMessage[], tools: ToolSpec[]): Promise<Reply> => {
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
     if (instructions !== '') body.instructions = instructions;
     if (tools.length > 0) body.tools = toResponsesTools(tools, cfg.namespace);
+    // Without this the reasoning comes back with no summary at all. `auto` is the most detailed one the model has.
+    if (summaries) body.reasoning = { summary: 'auto' };
     const signal = AbortSignal.timeout(timeoutMs);
     const post = async (bearer: string): Promise<{ res: Response; text: string }> => {
       try {
@@ -287,6 +382,17 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     }
     if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text);
     return readResponsesStream(text);
+  };
+  return async (messages, tools) => {
+    try {
+      return await once(messages, tools);
+    } catch (err) {
+      // A model that does not reason, or an account that may not have summaries, refuses the field.
+      // The owner's view of the reasoning is not worth a turn: asked again without, and not asked for after that.
+      if (!summaries || !saysNoSummary(err)) throw err;
+      summaries = false;
+      return once(messages, tools);
+    }
   };
 }
 

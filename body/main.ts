@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../kernel/journal';
 import { needsTurn } from './context';
+import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
 import { runTurn } from './loop';
 import { ProviderError, connect, type Provider } from './provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
@@ -33,6 +34,10 @@ const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 // Characters per request. Not a positive number, or not set: the default in body/context.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
+// Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
+const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
+// The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
+const sight = { load: imageStore(rootOf(journal)), max: /^\d+$/.test(imagesSet) ? Number(imagesSet) : DEFAULT_IMAGES };
 const prompt = readFileSync(join(import.meta.dir, 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
@@ -68,7 +73,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   console.error('[thinking]');
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: TOOLS, ctx, budgetChars,
+      journal, gen, provider, tools: TOOLS, ctx, budgetChars, sight,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),

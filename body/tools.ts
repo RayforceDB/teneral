@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from '../kernel/envelope';
 import { git } from '../kernel/gates';
 import { appendEvent } from '../kernel/journal';
+import { keepImage, rootOf } from './images';
 import type { ToolSpec } from './provider';
 import { Clipped, clip } from './text';
 
@@ -92,6 +93,19 @@ const edit: Tool = {
     if (count > 1) throw new Error(`\`old\` occurs ${count} times; give more context so it is unique`);
     writeFileSync(path, text.slice(0, first) + replacement + text.slice(first + old.length));
     return `edited ${str(args, 'path')}`;
+  },
+};
+
+const look: Tool = {
+  spec: {
+    name: 'look',
+    description: 'See an image file yourself: PNG, JPEG, GIF or WebP, at most 10 MB. A copy is kept under memory/images and shown to you with the result. Paths are relative to your workspace.',
+    parameters: params({ path: 'Image file path' }),
+  },
+  async run(args, ctx) {
+    const kept = keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
+    // The last line is what body/context.ts shows the image by; it is honoured only in the result of this tool.
+    return `${str(args, 'path')}: ${kept.mime}, ${kept.bytes} bytes\n${kept.marker}`;
   },
 };
 
@@ -269,4 +283,4 @@ const send: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, bash, molt, send];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, molt, send];

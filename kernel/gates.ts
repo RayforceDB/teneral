@@ -385,7 +385,7 @@ export function startStubProvider(): { url: string; stop: () => void } {
         const events = [
           { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
           { type: 'response.output_item.done', output_index: 0, item },
-          { type: 'response.completed', response: { ...response, status: 'completed', output: [item] } },
+          { type: 'response.completed', response: { ...response, status: 'completed', output: [item], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } },
         ];
         return sse(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
       }
