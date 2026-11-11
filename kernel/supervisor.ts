@@ -50,6 +50,8 @@ export interface Paths {
   inbox: string;
   /** The owner's list of peers: name to inbox directory. */
   peers: string;
+  /** The individual's soul files. Never in git. */
+  soul: string;
 }
 
 export function paths(root: string): Paths {
@@ -62,6 +64,7 @@ export function paths(root: string): Paths {
     lock: join(root, '.teneral', 'lock'),
     inbox: join(root, 'inbox'),
     peers: join(root, 'soul', 'peers.json'),
+    soul: join(root, 'soul'),
   };
 }
 
@@ -322,6 +325,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
           ...process.env,
           TENERAL_GEN: gen, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate,
           TENERAL_ID: identity(join(p.root, '.teneral')), TENERAL_INBOX: p.inbox, TENERAL_PEERS: p.peers,
+          TENERAL_SOUL: p.soul,
         },
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
