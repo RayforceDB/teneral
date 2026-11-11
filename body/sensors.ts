@@ -1,3 +1,5 @@
+import { archive, collect } from '../kernel/envelope';
+
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
   source: string;
@@ -33,6 +35,29 @@ export function clock(intervalMs: number): Sensor {
         text: `It is ${new Date().toISOString()}. No one is waiting for a reply. If something on your backlog is worth doing now, do it; if not, say so in one line.`,
       });
     }, intervalMs);
+    return () => clearInterval(timer);
+  };
+}
+
+/** Messages other agents and programs dropped into this agent's inbox directory. */
+export function inbox(dir: string, intervalMs = 2000): Sensor {
+  return (emit) => {
+    const poll = () => {
+      for (const arrival of collect(dir)) {
+        const e = arrival.envelope;
+        if (e === null) {
+          console.error(`[inbox] set aside ${arrival.file}: ${arrival.reason}`);
+          archive(dir, arrival.file, 'rejected');
+          continue;
+        }
+        const reply = e.replyTo === null ? '' : `, in reply to ${e.replyTo}`;
+        // Journal first, archive second: a crash in between repeats the message rather than losing it.
+        emit({ source: `agent:${e.from}`, text: `(message ${e.id}${reply}) ${e.text}` });
+        archive(dir, arrival.file, 'seen');
+      }
+    };
+    poll();
+    const timer = setInterval(poll, intervalMs);
     return () => clearInterval(timer);
   };
 }

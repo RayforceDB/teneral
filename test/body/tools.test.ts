@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBash, TOOLS, type ToolContext } from '../../body/tools';
+import { MAX_HOPS, archive, collect, deliver } from '../../kernel/envelope';
 import { git } from '../../kernel/gates';
 import { readEvents } from '../../kernel/journal';
 import { makeRepo, writeFiles } from '../kernel/helpers';
@@ -14,11 +15,15 @@ function tool(name: string) {
 }
 
 function context(workspace: string, gen = 'gen'): ToolContext {
-  return { workspace, journal: join(mkdtempSync(join(tmpdir(), 'teneral-tools-')), 'journal.jsonl'), gen, moltCommit: null };
+  const data = mkdtempSync(join(tmpdir(), 'teneral-tools-'));
+  return {
+    workspace, journal: join(data, 'journal.jsonl'), gen, moltCommit: null,
+    id: 'me', inbox: join(data, 'inbox'), peers: join(data, 'peers.json'),
+  };
 }
 
-test('the five seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'molt', 'read', 'write']);
+test('the six seed tools exist', () => {
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'molt', 'read', 'send', 'write']);
 });
 
 test('write creates parent directories and read returns the content', async () => {
@@ -168,4 +173,44 @@ test('molt does not depend on the hooks or signing of the repo it runs in', asyn
 
   expect(ctx.moltCommit).toBe(git(dir, 'rev-parse', 'HEAD'));
   expect(ctx.moltCommit).not.toBe(seed);
+});
+
+function withPeer(ctx: ToolContext): string {
+  const peerInbox = join(mkdtempSync(join(tmpdir(), 'teneral-peer-')), 'inbox');
+  writeFileSync(ctx.peers, JSON.stringify({ bob: peerInbox }));
+  return peerInbox;
+}
+
+test('send delivers an envelope from this agent to the named peer', async () => {
+  const ctx = context('/tmp');
+  const peerInbox = withPeer(ctx);
+  const out = await tool('send').run({ to: 'bob', text: 'hello bob' }, ctx);
+  const [arrival] = collect(peerInbox);
+  expect(arrival!.envelope).toMatchObject({ from: 'me', to: 'bob', text: 'hello bob', replyTo: null, hops: 0 });
+  expect(out).toContain(arrival!.envelope!.id);
+});
+
+test('a reply carries one more hop than the message it answers', async () => {
+  const ctx = context('/tmp');
+  const peerInbox = withPeer(ctx);
+  const file = deliver(ctx.inbox, { v: 1, id: 'q1', from: 'bob', to: 'me', replyTo: null, ts: 't', hops: 2, text: '?' });
+  archive(ctx.inbox, file, 'seen');
+  await tool('send').run({ to: 'bob', text: 'answer', replyTo: 'q1' }, ctx);
+  expect(collect(peerInbox)[0]!.envelope).toMatchObject({ replyTo: 'q1', hops: 3 });
+});
+
+test('a reply past the hop limit is refused', async () => {
+  const ctx = context('/tmp');
+  const peerInbox = withPeer(ctx);
+  const file = deliver(ctx.inbox, { v: 1, id: 'q2', from: 'bob', to: 'me', replyTo: null, ts: 't', hops: MAX_HOPS, text: '?' });
+  archive(ctx.inbox, file, 'seen');
+  await expect(tool('send').run({ to: 'bob', text: 'again', replyTo: 'q2' }, ctx)).rejects.toThrow(/ask your owner/);
+  expect(collect(peerInbox)).toEqual([]);
+});
+
+test('an unknown peer or an unknown message to reply to is refused', async () => {
+  const ctx = context('/tmp');
+  withPeer(ctx);
+  await expect(tool('send').run({ to: 'carol', text: 'hi' }, ctx)).rejects.toThrow(/unknown peer "carol".*bob/);
+  await expect(tool('send').run({ to: 'bob', text: 'hi', replyTo: 'never-seen' }, ctx)).rejects.toThrow(/no received message/);
 });

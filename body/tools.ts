@@ -1,5 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from '../kernel/envelope';
 import { git } from '../kernel/gates';
 import { appendEvent } from '../kernel/journal';
 import type { ToolSpec } from './provider';
@@ -11,6 +13,12 @@ export interface ToolContext {
   gen: string;
   /** Set by `molt`; the process exits with 75 once the turn ends. */
   moltCommit: string | null;
+  /** This individual's id, used as `from` on what it sends. */
+  id: string;
+  /** This agent's own inbox directory. */
+  inbox: string;
+  /** JSON file mapping a peer's name to its inbox directory. Kept by the owner. */
+  peers: string;
 }
 
 export interface Tool {
@@ -182,4 +190,48 @@ const molt: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, bash, molt];
+const send: Tool = {
+  spec: {
+    name: 'send',
+    description:
+      'Send a message to another agent. Peers are the names in soul/peers.json, kept by your owner. ' +
+      'Give `replyTo` when you are answering a message you received.',
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Peer name' },
+        text: { type: 'string', description: 'The message' },
+        replyTo: { type: 'string', description: 'Id of the message you are answering, if any' },
+      },
+      required: ['to', 'text'],
+    },
+  },
+  async run(args, ctx) {
+    const to = str(args, 'to');
+    const text = str(args, 'text');
+    const rawReply = (args as Record<string, unknown>).replyTo;
+    const replyTo = typeof rawReply === 'string' && rawReply !== '' ? rawReply : null;
+
+    const peers = existsSync(ctx.peers) ? (JSON.parse(readFileSync(ctx.peers, 'utf8')) as Record<string, unknown>) : {};
+    const target = peers[to];
+    if (typeof target !== 'string') {
+      throw new Error(`unknown peer "${to}". Known peers: ${Object.keys(peers).join(', ') || 'none'}`);
+    }
+
+    let hops = 0;
+    if (replyTo !== null) {
+      const original = findSeen(ctx.inbox, replyTo);
+      if (original === null) throw new Error(`no received message with id ${replyTo}`);
+      hops = original.hops + 1;
+    }
+    if (hops > MAX_HOPS) throw new Error(`this exchange has reached ${MAX_HOPS} replies; ask your owner before going on`);
+
+    const envelope: Envelope = { v: ENVELOPE_VERSION, id: randomUUID(), from: ctx.id, to, replyTo, ts: new Date().toISOString(), hops, text };
+    // Refuse here what the receiver would refuse, so the sender hears about it.
+    parseEnvelope(JSON.stringify(envelope));
+    deliver(target, envelope);
+    return `sent ${envelope.id} to ${to}`;
+  },
+};
+
+export const TOOLS: Tool[] = [read, write, edit, bash, molt, send];

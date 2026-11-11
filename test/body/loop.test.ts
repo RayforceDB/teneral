@@ -9,7 +9,7 @@ import { appendEvent, readEvents } from '../../kernel/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', moltCommit: null };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', moltCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
   const seen: ChatMessage[][] = [];
   const provider: Provider = async (messages) => {
     seen.push(messages);
