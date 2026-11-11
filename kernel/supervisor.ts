@@ -19,7 +19,8 @@ export type Decision = 'stop' | 'gate' | 'restart' | 'rollback' | 'halt';
 /** `crashes` counts earlier crashes of this generation since its last reply. */
 export function decide(exit: Exit, s: { hasPrevious: boolean; crashes: number }): Decision {
   if (exit.code === 0) return 'stop';
-  if (exit.code === MOLT_EXIT) return 'gate';
+  // Only a generation that proved it can start may ask for a molt, so `previous` is always one that did.
+  if (exit.code === MOLT_EXIT && exit.ready) return 'gate';
   const givenUp = !exit.ready || s.crashes + 1 >= CRASH_LIMIT;
   if (!givenUp) return 'restart';
   return s.hasPrevious ? 'rollback' : 'halt';

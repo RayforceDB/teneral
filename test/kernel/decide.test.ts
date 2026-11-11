@@ -25,3 +25,8 @@ test('a ready generation is restarted until the crash limit', () => {
   expect(decide({ code: 1, ready: true }, { hasPrevious: true, crashes: CRASH_LIMIT - 2 })).toBe('restart');
   expect(decide({ code: 1, ready: true }, { hasPrevious: true, crashes: CRASH_LIMIT - 1 })).toBe('rollback');
 });
+
+test('exit 75 from a generation that never became ready is not a molt request', () => {
+  expect(decide({ code: MOLT_EXIT, ready: false }, fresh)).toBe('rollback');
+  expect(decide({ code: MOLT_EXIT, ready: false }, { hasPrevious: false, crashes: 0 })).toBe('halt');
+});

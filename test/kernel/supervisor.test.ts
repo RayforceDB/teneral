@@ -157,3 +157,30 @@ test('exit 75 with no request from a ready generation is counted as a crash and 
   expect(r.outcome).toBe('halted');
   expect(r.events.filter((e) => e.type === 'generation.started')).toHaveLength(CRASH_LIMIT);
 });
+
+test('a promoted generation that asks to molt before it is ready is rolled back, and its request is ignored', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_V3, motive: 'not ready yet' });
+process.exit(75);
+` });
+  const v2 = commitAll(p.candidate, 'v2');
+  writeFiles(p.candidate, { 'body/main.ts': 'process.exit(0);\n' });
+  const v3 = commitAll(p.candidate, 'v3');
+  process.env.TEST_NEXT = v2;
+  process.env.TEST_V3 = v3;
+
+  const gated: string[] = [];
+  const outcome = await supervise({
+    root: dir, gates: (_dir, _from, to) => { gated.push(to); return PASS; }, readyTimeoutMs: 5000, log: () => {},
+  });
+  const events = readEvents(p.journal);
+  expect(outcome).toBe('stopped');
+  expect(gated).toEqual([v2]);
+  expect(events.flatMap((e) => (e.type === 'generation.promoted' ? [e.commit] : []))).toEqual([v2]);
+  expect(events.filter((e) => e.type === 'generation.rolledback')).toHaveLength(1);
+  expect(events.some((e) => e.gen === v3)).toBe(false);
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
