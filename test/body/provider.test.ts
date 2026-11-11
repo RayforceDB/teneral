@@ -109,3 +109,28 @@ test('content given as parts is joined from its text parts', async () => {
   });
   expect(await provider([], [])).toEqual({ text: 'hello', toolCalls: [] });
 });
+
+const withCalls = (tool_calls: unknown) => openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'x', tool_calls } }] }) })([], []);
+
+test('malformed tool calls become calls to `unknown` carrying what was sent, never a thrown TypeError', async () => {
+  const good = { id: 'ok', type: 'function', function: { name: 'read', arguments: '{"path":"a"}' } };
+  const noFunction = { id: 'a', type: 'function' };
+  const badName = { id: 'b', type: 'function', function: { name: 7, arguments: '{}' } };
+  const reply = await withCalls([null, noFunction, badName, 'text', good]);
+  expect(reply.toolCalls.map((c) => c.name)).toEqual(['unknown', 'unknown', 'unknown', 'unknown', 'read']);
+  expect(reply.toolCalls.map((c) => c.args)).toEqual([null, noFunction, badName, 'text', { path: 'a' }]);
+  expect(reply.toolCalls.map((c) => c.id)).toEqual(['call_0', 'a', 'b', 'call_3', 'ok']);
+});
+
+test('tool_calls that is not a list is one call to `unknown`; null means none', async () => {
+  expect((await withCalls({ name: 'read' })).toolCalls).toEqual([{ id: 'call_0', name: 'unknown', args: { name: 'read' } }]);
+  expect((await withCalls('read')).toolCalls).toEqual([{ id: 'call_0', name: 'unknown', args: 'read' }]);
+  expect((await withCalls(null)).toolCalls).toEqual([]);
+});
+
+test('arguments already given as an object are taken as they are, and missing ones are an empty object', async () => {
+  const call = (args: unknown) => ({ id: 'c', type: 'function', function: { name: 'read', arguments: args } });
+  expect((await withCalls([call({ path: 'a' })])).toolCalls[0]!.args).toEqual({ path: 'a' });
+  expect((await withCalls([call(undefined)])).toolCalls[0]!.args).toEqual({});
+  expect((await withCalls([call('')])).toolCalls[0]!.args).toBe('');
+});

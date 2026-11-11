@@ -49,7 +49,9 @@ function contentText(content: WireContent | undefined): string {
     .join('');
 }
 
-function parseArgs(raw: string): unknown {
+function parseArgs(raw: unknown): unknown {
+  // Some endpoints send the arguments already parsed, and some leave them out for a tool that takes none.
+  if (typeof raw !== 'string') return raw ?? {};
   try {
     return JSON.parse(raw);
   } catch {
@@ -58,16 +60,22 @@ function parseArgs(raw: string): unknown {
 }
 
 /**
- * The ids are the model's, and results are paired with calls by id.
- * A missing, empty or repeated id gets a replacement so each call in a reply has its own.
+ * The model's tool calls, whatever shape they came in. Nothing here throws: a call that cannot be
+ * read is kept as a call to `unknown` carrying what was sent, so the loop answers it with an error
+ * and the model sees its mistake.
  */
-function ownIds(calls: WireToolCall[]): string[] {
+function readCalls(raw: unknown): ToolCall[] {
+  if (raw === undefined || raw === null) return [];
   const taken = new Set<string>();
-  return calls.map((c, i) => {
+  return (Array.isArray(raw) ? raw : [raw]).map((entry: unknown, i) => {
+    const c = (typeof entry === 'object' && entry !== null ? entry : {}) as { id?: unknown; function?: { name?: unknown; arguments?: unknown } | null };
+    // Results are paired with calls by id, so each call in a reply needs one of its own.
     let id = typeof c.id === 'string' && c.id !== '' ? c.id : `call_${i}`;
     while (taken.has(id)) id = `${id}_${i}`;
     taken.add(id);
-    return id;
+    const fn = c.function;
+    if (typeof fn !== 'object' || fn === null || typeof fn.name !== 'string') return { id, name: 'unknown', args: entry };
+    return { id, name: fn.name, args: parseArgs(fn.arguments) };
   });
 }
 
@@ -95,7 +103,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       throw err;
     }
     if (!res.ok) throw new Error(`provider answered ${res.status}: ${text.slice(0, 2000)}`);
-    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: WireToolCall[] } }[] } | null;
+    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown } }[] } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -103,11 +111,6 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
     }
     const message = parsed?.choices?.[0]?.message;
     if (!message) throw new Error(`provider reply has no message: ${text.slice(0, 2000)}`);
-    const calls = message.tool_calls ?? [];
-    const ids = ownIds(calls);
-    return {
-      text: contentText(message.content),
-      toolCalls: calls.map((c, i) => ({ id: ids[i]!, name: c.function.name, args: parseArgs(c.function.arguments) })),
-    };
+    return { text: contentText(message.content), toolCalls: readCalls(message.tool_calls) };
   };
 }
