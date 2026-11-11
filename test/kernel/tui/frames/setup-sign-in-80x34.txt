@@ -1,0 +1,28 @@
+ teneral  setup
+
+  Continue with ChatGPT
+
+  Open this address in your browser, sign in at OpenAI and approve teneral
+  there.
+
+<the address, as one line the terminal wraps over several rows>
+
+  ⠋ waiting for you to come back from that page · 0:00
+
+  The page is OpenAI's: it asks you to sign in, then whether an app called
+  teneral may use your ChatGPT plan. Your browser is then sent back to this
+  machine and says "Signed in".
+
+  The address is for you alone; do not pass it on.
+
+
+
+
+
+
+
+
+
+
+
+ Esc gives up

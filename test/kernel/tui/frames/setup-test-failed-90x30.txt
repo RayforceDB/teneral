@@ -1,0 +1,30 @@
+ teneral  setup
+
+  The test did not pass
+
+  OpenAI API key, with gpt-6.1-sol: one question, then one that must come back
+  as a tool call.
+
+  · a reply       failed   N.Ns
+  · a tool call   waiting
+
+  failed: status 401: Incorrect API key or token provided. (invalid_api_key)
+
+  Nothing was written.
+
+  ▸ Try it again
+    Choose a provider again
+    Quit
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter confirms · Up/Down choose · or press r, c, q

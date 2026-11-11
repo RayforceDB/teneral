@@ -108,6 +108,9 @@ export async function listModels(baseUrl: string, bearer: string, send: typeof f
   return [];
 }
 
+/** The two requests of the test, by the names the owner is shown. */
+export type TestStep = 'a reply' | 'a tool call';
+
 export interface TestResult {
   ok: boolean;
   /** One line per request made, for the owner. */
@@ -130,31 +133,164 @@ function failure(err: unknown): string {
  * and one that must come back as a call to a tool, since an agent whose model cannot call tools
  * can do nothing.
  */
-export async function testProvider(provider: Provider, model: string, now: () => number = Date.now): Promise<TestResult> {
+export async function testProvider(
+  provider: Provider, model: string, now: () => number = Date.now, progress: (step: TestStep, state: 'asking' | 'ok' | 'failed', ms: number) => void = () => {},
+): Promise<TestResult> {
   const system = { role: 'system' as const, content: 'This is a connection test made by the setup of teneral. Do exactly what is asked, briefly.' };
   const lines: string[] = [];
   let started = now();
+  let step: TestStep = 'a reply';
+  const failed = (result: TestResult): TestResult => {
+    progress(step, 'failed', now() - started);
+    return result;
+  };
   try {
+    progress(step, 'asking', 0);
     const reply = await provider([system, { role: 'user', content: 'Reply with the single word: ready' }], []);
-    if (reply.text.trim() === '') return { ok: false, lines: [`  a reply: the model ${model} answered with no text`] };
+    if (reply.text.trim() === '') return failed({ ok: false, lines: [`  a reply: the model ${model} answered with no text`] });
     lines.push(`  a reply: ok, from ${model} in ${seconds(now() - started)}`);
+    progress(step, 'ok', now() - started);
     started = now();
+    step = 'a tool call';
+    progress(step, 'asking', 0);
     const ping = { name: 'ping', description: 'Answers pong. Takes no arguments.', parameters: { type: 'object', properties: {}, required: [] } };
     const called = await provider([system, { role: 'user', content: 'Call the ping tool now, with no arguments. Do not answer in words.' }], [ping]);
     if (!called.toolCalls.some((call) => call.name === 'ping')) {
       const got = called.toolCalls.length > 0 ? `called ${called.toolCalls.map((call) => call.name).join(', ')} instead` : 'answered in words instead';
-      return { ok: false, lines: [...lines, `  a tool call: the model ${model} was asked to call a tool named ping and ${got}. The agent needs a model that calls tools.`] };
+      return failed({ ok: false, lines: [...lines, `  a tool call: the model ${model} was asked to call a tool named ping and ${got}. The agent needs a model that calls tools.`] });
     }
     lines.push(`  a tool call: ok, from ${model} in ${seconds(now() - started)}`);
+    progress(step, 'ok', now() - started);
     return { ok: true, lines };
   } catch (err) {
-    return { ok: false, lines: [...lines, `  failed: ${failure(err)}`] };
+    return failed({ ok: false, lines: [...lines, `  failed: ${failure(err)}`] });
   }
 }
 
+/**
+ * The dialogue, step by step, as the setup needs it: what to say and what to ask. `plainDialogue`
+ * says it as lines of text through an `Io`; the screens in kernel/tui/setup.ts show the same steps
+ * full-screen. A question answers null when the owner is gone or stops; the setup then ends.
+ */
+export interface Dialogue {
+  /** Said first, unless this run goes on from an earlier one. */
+  welcome: () => void;
+  /** There is a configuration already. Whether to replace it. */
+  replace: (provider: string, model: string) => Promise<boolean | null>;
+  /** The owner chose to keep what is there. */
+  kept: () => void;
+  provider: () => Promise<ProviderEntry | null>;
+  baseUrl: () => Promise<string | null>;
+  key: (baseUrl: string) => Promise<string | null>;
+  /** The last answer cannot be used; the question comes again. */
+  problem: (why: string) => void;
+  /** The provider chosen signs in through a browser, and `box` has to run the setup again with the way back open. */
+  handOver: () => void;
+  /** Signed in here before: whether it is that account again. */
+  sameAccount: (email: string) => Promise<boolean | null>;
+  /** The address to open in a browser. The wait for the browser to come back follows; `giveUp` ends it. */
+  signIn: (url: string, giveUp: () => void) => void;
+  /** `first`: this account was not signed in here before, so the notice about the plan is due. */
+  signedIn: (email: string, file: string, first: boolean) => void;
+  signInFailed: (why: string) => Promise<'choose' | 'quit' | null>;
+  /** The models to choose from; `listed` is how many the endpoint named, which may be more. */
+  models: (offered: ModelChoice[], listed: number) => void;
+  /** The owner's answer as typed: a number in the list, a name, or nothing for `fallback`. */
+  model: (fallback: string | undefined) => Promise<string | null>;
+  testing: (provider: string, model: string) => void;
+  /** While the test runs: which request, and how it stands. */
+  progress?: (step: TestStep, state: 'asking' | 'ok' | 'failed', ms: number) => void;
+  tested: (result: TestResult) => void;
+  testFailed: () => Promise<'retry' | 'choose' | 'quit' | null>;
+  /** `.env` is written. `names`: what it now holds of the setup's, the key by its name only. */
+  wrote: (names: string[], entry: ProviderEntry) => void | Promise<void>;
+  /** Ended early; nothing was written. */
+  stopped: () => void;
+}
+
+const yes = (answer: string, fallback: boolean): boolean => {
+  const a = answer.trim().toLowerCase();
+  return a === '' ? fallback : a === 'y' || a === 'yes';
+};
+
+/** The dialogue as lines of text, said and asked one after the other. */
+export function plainDialogue(io: Io): Dialogue {
+  return {
+    welcome: () => io.say('teneral setup: choose where the agent\'s model comes from. Nothing is written until a test request has worked.\n'),
+    replace: async (provider, model) => {
+      io.say(`There is a configuration already (.env): ${provider}, model ${model}.`);
+      const answer = await io.ask('Replace it? Its other settings are kept. [y/N] ');
+      return answer === null ? null : yes(answer, false);
+    },
+    kept: () => io.say('Left as it is.'),
+    provider: async () => {
+      PROVIDERS.forEach((p, i) => {
+        io.say(`  ${i + 1}. ${p.name}`);
+        for (const note of p.notes) io.say(`       ${note}`);
+      });
+      for (;;) {
+        const answer = await io.ask(`Provider [1-${PROVIDERS.length}]: `);
+        if (answer === null) return null;
+        const n = Number(answer.trim());
+        if (Number.isInteger(n) && n >= 1 && n <= PROVIDERS.length) return PROVIDERS[n - 1]!;
+        io.say(`  A number from 1 to ${PROVIDERS.length}, please.`);
+      }
+    },
+    baseUrl: () => io.ask('Base URL of the endpoint, such as https://host/v1: '),
+    key: (baseUrl) => io.ask(`API key for ${baseUrl} (what you type is not shown): `, { hidden: true }),
+    problem: (why) => io.say(`  ${why}; once more.`),
+    handOver: () => {},
+    sameAccount: async (email) => {
+      const answer = await io.ask(`This install was signed in before${email ? `, as ${email}` : ''}. Sign in to that account again? (n: a different account) [Y/n] `);
+      return answer === null ? null : yes(answer, true);
+    },
+    signIn: (url) => {
+      io.say('\nContinue with ChatGPT: open this address in your browser, sign in at OpenAI and approve teneral there.\n');
+      io.say(`  ${url}\n`);
+      io.say('The address is for you alone; do not pass it on. Waiting for you to come back from that page (Ctrl-C gives up) ...');
+    },
+    signedIn: (email, file, first) => {
+      io.say(`\nSigned in${email ? ` as ${email}` : ''}. The sign-in is stored in ${file}, readable only by you and by the agent's own shell.`);
+      if (first) io.say(PLAN_NOTICE);
+    },
+    signInFailed: async (why) => {
+      io.say(`\nThe sign-in did not work: ${why}`);
+      const answer = await io.ask('[c]hoose a provider again, or [q]uit: ');
+      if (answer === null) return null;
+      return answer.trim().toLowerCase().startsWith('q') ? 'quit' : 'choose';
+    },
+    models: (offered, listed) => {
+      if (listed > 0) io.say('\nModels this endpoint lists for you:');
+      else if (offered.length > 0) io.say('\nThe endpoint gave no list of models. A usual one:');
+      offered.forEach((m, i) => io.say(`  ${i + 1}. ${m.id}${m.label ? `  (${m.label})` : ''}`));
+      if (listed > offered.length) io.say(`  ... and ${listed - offered.length} more; any of them can be typed by name.`);
+    },
+    model: (fallback) => io.ask(fallback ? `Model: a number, or a name [${fallback}]: ` : 'Model name (it must support tool calls): '),
+    testing: (provider, model) => io.say(`\nTesting ${provider} with ${model}: one question, then one that must come back as a tool call ...`),
+    tested: (result) => { for (const line of result.lines) io.say(line); },
+    testFailed: async () => {
+      const answer = await io.ask('The test did not pass, and nothing was written. [r]etry it, [c]hoose a provider again, or [q]uit: ');
+      if (answer === null) return null;
+      const next = answer.trim().toLowerCase();
+      return next.startsWith('q') ? 'quit' : next.startsWith('c') ? 'choose' : 'retry';
+    },
+    wrote: (names) => {
+      io.say(`\nWrote .env, readable only by you: ${names.join(', ')}.`);
+      io.say(NEXT_STEP);
+    },
+    stopped: () => io.say('\nStopped. No configuration was written.'),
+  };
+}
+
+/** Said once after a first sign-in: whose plan pays, and where that is managed. */
+export const PLAN_NOTICE = `You're using your ChatGPT plan: requests the agent makes use your plan or its credits. You can review and limit that in ChatGPT settings: ${CHATGPT_USAGE_URL}`;
+export const NEXT_STEP = './box up starts the agent with it. One that is already running keeps its old configuration until ./box down and ./box up.';
+
 export interface SetupOptions {
   root: string;
-  io: Io;
+  /** How the dialogue is held: as lines through `io`, or by `ui` when one is given. */
+  io?: Io;
+  ui?: Dialogue;
   /**
    * `TENERAL_OPENAI_API` and `TENERAL_OPENAI_AUTH` replace OpenAI's addresses, for trying the setup against a stand-in;
    * `TENERAL_CALLBACK_HOST` and `TENERAL_CALLBACK_PORT` say where the sign-in's way back listens.
@@ -168,11 +304,6 @@ export interface SetupOptions {
   signInTimeoutMs?: number;
 }
 
-const yes = (answer: string | null, fallback: boolean): boolean => {
-  const a = (answer ?? '').trim().toLowerCase();
-  return a === '' ? fallback : a === 'y' || a === 'yes';
-};
-
 /** What a setup that ended early left for the one that goes on from it. */
 const resumeFile = (root: string): string => join(root, '.teneral', 'setup-resume.json');
 
@@ -181,24 +312,27 @@ class Cancelled extends Error {}
 
 /** The whole dialogue. Returns the exit status: 0 when a tested configuration is in place or nothing was to change. */
 export async function setup(o: SetupOptions): Promise<number> {
-  const { io, root } = o;
+  const { root } = o;
+  if (o.ui === undefined && o.io === undefined) throw new Error('the setup needs someone to talk to');
+  const ui = o.ui ?? plainDialogue(o.io!);
   const env = o.env ?? {};
   const send = o.fetch ?? fetch;
   const envFile = join(root, '.env');
   const auth = authDir(root);
-  const ask = async (question: string, opts?: { hidden?: boolean }): Promise<string> => {
-    const answer = await io.ask(question, opts);
-    if (answer === null) throw new Cancelled();
-    return answer;
+  /** An answer, or the end of the dialogue when there is none. */
+  const need = async <T>(answer: Promise<T | null>): Promise<T> => {
+    const got = await answer;
+    if (got === null) throw new Cancelled();
+    return got;
   };
   /** Asks until the answer can stand in `.env`. */
-  const askValue = async (question: string, opts?: { hidden?: boolean }): Promise<string> => {
+  const askValue = async (question: () => Promise<string | null>): Promise<string> => {
     for (;;) {
       try {
-        return plainValue(await ask(question, opts));
+        return plainValue(await need(question()));
       } catch (err) {
         if (err instanceof Cancelled) throw err;
-        io.say(`  ${err instanceof Error ? err.message : String(err)}; once more.`);
+        ui.problem(err instanceof Error ? err.message : String(err));
       }
     }
   };
@@ -216,14 +350,13 @@ export async function setup(o: SetupOptions): Promise<number> {
   try {
     let replace = resumed?.replace === true;
     if (!resumed) {
-      io.say('teneral setup: choose where the agent\'s model comes from. Nothing is written until a test request has worked.\n');
+      ui.welcome();
       if (existsSync(envFile)) {
         const current = readFileSync(envFile, 'utf8');
         const value = (name: string) => new RegExp(`^${name}=(.*)$`, 'm').exec(current)?.[1]?.trim() || null;
         const provider = findProvider(value('TENERAL_PROVIDER') ?? undefined);
-        io.say(`There is a configuration already (.env): ${provider?.name ?? 'an OpenAI-compatible endpoint'}, model ${value('TENERAL_MODEL') ?? 'not set'}.`);
-        if (!yes(await ask('Replace it? Its other settings are kept. [y/N] '), false)) {
-          io.say('Left as it is.');
+        if (!await need(ui.replace(provider?.name ?? 'an OpenAI-compatible endpoint', value('TENERAL_MODEL') ?? 'not set'))) {
+          ui.kept();
           return 0;
         }
         replace = true;
@@ -233,24 +366,8 @@ export async function setup(o: SetupOptions): Promise<number> {
     let preset = typeof resumed?.provider === 'string' ? findProvider(resumed.provider) : null;
     for (;;) {
       // --- which provider ---
-      let entry: ProviderEntry;
-      if (preset) {
-        entry = preset;
-        preset = null;
-      } else {
-        PROVIDERS.forEach((p, i) => {
-          io.say(`  ${i + 1}. ${p.name}`);
-          for (const note of p.notes) io.say(`       ${note}`);
-        });
-        for (;;) {
-          const n = Number((await ask(`Provider [1-${PROVIDERS.length}]: `)).trim());
-          if (Number.isInteger(n) && n >= 1 && n <= PROVIDERS.length) {
-            entry = PROVIDERS[n - 1]!;
-            break;
-          }
-          io.say(`  A number from 1 to ${PROVIDERS.length}, please.`);
-        }
-      }
+      const entry: ProviderEntry = preset ?? await need(ui.provider());
+      preset = null;
 
       // --- what it needs: a key, or a sign-in ---
       const values: Record<string, string | null> = { TENERAL_PROVIDER: entry.id, TENERAL_BASE_URL: null, TENERAL_API_KEY: null, TENERAL_MODEL: null };
@@ -259,10 +376,11 @@ export async function setup(o: SetupOptions): Promise<number> {
       if (entry.auth === 'key') {
         baseUrl = entry.baseUrl === null ? '' : env.TENERAL_OPENAI_API ?? entry.baseUrl;
         while (!/^https?:\/\/\S+$/.test(baseUrl)) {
-          baseUrl = (await askValue('Base URL of the endpoint, such as https://host/v1: ')).replace(/\/+$/, '');
-          if (!/^https?:\/\/\S+$/.test(baseUrl)) io.say('  That is not an http or https address; once more.');
+          baseUrl = (await askValue(() => ui.baseUrl())).replace(/\/+$/, '');
+          if (!/^https?:\/\/\S+$/.test(baseUrl)) ui.problem('That is not an http or https address');
         }
-        bearer = await askValue(`API key for ${baseUrl} (what you type is not shown): `, { hidden: true });
+        const at = baseUrl;
+        bearer = await askValue(() => ui.key(at));
         values.TENERAL_BASE_URL = baseUrl;
         values.TENERAL_API_KEY = bearer;
       } else {
@@ -270,6 +388,7 @@ export async function setup(o: SetupOptions): Promise<number> {
           // The browser's way back is a port that has to be opened before this process starts. Say which provider, and leave.
           mkdirSync(join(root, '.teneral'), { recursive: true });
           writeEnv(resumeFile(root), JSON.stringify({ provider: entry.id, replace }), true);
+          ui.handOver();
           return NEEDS_CALLBACK;
         }
         const issuer = env.TENERAL_OPENAI_AUTH ?? DEFAULT_ISSUER;
@@ -277,29 +396,21 @@ export async function setup(o: SetupOptions): Promise<number> {
         const before = readCredentials(auth, entry.id);
         const known = before !== null && before.issuer === issuer && before.client_id !== '';
         let fresh = false;
-        if (known) {
-          fresh = !yes(await ask(`This install was signed in before${before.email ? `, as ${before.email}` : ''}. Sign in to that account again? (n: a different account) [Y/n] `), true);
-        }
+        if (known) fresh = !await need(ui.sameAccount(before.email));
         try {
+          const gaveUp = new AbortController();
           const cred = await signIn({
             dir: auth, id: entry.id, issuer, apiBase: baseUrl, fresh, fetch: send,
             port: Number(env.TENERAL_CALLBACK_PORT) > 0 ? Number(env.TENERAL_CALLBACK_PORT) : CALLBACK_PORT,
             hostname: env.TENERAL_CALLBACK_HOST || '127.0.0.1',
             timeoutMs: o.signInTimeoutMs,
-            show: (url) => {
-              io.say('\nContinue with ChatGPT: open this address in your browser, sign in at OpenAI and approve teneral there.\n');
-              io.say(`  ${url}\n`);
-              io.say('The address is for you alone; do not pass it on. Waiting for you to come back from that page (Ctrl-C gives up) ...');
-            },
+            signal: gaveUp.signal,
+            show: (url) => ui.signIn(url, () => gaveUp.abort()),
           });
-          io.say(`\nSigned in${cred.email ? ` as ${cred.email}` : ''}. The sign-in is stored in ${join('.teneral', 'auth', `${entry.id}.json`)}, readable only by you and by the agent's own shell.`);
-          if (!known) {
-            io.say(`You're using your ChatGPT plan: requests the agent makes use your plan or its credits. You can review and limit that in ChatGPT settings: ${CHATGPT_USAGE_URL}`);
-          }
+          ui.signedIn(cred.email, join('.teneral', 'auth', `${entry.id}.json`), !known);
           bearer = await accessToken(auth, { id: entry.id, fetch: send });
         } catch (err) {
-          io.say(`\nThe sign-in did not work: ${err instanceof Error ? err.message : String(err)}`);
-          if ((await ask('[c]hoose a provider again, or [q]uit: ')).trim().toLowerCase().startsWith('q')) throw new Cancelled();
+          if (await need(ui.signInFailed(err instanceof Error ? err.message : String(err))) === 'quit') throw new Cancelled();
           continue;
         }
       }
@@ -307,21 +418,18 @@ export async function setup(o: SetupOptions): Promise<number> {
       // --- which model ---
       const listed = await listModels(baseUrl, bearer, send);
       const offered = listed.length > 0 ? listed.slice(0, 30) : entry.models.map((id) => ({ id, label: '' }));
-      if (listed.length > 0) io.say('\nModels this endpoint lists for you:');
-      else if (offered.length > 0) io.say('\nThe endpoint gave no list of models. A usual one:');
-      offered.forEach((m, i) => io.say(`  ${i + 1}. ${m.id}${m.label ? `  (${m.label})` : ''}`));
-      if (listed.length > offered.length) io.say(`  ... and ${listed.length - offered.length} more; any of them can be typed by name.`);
+      ui.models(offered, listed.length);
       let model = '';
       while (model === '') {
         const fallback = offered[0]?.id;
-        const answer = (await ask(fallback ? `Model: a number, or a name [${fallback}]: ` : 'Model name (it must support tool calls): ')).trim();
+        const answer = (await need(ui.model(fallback))).trim();
         const n = Number(answer);
         try {
           if (answer === '') model = fallback ?? '';
           else if (Number.isInteger(n) && n >= 1 && n <= offered.length) model = offered[n - 1]!.id;
           else model = plainValue(answer);
         } catch (err) {
-          io.say(`  ${err instanceof Error ? err.message : String(err)}; once more.`);
+          ui.problem(err instanceof Error ? err.message : String(err));
         }
       }
       values.TENERAL_MODEL = model;
@@ -330,22 +438,22 @@ export async function setup(o: SetupOptions): Promise<number> {
       let again = true;
       let passed = false;
       while (again) {
-        io.say(`\nTesting ${entry.name} with ${model}: one question, then one that must come back as a tool call ...`);
+        ui.testing(entry.name, model);
         let result: TestResult;
         try {
           const provider = connect({ ...values, TENERAL_AUTH: auth } as Record<string, string | undefined>, send);
-          result = await testProvider(provider, model);
+          result = await testProvider(provider, model, Date.now, (step, state, ms) => ui.progress?.(step, state, ms));
         } catch (err) {
           result = { ok: false, lines: [`  failed: ${failure(err)}`] };
         }
-        for (const line of result.lines) io.say(line);
+        ui.tested(result);
         if (result.ok) {
           passed = true;
           break;
         }
-        const next = (await ask('The test did not pass, and nothing was written. [r]etry it, [c]hoose a provider again, or [q]uit: ')).trim().toLowerCase();
-        if (next.startsWith('q')) throw new Cancelled();
-        again = !next.startsWith('c');
+        const next = await need(ui.testFailed());
+        if (next === 'quit') throw new Cancelled();
+        again = next !== 'choose';
       }
       if (!passed) continue;
 
@@ -353,13 +461,12 @@ export async function setup(o: SetupOptions): Promise<number> {
       const existing = existsSync(envFile) ? readFileSync(envFile, 'utf8') : null;
       writeEnv(envFile, envText(existing, values), replace);
       const names = Object.entries(values).filter(([, value]) => value !== null).map(([name, value]) => (name === 'TENERAL_API_KEY' ? name : `${name}=${value}`));
-      io.say(`\nWrote .env, readable only by you: ${names.join(', ')}.`);
-      io.say('./box up starts the agent with it. One that is already running keeps its old configuration until ./box down and ./box up.');
+      await ui.wrote(names, entry);
       return 0;
     }
   } catch (err) {
     if (!(err instanceof Cancelled)) throw err;
-    io.say('\nStopped. No configuration was written.');
+    ui.stopped();
     return 1;
   }
 }
@@ -428,12 +535,14 @@ if (import.meta.main) {
     console.error('The setup asks questions and needs a terminal. Run ./box setup from one.');
     process.exit(1);
   }
+  const options = { root: join(import.meta.dir, '..'), env: process.env, callback: !args.includes('--no-callback'), resume: args.includes('--resume') };
+  // The screens, at a terminal that can show them; --plain keeps the dialogue as lines of text.
+  if (!args.includes('--plain') && process.stdout.isTTY && process.env.TERM !== 'dumb') {
+    const { runSetupScreens } = await import('./tui/setup');
+    process.exit(await runSetupScreens(options, { thenStart: args.includes('--then-start') }));
+  }
   try {
-    const status = await setup({
-      root: join(import.meta.dir, '..'), io: terminalIo(), env: process.env,
-      callback: !args.includes('--no-callback'), resume: args.includes('--resume'),
-    });
-    process.exit(status);
+    process.exit(await setup({ ...options, io: terminalIo() }));
   } catch (err) {
     console.error(`The setup failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(2);

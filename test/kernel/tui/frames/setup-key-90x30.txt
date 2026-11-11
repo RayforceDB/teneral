@@ -1,0 +1,30 @@
+ teneral  setup
+
+  The key
+
+  API key for http://127.0.0.1:PORT/v1
+
+  It is stored in .env, readable only by you. What you type is not shown.
+
+  › •••••••••••
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter confirms · Ctrl-C stops · what you type is not shown

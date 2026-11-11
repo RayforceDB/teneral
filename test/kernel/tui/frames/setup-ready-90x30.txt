@@ -1,0 +1,30 @@
+ teneral  setup
+
+  Ready
+
+  · a reply       ok       N.Ns
+  · a tool call   ok       N.Ns
+
+  Written
+    .env
+      readable only by you: TENERAL_PROVIDER=openai,
+      TENERAL_BASE_URL=http://127.0.0.1:PORT/v1, TENERAL_API_KEY,
+      TENERAL_MODEL=fake-key-small
+
+  Next
+    ./box up starts the agent with it.
+    One that is already running keeps its old configuration until ./box down
+    and ./box up.
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter goes on

@@ -333,6 +333,8 @@ export interface SignInOptions {
   fetch?: typeof fetch;
   /** How long the owner has to finish in the browser. Default 10 minutes. */
   timeoutMs?: number;
+  /** Aborted when the owner gives up waiting. */
+  signal?: AbortSignal;
   now?: () => number;
 }
 
@@ -367,6 +369,7 @@ export async function signIn(o: SignInOptions): Promise<Credentials> {
       listener.done,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`nobody came back from the sign-in page within ${Math.round(timeoutMs / 60_000)} minutes`)), timeoutMs);
+        o.signal?.addEventListener('abort', () => reject(new Error('you gave up waiting for the sign-in page; nothing was stored')), { once: true });
       }),
     ]);
   } finally {

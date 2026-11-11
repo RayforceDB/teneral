@@ -1,0 +1,30 @@
+ teneral  setup
+
+  The model
+
+  Models this endpoint lists for you:
+
+  ▸ fake-key-large  (the usual choice)
+    fake-key-small
+
+  or type a name:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter confirms · Up/Down choose · Ctrl-C stops · or type a name

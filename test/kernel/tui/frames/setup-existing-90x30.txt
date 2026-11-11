@@ -1,0 +1,30 @@
+ teneral  setup
+
+  Welcome
+
+  This sets up where the agent's model comes from: you choose a provider, give
+  it a key or sign in, and two test requests are made. Nothing is written
+  until they have worked.
+
+  There is a configuration already (.env): Another OpenAI-compatible endpoint,
+  model old-model.
+
+  ▸ 1  Keep it
+    2  Replace it
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter confirms · Up/Down choose · Ctrl-C stops · or press n, y
