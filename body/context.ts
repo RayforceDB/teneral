@@ -79,10 +79,19 @@ const CLIP_MIN = 200;
 /** Room kept for the note `clip` puts where it cut. */
 const CLIP_NOTE = 64;
 
+/** The front is cut in steps of this share of the room. See `fit`. */
+const STEP = 0.2;
+
 /**
  * Drop from the front until the rest fits and starts with a user message: a tool result without
  * its call, or a reply with nothing before it, is refused by providers. If that leaves nothing,
  * say so in one user message rather than send an empty conversation.
+ *
+ * The cut moves in steps. Dropping only as much as each request needs would start every request
+ * at a different message, and a provider can reuse its work on an earlier request (a prompt cache)
+ * only while the start is the same. So the amount dropped, measured from the start of the whole
+ * conversation, is always a multiple of one step: the cut stays where it is while the journal
+ * grows by up to a step, then jumps.
  */
 function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   if (messages.length === 0) return [{ role: 'user', content: NOTHING }];
@@ -94,13 +103,20 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
     const m = messages[newest]!;
     if (size(m) > room && room >= CLIP_MIN) messages[newest] = { ...m, content: clip(m.content ?? '', room - CLIP_NOTE) };
   }
-  let total = messages.reduce((sum, m) => sum + size(m), 0);
-  let start = 0;
-  while (start < messages.length && (total > budgetChars || messages[start]!.role !== 'user')) {
-    total -= size(messages[start]!);
+  // What stands before the first user message can never be sent, so it is not counted as something to make room for.
+  let start = Math.max(0, messages.findIndex((m) => m.role === 'user'));
+  const total = messages.slice(start).reduce((sum, m) => sum + size(m), 0);
+  const step = Math.max(1, Math.floor(budgetChars * STEP));
+  const toDrop = total > budgetChars ? Math.ceil((total - budgetChars) / step) * step : 0;
+  let dropped = 0;
+  const drop = (): void => {
+    dropped += size(messages[start]!);
     start += 1;
-  }
-  return start < messages.length ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
+  };
+  // A whole step may reach past the newest stimulus when that one is most of the request; the cut stops at it.
+  while (start < messages.length && dropped < toDrop && start !== newest) drop();
+  while (start < messages.length && messages[start]!.role !== 'user') drop();
+  return start < messages.length && total - dropped <= budgetChars ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
 }
 
 /**

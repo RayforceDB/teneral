@@ -337,3 +337,42 @@ test('the default budget is 250,000 characters', () => {
 test('a stimulus with no text is shown as an empty message, since a provider takes no empty content', () => {
   expect(buildMessages([said(''), said(' \n')], 'S').map((m) => m.content)).toEqual(['S', '[empty message]', '[empty message]']);
 });
+
+test('the front is cut in coarse steps, so the start of the request stays the same over many requests', () => {
+  // One small exchange at a time, a request after each stimulus, as an idle agent answering its clock would make them.
+  const events: JournalEvent[] = [];
+  const firsts: string[] = [];
+  let before: ReturnType<typeof buildMessages> | null = null;
+  let grewInPlace = 0;
+  for (let i = 0; i < 300; i++) {
+    events.push(said(`tick ${i} ${'.'.repeat(40)}`, 'clock'));
+    const messages = buildMessages(events, 'S', 4000);
+    expect(messages.reduce((sum, m) => sum + m.content!.length, 0)).toBeLessThanOrEqual(4000);
+    firsts.push(messages[1]!.content!);
+    // While the first message holds, the whole earlier request is a prefix of this one: a cache of it still applies.
+    if (before !== null && before[1]!.content === messages[1]!.content) {
+      expect(messages.slice(0, before.length)).toEqual(before);
+      grewInPlace += 1;
+    }
+    before = messages;
+    events.push(replied(`nothing to do ${i}`));
+  }
+  const changes = firsts.filter((first, i) => i > 0 && first !== firsts[i - 1]).length;
+  // About 70 characters an exchange and steps of 800: a new start every eleven requests or so, not every request.
+  expect(changes).toBeGreaterThan(5);
+  expect(changes).toBeLessThan(40);
+  expect(grewInPlace).toBeGreaterThan(250);
+  let longest = 0;
+  for (let i = 0, run = 0; i < firsts.length; i++) {
+    run = i > 0 && firsts[i] === firsts[i - 1] ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+  expect(longest).toBeGreaterThanOrEqual(10);
+});
+
+test('a coarse step never drops the newest stimulus, however large it is', () => {
+  const big = said(`HEAD${'x'.repeat(3500)}TAIL`);
+  const messages = buildMessages([said('a'.repeat(300)), replied('b'.repeat(300)), big], 'S', 4000);
+  expect(messages.at(-1)!.role).toBe('user');
+  expect(messages.at(-1)!.content).toBe(`HEAD${'x'.repeat(3500)}TAIL`);
+});

@@ -107,7 +107,30 @@ function check(messages: ReturnType<typeof buildMessages>, budget: number | unde
   if (/\\u[dD][89a-fA-F]/.test(JSON.stringify(messages))) fail('a surrogate escape is left in the request');
   const size = messages.reduce((sum, m) => sum + (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
   // When nothing fits, one short note is sent anyway; otherwise the budget holds.
-  if (budget !== undefined && messages.length > 2 && size > budget) fail(`${size} characters for a budget of ${budget}`);
+  const note = messages.length === 2 && messages[1]!.content!.startsWith('[context] ');
+  if (budget !== undefined && !note && size > budget) fail(`${size} characters for a budget of ${budget}`);
+}
+
+/**
+ * Trimming only ever removes from the front: what is sent is the end of what would be sent with no
+ * limit, message for message, except that the newest user message may have lost its middle.
+ */
+function checkIsTail(trimmed: ReturnType<typeof buildMessages>, whole: ReturnType<typeof buildMessages>): void {
+  const kept = trimmed.slice(1);
+  if (kept.length === 1 && kept[0]!.content!.startsWith('[context] The last exchange was too large')) return;
+  const tail = whole.slice(whole.length - kept.length);
+  const newest = kept.findLastIndex((m) => m.role === 'user');
+  kept.forEach((m, i) => {
+    const same = JSON.stringify(m) === JSON.stringify(tail[i]);
+    const clipped = i === newest && m.role === tail[i]?.role && m.content!.includes('characters dropped here');
+    if (!same && !clipped) throw new Error(`message ${i + 1} of the trimmed request is not the one the whole request has there`);
+  });
+}
+
+/** How much more than it had to the trimming took away. A step is a fifth of the room, so never the better part of it. */
+function checkNotWasteful(trimmed: ReturnType<typeof buildMessages>, whole: ReturnType<typeof buildMessages>, budget: number): void {
+  const sizeOf = (list: ReturnType<typeof buildMessages>) => list.reduce((sum, m) => sum + (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
+  if (sizeOf(whole) <= budget && trimmed.length !== whole.length) throw new Error('a request that fitted whole was trimmed');
 }
 
 test('any journal at any budget gives a request a provider accepts', () => {
@@ -116,7 +139,11 @@ test('any journal at any budget gives a request a provider accepts', () => {
     const events = randomJournal(seed);
     for (const budget of BUDGETS) {
       try {
-        check(buildMessages(events, SYSTEM, budget), budget);
+        const trimmed = buildMessages(events, SYSTEM, budget);
+        check(trimmed, budget);
+        const whole = buildMessages(events, SYSTEM, Infinity);
+        checkIsTail(trimmed, whole);
+        if (budget !== undefined) checkNotWasteful(trimmed, whole, budget);
         needsTurn(events);
       } catch (err) {
         throw new Error(`seed ${seed}, budget ${budget}: ${err instanceof Error ? err.message : String(err)}\n${JSON.stringify(events)}`);
