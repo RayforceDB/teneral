@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { runTurn } from '../../body/loop';
 import type { ChatMessage, Provider, Reply } from '../../body/provider';
 import type { Tool, ToolContext } from '../../body/tools';
+import { needsTurn } from '../../body/context';
 import { appendEvent, readEvents } from '../../kernel/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
@@ -18,7 +19,7 @@ function setup(replies: Reply[], tools: Tool[] = []) {
     return next;
   };
   appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'go' });
-  return { journal, ctx, seen, deps: { journal, gen: 'g1', provider, tools, system: 'SYS', ctx } };
+  return { journal, ctx, seen, deps: { journal, gen: 'g1', provider, tools, system: () => 'SYS', ctx } };
 }
 
 const echo: Tool = {
@@ -159,4 +160,98 @@ test('a tool that returns something other than text does not lose its result', a
     expect(readEvents(s.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, output: text });
     expect(s.seen[1]!.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c1', content: text });
   }
+});
+
+const sizeOf = (messages: ChatMessage[]) => messages.reduce((sum, m) => sum + (m.content?.length ?? 0) + JSON.stringify(m.tool_calls ?? '').length, 0);
+
+test('the system prompt is composed again for every round, so a change made during the turn is seen', async () => {
+  let soul = 'before';
+  const rewrite: Tool = { spec: { name: 'rewrite', description: '', parameters: {} }, async run() { soul = 'after'; return 'ok'; } };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'rewrite', args: {} }] }, { text: 'done', toolCalls: [] }], [rewrite]);
+  await runTurn({ ...s.deps, system: () => soul });
+  expect(s.seen.map((messages) => messages[0]!.content)).toEqual(['before', 'after']);
+});
+
+test('each tool is announced as it starts, known or not, but not one skipped after a molt', async () => {
+  const molter: Tool = { spec: { name: 'molt', description: '', parameters: {} }, async run(_a, ctx) { ctx.moltCommit = 'abc'; return 'ok'; } };
+  const calls = [{ id: 'c1', name: 'echo', args: {} }, { id: 'c2', name: 'nope', args: {} }, { id: 'c3', name: 'molt', args: {} }, { id: 'c4', name: 'echo', args: {} }];
+  const s = setup([{ text: '', toolCalls: calls }], [echo, molter]);
+  const announced: string[] = [];
+  await runTurn({ ...s.deps, onTool: (name) => announced.push(name) });
+  expect(announced).toEqual(['echo', 'nope', 'molt']);
+});
+
+test('what a tool returns or throws is journaled as well-formed text', async () => {
+  const cut: Tool = { spec: { name: 'cut', description: '', parameters: {} }, async run() { return 'half \ud83d emoji'; } };
+  const boom: Tool = { spec: { name: 'boom', description: '', parameters: {} }, async run() { throw new Error('bad \udc00 byte'); } };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'cut', args: {} }, { id: 'c2', name: 'boom', args: {} }] }, { text: 'ok', toolCalls: [] }], [cut, boom]);
+  await runTurn(s.deps);
+  const outputs = readEvents(s.journal).flatMap((e) => (e.type === 'tool.result' ? [e.output] : []));
+  expect(outputs).toEqual(['half \ufffd emoji', 'error: bad \ufffd byte']);
+});
+
+test('the tool specs count against the budget', async () => {
+  const wordy: Tool = { spec: { name: 'wordy', description: 'd'.repeat(500), parameters: {} }, async run() { return ''; } };
+  const run = async (tools: Tool[]) => {
+    const s = setup([{ text: 'ok', toolCalls: [] }], tools);
+    appendEvent(s.journal, 'g1', { type: 'assistant', text: 'a'.repeat(300), toolCalls: [] });
+    appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'newest' });
+    await runTurn({ ...s.deps, budgetChars: 700 });
+    return s.seen[0]!;
+  };
+  expect(await run([])).toHaveLength(4);
+  const withSpecs = await run([wordy]);
+  expect(withSpecs.map((m) => m.content)).toEqual(['SYS', 'newest']);
+});
+
+test('a request the provider refuses as too long is tried once more at half the budget, which then holds for the turn', async () => {
+  const s = setup([]);
+  for (let i = 0; i < 6; i++) {
+    appendEvent(s.journal, 'g1', { type: 'assistant', text: 'a'.repeat(200), toolCalls: [] });
+    appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: `more ${i}` });
+  }
+  const seen: ChatMessage[][] = [];
+  const provider: Provider = async (messages) => {
+    seen.push(messages);
+    if (seen.length === 1) throw new Error('provider answered 400: {"error":{"message":"This model\'s maximum context length is 8192 tokens"}}');
+    return seen.length === 2 ? { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: {} }] } : { text: 'done', toolCalls: [] };
+  };
+  expect(await runTurn({ ...s.deps, provider, tools: [echo], budgetChars: 2000 })).toBe('done');
+  expect(seen).toHaveLength(3);
+  expect(sizeOf(seen[0]!)).toBeGreaterThan(1000);
+  expect(sizeOf(seen[1]!)).toBeLessThanOrEqual(1000);
+  expect(sizeOf(seen[2]!)).toBeLessThanOrEqual(1000);
+  expect(seen[1]!.at(-1)!.content).toBe('more 5');
+});
+
+test('a second refusal, or a failure that is not about length, is not retried', async () => {
+  const failing = (message: string) => {
+    const s = setup([]);
+    let calls = 0;
+    const provider: Provider = async () => { calls += 1; throw new Error(message); };
+    return { run: runTurn({ ...s.deps, provider }), calls: () => calls, journal: s.journal };
+  };
+  const tooLong = failing('provider answered 413: Request too large: reduce the length');
+  await expect(tooLong.run).rejects.toThrow(/413/);
+  expect(tooLong.calls()).toBe(2);
+  expect(readEvents(tooLong.journal).map((e) => e.type)).toEqual(['stimulus']);
+  for (const message of ['provider answered 400: unknown model', 'provider answered 429: token rate limit', 'provider timed out after 600s', 'context window']) {
+    const other = failing(message);
+    await expect(other.run).rejects.toThrow(message);
+    expect(other.calls()).toBe(1);
+  }
+});
+
+test('at the round limit, something the model was never shown keeps the turn owed: no note is written over it', async () => {
+  const noisy: Tool = {
+    spec: { name: 'noisy', description: '', parameters: {} },
+    async run(_args, ctx) { appendEvent(ctx.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'are you there?' }); return 'ok'; },
+  };
+  const call = { text: '', toolCalls: [{ id: 'c', name: 'noisy', args: {} }] };
+  const s = setup([call, call], [noisy]);
+  expect(await runTurn({ ...s.deps, maxRounds: 1 })).toBe('done');
+  const events = readEvents(s.journal);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'stimulus', 'tool.result']);
+  expect(needsTurn(events)).toBe(true);
+  expect(s.seen).toHaveLength(1);
 });
