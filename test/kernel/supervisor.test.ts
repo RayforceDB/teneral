@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
 import {
   CRASH_LIMIT, REJECTION_LIMIT, init, paths, supervise, type Options,
 } from '../../kernel/supervisor';
-import { git, type GateResult } from '../../kernel/gates';
+import { git, runGates, type GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
 const JOURNAL_MODULE = join(import.meta.dir, '../../kernel/journal.ts');
@@ -300,6 +302,17 @@ test('init puts back a worktree that was deleted after a complete init', () => {
 
 // --- signals, stopping and the lock ---
 
+/**
+ * Gates that behave as the real ones do when the supervisor is told to stop while they run: the
+ * signal arrives, the supervisor aborts the run, and the run ends without a verdict.
+ * supervise has its handler installed while this runs, so the signal does not end the test run.
+ */
+const interruptedBy = (signal: 'SIGTERM' | 'SIGHUP') => async (_dir: string, _from: string, _to: string, stop?: AbortSignal): Promise<GateResult> => {
+  process.kill(process.pid, signal);
+  await new Promise<void>((resolve) => { stop!.addEventListener('abort', () => resolve(), { once: true }); });
+  return { ok: false, gate: 'interrupted', output: 'stopped' };
+};
+
 test('a stop signal that arrives while the gates run stops the supervisor before anything else starts', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
@@ -310,8 +323,7 @@ test('a stop signal that arrives while the gates run stops the supervisor before
 
   const outcome = await supervise({
     root: dir, ...QUIET,
-    // supervise has its handler installed while this runs, so the signal does not end the test run.
-    gates: () => { process.kill(process.pid, 'SIGTERM'); return PASS; },
+    gates: interruptedBy('SIGTERM'),
   });
   const events = readEvents(p.journal);
   expect(outcome).toBe('stopped');
@@ -387,13 +399,15 @@ test('restarts wait longer each time', async () => {
 
 // --- rejected molts ---
 
-test('a generation that re-requests a rejected molt on every start without a reply is paced, then halted, never rolled back', async () => {
+test('a generation that keeps asking for the same rejected commit is paced, then halted, never rolled back, reply or not', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
-  // v2 becomes ready and asks for v3 on every start, whatever the kernel answered.
+  // v2 becomes ready, speaks, and asks for v3 on every start, whatever the kernel answered. The reply is
+  // there because a real molt request always sits inside one, so a reply must not reset the count.
   writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'assistant', text: 'molting', toolCalls: [] });
 appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_V3, motive: 'again' });
 process.exit(75);
 ` });
@@ -411,7 +425,7 @@ process.exit(75);
   });
   const events = readEvents(p.journal);
   expect(outcome).toBe('halted');
-  expect(logs.join('\n')).toContain('keeps requesting molts the gates reject without a reply in between');
+  expect(logs.join('\n')).toContain('the same commit keeps being requested and rejected');
   // Every rejection is journaled, the one that reaches the limit included.
   expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(REJECTION_LIMIT);
   expect(events.filter((e) => e.type === 'generation.started' && e.gen === v2)).toHaveLength(REJECTION_LIMIT);
@@ -422,27 +436,36 @@ process.exit(75);
   expect(Date.now() - t).toBeGreaterThanOrEqual(120);
 });
 
-test('a generation that replies before each rejected molt is iterating, and is never halted or slowed for it', async () => {
-  const rounds = 6;
-  const restartBudget = 2;
-  expect(rounds).toBeGreaterThan(REJECTION_LIMIT);
-  expect(rounds).toBeGreaterThan(restartBudget);
-  // Speaks, asks for a molt that will be rejected, and after `rounds` rejections stops by itself.
-  const r = await seedOnly(`${HEAD}
+/** Asks for a molt that will be rejected, `rounds` times, then stops by itself. `commit` is an expression over `rejected`, the count so far. */
+const asksFor = (commit: string, rounds: number) => `${HEAD}
 const rejected = readEvents(journal).filter((e) => e.type === 'molt.rejected').length;
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-appendEvent(journal, gen, { type: 'assistant', text: 'trying again', toolCalls: [] });
 if (rejected >= ${rounds}) process.exit(0);
-appendEvent(journal, gen, { type: 'molt.requested', commit: '${'b'.repeat(40)}', motive: 'attempt ' + rejected });
+appendEvent(journal, gen, { type: 'molt.requested', commit: ${commit}, motive: 'attempt ' + rejected });
 process.exit(75);
-`, { gates: () => ({ ok: false, gate: 'tests-body', output: 'boom' }), restartBudget, restartDelayMs: 30 });
+`;
+const REJECT = { gates: () => ({ ok: false, gate: 'tests-body', output: 'boom' }), restartBudget: 2, restartDelayMs: 30 };
+
+test('a generation whose every rejected molt names a new commit is iterating, and is never halted or slowed for it', async () => {
+  const rounds = 6;
+  expect(rounds).toBeGreaterThan(REJECTION_LIMIT);
+  expect(rounds).toBeGreaterThan(REJECT.restartBudget);
+  const r = await seedOnly(asksFor("rejected.toString(16).padStart(40, 'c')", rounds), REJECT);
   expect(r.outcome).toBe('stopped');
   expect(r.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
   expect(started(r.events)).toBe(rounds + 1);
-  // Each wait is one unit: the count of rejections in a row starts again at every reply.
+  // Each wait is one unit: the count starts again with every new commit.
   const waits = r.logs.filter((line) => line.includes('rejected at gate'));
   expect(waits).toHaveLength(rounds);
   for (const line of waits) expect(line).toContain('restarting in 30 ms');
+});
+
+test('alternating between two rejected commits is never halted', async () => {
+  const rounds = 8;
+  const r = await seedOnly(asksFor("(rejected % 2 === 0 ? 'a' : 'b').repeat(40)", rounds), REJECT);
+  expect(r.outcome).toBe('stopped');
+  expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [e.commit[0]] : []))).toEqual(['a', 'b', 'a', 'b', 'a', 'b', 'a', 'b']);
+  for (const line of r.logs.filter((l) => l.includes('rejected at gate'))) expect(line).toContain('restarting in 30 ms');
 });
 
 test('asking again and again for the commit already running is limited the same way', async () => {
@@ -454,7 +477,7 @@ process.exit(75);
 `, { gates: (_dir, _from, to) => { gated.push(to); return PASS; } });
   expect(r.outcome).toBe('halted');
   expect(gated).toEqual([]);
-  expect(r.logs.join('\n')).toContain('keeps requesting molts the gates reject without a reply in between');
+  expect(r.logs.join('\n')).toContain('the same commit keeps being requested and rejected');
   expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [e.gate] : []))).toEqual(Array(REJECTION_LIMIT).fill('same'));
   expect(started(r.events)).toBe(REJECTION_LIMIT);
 });
@@ -574,7 +597,7 @@ test('SIGHUP that arrives while the gates run stops the supervisor before anythi
   const p = paths(dir);
   writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
   process.env.TEST_NEXT = commitAll(p.candidate, 'v2');
-  const outcome = await supervise({ root: dir, ...QUIET, gates: () => { process.kill(process.pid, 'SIGHUP'); return PASS; } });
+  const outcome = await supervise({ root: dir, ...QUIET, gates: interruptedBy('SIGHUP') });
   expect(outcome).toBe('stopped');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
 });
@@ -605,4 +628,263 @@ test('init tells git never to forget worktrees during gc, once however often it 
   for (const name of readdirSync(record)) utimesSync(join(record, name), longAgo, longAgo);
   git(dir, 'gc', '--quiet');
   expect(git(dir, 'worktree', 'list', '--porcelain')).toContain(p.live);
+});
+
+// --- a molt always gets an answer ---
+
+const interruptions = (events: ReturnType<typeof readEvents>) => events.flatMap((e) => (e.type === 'molt.rejected' && e.gate === 'interrupted' ? [e] : []));
+
+test('a molt request the kernel never answered is answered at the next start, once', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const p = paths(dir);
+  const asked = 'd'.repeat(40);
+  // What a supervisor killed in the middle of a gate run leaves behind.
+  appendEvent(p.journal, seed, { type: 'generation.ready', commit: seed });
+  appendEvent(p.journal, seed, { type: 'molt.requested', commit: asked, motive: 'before the kill' });
+
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  const events = readEvents(p.journal);
+  expect(interruptions(events)).toHaveLength(1);
+  expect(interruptions(events)[0]).toMatchObject({ commit: asked, gen: seed });
+  expect(interruptions(events)[0]!.output).toContain('molt again');
+  // The answer is there before the generation starts, so it finds it.
+  expect(events.findIndex((e) => e.type === 'molt.rejected')).toBeLessThan(events.findIndex((e) => e.type === 'generation.started'));
+});
+
+test('a molt request that was already answered is left alone at start', async () => {
+  const r = await scenario('process.exit(1);\n', { ok: false, gate: 'tests', output: 'boom' });
+  expect(await supervise({ root: r.dir, ...QUIET })).toBe('stopped');
+  expect(readEvents(paths(r.dir).journal).filter((e) => e.type === 'molt.rejected')).toHaveLength(1);
+});
+
+test('a body that dies between asking for a molt and exiting with 75 has its request answered', async () => {
+  const r = await seedOnly(`${HEAD}
+const before = readEvents(journal);
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+if (before.some((e) => e.type === 'molt.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'molt.requested', commit: '${'e'.repeat(40)}', motive: 'then it died' });
+process.exit(1);
+`);
+  expect(r.outcome).toBe('stopped');
+  expect(interruptions(r.events)).toHaveLength(1);
+  expect(interruptions(r.events)[0]).toMatchObject({ commit: 'e'.repeat(40) });
+  expect(started(r.events)).toBe(2);
+});
+
+test('a stop signal during a long check returns at once, kills the check, leaves no gate checkout, and the molt is answered at the next start', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  const pidFile = join(dir, '.teneral', 'child-of-the-check.pid');
+  let signalled = 0;
+
+  const outcome = await supervise({
+    root: dir, ...QUIET, killGraceMs: 200,
+    // The real gates, with one check that would run for minutes.
+    gates: (candidate, from, to, stop) => {
+      // supervise has its handler installed while the gates run, so the signal does not end the test run.
+      setTimeout(() => { signalled = Date.now(); process.kill(process.pid, 'SIGTERM'); }, 500);
+      return runGates(candidate, from, to, [
+        { gate: 'slow', cmd: ['bash', '-c', `sleep 300 & echo $! > ${JSON.stringify(pidFile)}; wait`] },
+      ], { signal: stop, killGraceMs: 200 });
+    },
+  });
+  expect(outcome).toBe('stopped');
+  expect(Date.now() - signalled).toBeLessThan(1500);
+  const checkChild = Number(readFileSync(pidFile, 'utf8'));
+  for (let i = 0; i < 100 && existsSync(`/proc/${checkChild}`); i++) await Bun.sleep(20);
+  expect(() => process.kill(checkChild, 0)).toThrow();
+  expect(readdirSync(join(dir, '.teneral')).filter((name) => name.startsWith('gate-'))).toEqual([]);
+  expect(readEvents(p.journal).map((e) => e.type)).not.toContain('molt.rejected');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+
+  // The next start tells the agent what became of its request; V1 exits cleanly once it has an answer.
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  const answers = interruptions(readEvents(p.journal));
+  expect(answers).toHaveLength(1);
+  expect(answers[0]).toMatchObject({ commit: next });
+});
+
+// --- a generation that is alive but useless ---
+
+const READY_THEN = (rest: string) => `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+${rest}
+`;
+
+test('a newly promoted generation that starts but never replies is killed and rolled back, saying so', async () => {
+  for (const useless of ['for (;;) { /* spins */ }', 'setInterval(() => {}, 1000);']) {
+    const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+    init(dir);
+    const p = paths(dir);
+    writeFiles(p.candidate, { 'body/main.ts': READY_THEN(useless) });
+    const next = commitAll(p.candidate, 'v2');
+    process.env.TEST_NEXT = next;
+
+    expect(await supervise({ root: dir, ...QUIET, probationMs: 400, killGraceMs: 200 })).toBe('stopped');
+    const rollbacks = readEvents(p.journal).flatMap((e) => (e.type === 'generation.rolledback' ? [e] : []));
+    expect(rollbacks).toHaveLength(1);
+    expect(rollbacks[0]).toMatchObject({ commit: next, to: seed });
+    expect(rollbacks[0]!.reason).toContain('started but did not reply');
+    expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+  }
+});
+
+test('a generation with nothing before it is not on probation', async () => {
+  const r = await seedOnly(READY_THEN('setTimeout(() => process.exit(0), 500);'), { probationMs: 100 });
+  expect(r.outcome).toBe('stopped');
+  expect(started(r.events)).toBe(1);
+});
+
+test('a promoted generation that has replied once is established: later silence does not roll it back', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  // First run: replies, then crashes. Second run: silent for longer than the probation, then exits cleanly.
+  writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
+const mine = readEvents(journal).filter((e) => e.type === 'generation.ready' && e.gen === gen).length;
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+if (mine === 0) {
+  appendEvent(journal, gen, { type: 'assistant', text: 'here', toolCalls: [] });
+  process.exit(1);
+}
+setTimeout(() => process.exit(0), 500);
+` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 150 })).toBe('stopped');
+  expect(readEvents(p.journal).map((e) => e.type)).not.toContain('generation.rolledback');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+});
+
+test('probation is remembered across a restart of the supervisor: a promoted generation that has not replied yet is still on it', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': READY_THEN('setInterval(() => {}, 1000);') });
+  const next = commitAll(p.candidate, 'v2');
+  // A supervisor stopped right after promoting: the state and the journal both say so, and nothing was said since.
+  writeFileSync(p.state, JSON.stringify({ current: next, previous: seed }));
+  appendEvent(p.journal, next, { type: 'generation.promoted', commit: next, previous: seed });
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 300, killGraceMs: 200 })).toBe('stopped');
+  expect(readEvents(p.journal).map((e) => e.type)).toContain('generation.rolledback');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+// --- a rollback says why ---
+
+test('a rollback note and the log carry the end of what the failed generation wrote to stderr, which is still shown live', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': "console.error('x'.repeat(10000));\nconsole.error('RECOGNISABLE-LAST-WORDS-42');\nprocess.exit(1);\n" });
+  process.env.TEST_NEXT = commitAll(p.candidate, 'v2');
+
+  const logs: string[] = [];
+  let shown = '';
+  const outcome = await supervise({
+    root: dir, ...QUIET, log: (line) => { logs.push(line); }, stderr: (chunk) => { shown += Buffer.from(chunk).toString(); },
+  });
+  expect(outcome).toBe('stopped');
+  const rollback = readEvents(p.journal).flatMap((e) => (e.type === 'generation.rolledback' ? [e] : []))[0]!;
+  expect(rollback.reason).toContain('exited with 1 before it was ready');
+  expect(rollback.reason).toContain('RECOGNISABLE-LAST-WORDS-42');
+  // The tail, not all of it.
+  expect(rollback.reason.length).toBeLessThan(5000);
+  expect(logs.join('\n')).toContain('RECOGNISABLE-LAST-WORDS-42');
+  // Nothing was dropped on the way to the terminal.
+  expect(shown).toContain('x'.repeat(10000));
+  expect(shown).toContain('RECOGNISABLE-LAST-WORDS-42');
+});
+
+// --- the restart budget is for a generation that keeps failing, not for one that ran long ---
+
+test('a run that lasted long enough before it crashed gives the generation its restart budget back', async () => {
+  const rounds = 6;
+  // Replies (so the crash limit never applies), stays up a while, crashes; stops by itself after `rounds` starts.
+  const r = await seedOnly(`${HEAD}
+const starts = readEvents(journal).filter((e) => e.type === 'generation.started').length;
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'assistant', text: 'working', toolCalls: [] });
+setTimeout(() => process.exit(starts >= ${rounds} ? 0 : 1), 150);
+`, { restartBudget: 2, stableRunMs: 100 });
+  expect(r.outcome).toBe('stopped');
+  expect(started(r.events)).toBe(rounds);
+});
+
+test('short runs do not give the budget back', async () => {
+  const r = await seedOnly(`${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'assistant', text: 'working', toolCalls: [] });
+process.exit(1);
+`, { restartBudget: 2, stableRunMs: 60_000 });
+  expect(r.outcome).toBe('halted');
+  expect(started(r.events)).toBe(3);
+});
+
+// --- the lock names a supervisor, not just a pid ---
+
+test('a lock whose pid now belongs to some other program is taken over, and that program is left alone', async () => {
+  if (!existsSync('/proc/self/cmdline')) return;
+  const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const p = paths(dir);
+  mkdirSync(join(dir, '.teneral'));
+  const other = Bun.spawn(['sleep', '300'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  try {
+    // As after a reboot: the lock names a supervisor, and its pid has since been given to something else.
+    writeFileSync(p.lock, `${other.pid}\n${JSON.stringify(['bun', 'kernel/main.ts'])}\n`);
+    expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+    expect(started(readEvents(p.journal))).toBe(1);
+    expect(other.exitCode).toBeNull();
+  } finally {
+    other.kill('SIGKILL');
+  }
+});
+
+test('a lock whose pid is alive and is the program the lock names still keeps a second supervisor out', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const p = paths(dir);
+  mkdirSync(join(dir, '.teneral'));
+  const holder = Bun.spawn(['sleep', '300'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  try {
+    for (const lock of [`${holder.pid}\n${JSON.stringify(['sleep', '300'])}\n`, `${holder.pid}\n`]) {
+      writeFileSync(p.lock, lock);
+      expect(await supervise({ root: dir, ...QUIET })).toBe('halted');
+      expect(started(readEvents(p.journal))).toBe(0);
+    }
+  } finally {
+    holder.kill('SIGKILL');
+  }
+});
+
+// --- an install that was moved ---
+
+test('an install moved to another directory starts again there', async () => {
+  // The body exits 0 only if its dependencies are reachable from where it runs.
+  const made = makeRepo({ 'body/main.ts': "process.exit(require('node:fs').existsSync('node_modules/marker') ? 0 : 9);\n" });
+  writeFiles(made.dir, { 'node_modules/marker': 'x\n' });
+  expect(await supervise({ root: made.dir, ...QUIET })).toBe('stopped');
+  writeFiles(paths(made.dir).candidate, { 'body/notes.ts': '// work in progress, not committed\n' });
+
+  const moved = `${made.dir}-moved`;
+  renameSync(made.dir, moved);
+  const p = paths(moved);
+  const logs: string[] = [];
+  expect(await supervise({ root: moved, ...QUIET, log: (line) => { logs.push(line); } })).toBe('stopped');
+  expect(logs).toEqual([]);
+  expect(started(readEvents(p.journal))).toBe(2);
+  expect(git(p.live, 'rev-parse', 'HEAD')).toBe(made.seed);
+  expect(git(p.candidate, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('lineage/local');
+  // The agent's uncommitted work came along.
+  expect(git(p.candidate, 'status', '--porcelain')).toContain('body/notes.ts');
+  for (const tree of [p.live, p.candidate]) {
+    expect(realpathSync(join(tree, 'node_modules'))).toBe(realpathSync(join(moved, 'node_modules')));
+  }
+  expect(git(moved, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '))).toHaveLength(3);
 });
