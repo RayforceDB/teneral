@@ -37,6 +37,24 @@ export interface ProviderConfig {
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
+/**
+ * A request that failed on the provider's side or on the way there. Anything else thrown during a
+ * turn is this code's own fault, and the two are handled differently (see body/retry.ts).
+ */
+export class ProviderError extends Error {
+  /** The HTTP status, or null when no answer came: not reachable, or timed out. */
+  readonly status: number | null;
+  /** What the provider said, as far as it was read. */
+  readonly body: string;
+
+  constructor(message: string, status: number | null, body = '') {
+    super(message);
+    this.name = 'ProviderError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 /** Some endpoints answer with a list of parts instead of a string; the text parts are the reply. */
 type WireContent = string | null | unknown[];
 
@@ -99,18 +117,18 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       text = await res.text();
     } catch (err) {
       // Without a limit, an endpoint that stops answering would hold the agent forever.
-      if (signal.aborted) throw new Error(`provider timed out after ${timeoutMs / 1000}s`);
-      throw err;
+      if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
+      throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
     }
-    if (!res.ok) throw new Error(`provider answered ${res.status}: ${text.slice(0, 2000)}`);
+    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text);
     let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown } }[] } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
-      throw new Error(`provider reply is not JSON: ${text.slice(0, 2000)}`);
+      throw new ProviderError(`provider reply is not JSON: ${text.slice(0, 2000)}`, res.status, text);
     }
     const message = parsed?.choices?.[0]?.message;
-    if (!message) throw new Error(`provider reply has no message: ${text.slice(0, 2000)}`);
+    if (!message) throw new ProviderError(`provider reply has no message: ${text.slice(0, 2000)}`, res.status, text);
     return { text: contentText(message.content), toolCalls: readCalls(message.tool_calls) };
   };
 }

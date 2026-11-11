@@ -1,6 +1,7 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { DEFAULT_BUDGET, buildMessages, kernelNote } from './context';
 import type { Provider } from './provider';
+import { saysTooLong } from './retry';
 import type { Tool, ToolContext } from './tools';
 
 export interface TurnDeps {
@@ -17,12 +18,6 @@ export interface TurnDeps {
   maxRounds?: number;
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
-}
-
-/** The provider's way of saying the request was too long; `provider answered <status>: <body>` is how body/provider.ts words a refusal. */
-function saysTooLong(err: unknown): boolean {
-  const refusal = /^provider answered (400|413): (.*)$/s.exec(err instanceof Error ? err.message : '');
-  return refusal !== null && /context|token|length/i.test(refusal[2]!);
 }
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */

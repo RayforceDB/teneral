@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTurn } from '../../body/loop';
-import type { ChatMessage, Provider, Reply } from '../../body/provider';
+import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../body/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../body/context';
 import { appendEvent, readEvents } from '../../kernel/journal';
@@ -213,7 +213,7 @@ test('a request the provider refuses as too long is tried once more at half the 
   const seen: ChatMessage[][] = [];
   const provider: Provider = async (messages) => {
     seen.push(messages);
-    if (seen.length === 1) throw new Error('provider answered 400: {"error":{"message":"This model\'s maximum context length is 8192 tokens"}}');
+    if (seen.length === 1) throw new ProviderError('refused', 400, '{"error":{"message":"This model\'s maximum context length is 8192 tokens"}}');
     return seen.length === 2 ? { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: {} }] } : { text: 'done', toolCalls: [] };
   };
   expect(await runTurn({ ...s.deps, provider, tools: [echo], budgetChars: 2000 })).toBe('done');
@@ -225,19 +225,26 @@ test('a request the provider refuses as too long is tried once more at half the 
 });
 
 test('a second refusal, or a failure that is not about length, is not retried', async () => {
-  const failing = (message: string) => {
+  const failing = (err: Error) => {
     const s = setup([]);
     let calls = 0;
-    const provider: Provider = async () => { calls += 1; throw new Error(message); };
+    const provider: Provider = async () => { calls += 1; throw err; };
     return { run: runTurn({ ...s.deps, provider }), calls: () => calls, journal: s.journal };
   };
-  const tooLong = failing('provider answered 413: Request too large: reduce the length');
+  const tooLong = failing(new ProviderError('refused 413', 413, 'Request too large: reduce the length'));
   await expect(tooLong.run).rejects.toThrow(/413/);
   expect(tooLong.calls()).toBe(2);
   expect(readEvents(tooLong.journal).map((e) => e.type)).toEqual(['stimulus']);
-  for (const message of ['provider answered 400: unknown model', 'provider answered 429: token rate limit', 'provider timed out after 600s', 'context window']) {
-    const other = failing(message);
-    await expect(other.run).rejects.toThrow(message);
+  const others = [
+    new ProviderError('unknown model', 400, 'unknown model'),
+    new ProviderError('slow down', 429, 'token rate limit'),
+    new ProviderError('timed out', null),
+    // The words alone do not make it a refusal: this one is not from the provider.
+    new Error('provider answered 400: maximum context length'),
+  ];
+  for (const err of others) {
+    const other = failing(err);
+    await expect(other.run).rejects.toBe(err);
     expect(other.calls()).toBe(1);
   }
 });

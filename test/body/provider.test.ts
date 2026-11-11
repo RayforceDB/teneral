@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { openAiProvider } from '../../body/provider';
+import { openAiProvider, ProviderError } from '../../body/provider';
 
 function fakeFetch(status: number, body: unknown, seen: { url?: string; init?: RequestInit } = {}) {
   return (async (url: string, init?: RequestInit) => {
@@ -133,4 +133,27 @@ test('arguments already given as an object are taken as they are, and missing on
   expect((await withCalls([call({ path: 'a' })])).toolCalls[0]!.args).toEqual({ path: 'a' });
   expect((await withCalls([call(undefined)])).toolCalls[0]!.args).toEqual({});
   expect((await withCalls([call('')])).toolCalls[0]!.args).toBe('');
+});
+
+const caught = async (run: Promise<unknown>): Promise<unknown> => run.then(() => null, (err: unknown) => err);
+
+test('every way a request can fail is a ProviderError that carries the status and the body', async () => {
+  const refused = await caught(openAiProvider({ ...cfg, fetch: fakeFetch(422, { error: 'no such tool' }) })([], []));
+  expect(refused).toBeInstanceOf(ProviderError);
+  expect(refused).toMatchObject({ status: 422, body: '{"error":"no such tool"}' });
+
+  const down = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
+  const unreachable = await caught(openAiProvider({ ...cfg, fetch: down })([], []));
+  expect(unreachable).toBeInstanceOf(ProviderError);
+  expect(unreachable).toMatchObject({ status: null });
+  expect((unreachable as Error).message).toContain('fetch failed');
+
+  const hung = ((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)))) as unknown as typeof fetch;
+  const late = await caught(openAiProvider({ ...cfg, fetch: hung, timeoutMs: 20 })([], []));
+  expect(late).toBeInstanceOf(ProviderError);
+  expect(late).toMatchObject({ status: null });
+
+  const html = (async () => new Response('<html>', { status: 200 })) as unknown as typeof fetch;
+  expect(await caught(openAiProvider({ ...cfg, fetch: html })([], []))).toBeInstanceOf(ProviderError);
+  expect(await caught(openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [] }) })([], []))).toBeInstanceOf(ProviderError);
 });
