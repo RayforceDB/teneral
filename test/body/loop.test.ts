@@ -90,3 +90,68 @@ test('a model that reuses a call id still sees each result with its own call', a
   await runTurn(s.deps);
   expect(s.seen[2]!.filter((m) => m.role === 'tool').map((m) => m.content)).toEqual(['run 1', 'run 2']);
 });
+
+test('a stimulus that arrives while the last reply is on its way gets another round', async () => {
+  const s = setup([]);
+  const seen: ChatMessage[][] = [];
+  const provider: Provider = async (messages) => {
+    seen.push(messages);
+    if (seen.length === 1) {
+      appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'one more thing' });
+      return { text: 'first answer', toolCalls: [] };
+    }
+    return { text: 'second answer', toolCalls: [] };
+  };
+
+  expect(await runTurn({ ...s.deps, provider })).toBe('done');
+
+  expect(seen).toHaveLength(2);
+  expect(seen[0]!.some((m) => m.content === 'one more thing')).toBe(false);
+  expect(seen[1]!.some((m) => m.role === 'user' && m.content === 'one more thing')).toBe(true);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'stimulus', 'assistant', 'assistant']);
+});
+
+test('a kernel note that arrives while the last reply is on its way gets another round; other events do not', async () => {
+  const during = async (body: Parameters<typeof appendEvent>[2]) => {
+    const s = setup([]);
+    let calls = 0;
+    const provider: Provider = async () => {
+      calls += 1;
+      if (calls === 1) appendEvent(s.journal, 'g1', body);
+      return { text: 'answer', toolCalls: [] };
+    };
+    await runTurn({ ...s.deps, provider });
+    return calls;
+  };
+  expect(await during({ type: 'molt.rejected', commit: 'b', gate: 'tests', output: '1 fail' })).toBe(2);
+  expect(await during({ type: 'generation.ready', commit: 'g1' })).toBe(1);
+});
+
+test('after a molt the rest of the reply is not run, and every call still has a result', async () => {
+  let written = false;
+  const molter: Tool = {
+    spec: { name: 'molt', description: '', parameters: {} },
+    async run(_args, ctx) { ctx.moltCommit = 'abc'; return 'requested'; },
+  };
+  const writer: Tool = { spec: { name: 'write', description: '', parameters: {} }, async run() { written = true; return 'wrote'; } };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'molt', args: {} }, { id: 'c2', name: 'write', args: {} }] }], [molter, writer]);
+
+  expect(await runTurn(s.deps)).toBe('molt');
+
+  expect(written).toBe(false);
+  const events = readEvents(s.journal);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'tool.result']);
+  expect(events[3]).toMatchObject({ callId: 'c1', ok: true, output: 'requested' });
+  expect(events[4]).toMatchObject({ callId: 'c2', ok: false });
+  expect((events[4] as { output: string }).output).toMatch(/not run.*molt/);
+});
+
+test('a tool that returns something other than text does not lose its result', async () => {
+  const odd = (value: unknown): Tool => ({ spec: { name: 'odd', description: '', parameters: {} }, async run() { return value as string; } });
+  for (const [value, text] of [[42, '42'], [undefined, 'undefined'], [{ a: 1 }, '[object Object]']] as const) {
+    const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'odd', args: {} }] }, { text: 'ok', toolCalls: [] }], [odd(value)]);
+    await runTurn(s.deps);
+    expect(readEvents(s.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, output: text });
+    expect(s.seen[1]!.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c1', content: text });
+  }
+});
