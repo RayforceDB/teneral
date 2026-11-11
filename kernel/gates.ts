@@ -21,15 +21,26 @@ export const DEFAULT_CHECKS: readonly Check[] = [
   { gate: 'tests', cmd: ['bun', 'test'] },
 ];
 
-export function sh(cmd: string[], cwd: string, timeoutMs = 600_000): { code: number; output: string } {
-  const p = Bun.spawnSync(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs });
-  return { code: p.exitCode ?? 1, output: p.stdout.toString() + p.stderr.toString() };
+export interface ShResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  /** stdout followed by stderr, for showing to a reader. */
+  output: string;
 }
 
+export function sh(cmd: string[], cwd: string, timeoutMs = 600_000): ShResult {
+  const p = Bun.spawnSync(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs });
+  const stdout = p.stdout.toString();
+  const stderr = p.stderr.toString();
+  return { code: p.exitCode ?? 1, stdout, stderr, output: stdout + stderr };
+}
+
+/** git's stdout only: a warning on stderr must never be read as part of the answer. */
 function gitRaw(dir: string, ...args: string[]): string {
   const r = sh(['git', ...args], dir);
   if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.output.trim()}`);
-  return r.output;
+  return r.stdout;
 }
 
 /** Runs git in `dir`; throws with git's own words when it fails. */

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { BODY_SIZE_LIMIT, runGates } from '../../kernel/gates';
+import { BODY_SIZE_LIMIT, git, runGates, sh } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
 const NO_CHECKS: never[] = [];
@@ -88,4 +88,23 @@ test('the first failing check is reported with its output', () => {
   expect(result.ok).toBe(false);
   expect(result.gate).toBe('tests');
   expect(result.output).toContain('boom');
+});
+
+test('sh keeps stdout and stderr apart', () => {
+  const { dir } = makeRepo({ 'body/a.ts': 'a\n' });
+  const r = sh(['bash', '-c', 'echo out; echo err >&2'], dir);
+  expect(r.code).toBe(0);
+  expect(r.stdout).toBe('out\n');
+  expect(r.stderr).toBe('err\n');
+});
+
+test('a warning git prints on stderr is not part of what git returns', () => {
+  const { dir } = makeRepo({ 'body/a.ts': 'a\n' });
+  // An alias that runs a shell command stands in for a git command that succeeds with a warning.
+  expect(git(dir, '-c', 'alias.warns=!echo body/a.ts; echo "warning: something" >&2', 'warns')).toBe('body/a.ts');
+});
+
+test('when git fails, its stderr is in the error', () => {
+  const { dir } = makeRepo({ 'body/a.ts': 'a\n' });
+  expect(() => git(dir, 'rev-parse', '--verify', 'no-such-ref')).toThrow(/git rev-parse --verify no-such-ref failed: fatal:/);
 });
