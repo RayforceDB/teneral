@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { BODY_SIZE_LIMIT, git, runGates, sh } from '../../kernel/gates';
+import { BODY_SIZE_LIMIT, DEFAULT_CHECKS, git, runGates, sh } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
 const NO_CHECKS: never[] = [];
@@ -188,3 +188,101 @@ test('body size is the size of the commit, not of what lies in the worktree', ()
   writeFiles(dir, { 'body/a.ts': 'x'.repeat(BODY_SIZE_LIMIT + 1) });
   expect(runGates(dir, seed, next, NO_CHECKS)).toEqual(OK);
 });
+
+test('a check does not inherit the environment, only what it needs to run', () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  writeFiles(dir, { 'body/a.ts': 'b\n' });
+  const next = commitAll(dir, 'change');
+  // The check fails on purpose so that its output, the environment it saw, comes back.
+  const result = runGates(dir, seed, next, [{ gate: 'env', cmd: ['bash', '-c', 'env; exit 1'] }]);
+  expect(result.gate).toBe('env');
+  const names = result.output.split('\n').filter((line) => line.includes('=')).map((line) => line.slice(0, line.indexOf('=')));
+  expect(names).toContain('PATH');
+  // PWD, OLDPWD, SHLVL and _ are set by bash itself.
+  const allowed = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'BUN_INSTALL', 'PWD', 'OLDPWD', 'SHLVL', '_'];
+  expect(names.filter((name) => !allowed.includes(name))).toEqual([]);
+});
+
+test('a bun test check needs bun\'s own summary, not just exit 0', () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  writeFiles(dir, { 'body/a.ts': 'b\n' });
+  const next = commitAll(dir, 'change');
+  const check = (script: string) => runGates(dir, seed, next, [{ gate: 'tests-x', cmd: ['bash', '-c', script], bunSummary: true }]);
+
+  const silent = check('exit 0');
+  expect(silent.ok).toBe(false);
+  expect(silent.gate).toBe('tests-x');
+  expect(silent.output).toContain('summary');
+
+  expect(check('echo " 3 pass" >&2; echo " 1 fail" >&2; echo "Ran 4 tests across 1 file. [1.00ms]" >&2').ok).toBe(false);
+  expect(check('echo " 0 pass" >&2; echo " 0 fail" >&2; echo "Ran 0 tests across 0 files. [1.00ms]" >&2').ok).toBe(false);
+  expect(check('echo " 3 pass" >&2; echo " 0 fail" >&2; echo "Ran 3 tests across 1 file. [1.00ms]" >&2')).toEqual(OK);
+  expect(check('echo " 1 pass" >&2; echo " 0 fail" >&2; echo "Ran 1 test across 1 file. [1.00ms]" >&2')).toEqual(OK);
+});
+
+// The tests below run the real default checks (tsc and bun test) on a small project of the same shape as this one.
+const PROJECT = join(import.meta.dir, '../..');
+const SLOW = 120_000;
+
+const passing = (name: string, module: string, value: number) => `import { expect, test } from 'bun:test';
+import { ${name} } from '../../${module}';
+test('${name}', () => { expect(${name}).toBe(${value}); });
+`;
+
+function makeProject(): { dir: string; seed: string } {
+  const made = makeRepo({
+    'tsconfig.json': readFileSync(join(PROJECT, 'tsconfig.json'), 'utf8'),
+    'kernel/k.ts': 'export const k: number = 1;\n',
+    'test/kernel/k.test.ts': passing('k', 'kernel/k', 1),
+    'body/a.ts': 'export const a: number = 1;\n',
+    'test/body/a.test.ts': passing('a', 'body/a', 1),
+  });
+  symlinkSync(join(PROJECT, 'node_modules'), join(made.dir, 'node_modules'));
+  return made;
+}
+
+function candidate(files: Record<string, string>) {
+  const { dir, seed } = makeProject();
+  writeFiles(dir, files);
+  return runGates(dir, seed, commitAll(dir, 'candidate'), DEFAULT_CHECKS);
+}
+
+test('default checks: a clean candidate passes', () => {
+  expect(candidate({ 'body/a.ts': 'export const a: number = 2;\n', 'test/body/a.test.ts': passing('a', 'body/a', 2) })).toEqual(OK);
+}, SLOW);
+
+test('default checks: a type error fails at types', () => {
+  const result = candidate({ 'body/a.ts': "export const a: number = 'one';\n" });
+  expect(result.ok).toBe(false);
+  expect(result.gate).toBe('types');
+  expect(result.output).toContain('body/a.ts');
+}, SLOW);
+
+test('default checks: a failing body test fails at tests-body', () => {
+  const result = candidate({ 'test/body/a.test.ts': passing('a', 'body/a', 2) });
+  expect(result.ok).toBe(false);
+  expect(result.gate).toBe('tests-body');
+  expect(result.output).toContain('1 fail');
+}, SLOW);
+
+test('default checks: a test file that exits 0 before its failing test runs does not pass', () => {
+  const result = candidate({
+    'test/body/a.test.ts': `import { expect, test } from 'bun:test';
+import { a } from '../../body/a';
+process.exit(0);
+test('a', () => { expect(a).toBe(2); });
+`,
+  });
+  expect(result.ok).toBe(false);
+  expect(result.gate).toBe('tests-body');
+  expect(result.output).toContain('summary');
+}, SLOW);
+
+test('default checks: a candidate with no body tests at all does not pass', () => {
+  const { dir, seed } = makeProject();
+  rmSync(join(dir, 'test/body/a.test.ts'));
+  const result = runGates(dir, seed, commitAll(dir, 'no tests'), DEFAULT_CHECKS);
+  expect(result.ok).toBe(false);
+  expect(result.gate).toBe('tests-body');
+  expect(result.output).toContain('did not match any test files');
+}, SLOW);

@@ -14,12 +14,42 @@ export interface GateResult {
 export interface Check {
   gate: string;
   cmd: string[];
+  /** The command is `bun test`: besides exit 0, its summary must show tests ran and none failed. */
+  bunSummary?: boolean;
 }
 
 export const DEFAULT_CHECKS: readonly Check[] = [
   { gate: 'types', cmd: ['bun', 'x', 'tsc', '--noEmit'] },
-  { gate: 'tests', cmd: ['bun', 'test'] },
+  // Two runs, so the kernel's tests and the body's each have to show up and pass on their own.
+  { gate: 'tests-kernel', cmd: ['bun', 'test', 'test/kernel'], bunSummary: true },
+  { gate: 'tests-body', cmd: ['bun', 'test', 'test/body'], bunSummary: true },
 ];
+
+/** The only variables a check sees. The supervisor's own environment holds API keys; candidate code under test must not. */
+const CHECK_ENV = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'BUN_INSTALL'];
+
+function checkEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of CHECK_ENV) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
+/**
+ * Why a `bun test` run that exited 0 still does not count, or null when it does.
+ * A test file can end the process with exit 0 before anything ran; only the summary
+ * bun prints at the end (` 0 fail` and `Ran N tests across M files.`) shows it got there.
+ */
+export function bunSummaryProblem(output: string): string | null {
+  const failed = [...output.matchAll(/^\s*(\d+) fail$/gm)].at(-1);
+  const ran = [...output.matchAll(/^Ran (\d+) tests? across \d+ files?\./gm)].at(-1);
+  if (!failed || !ran) return 'bun test exited 0 without printing its summary, so nothing shows the tests ran to the end';
+  if (Number(failed[1]) !== 0) return `bun test exited 0 but its summary reports ${failed[1]} failing`;
+  if (Number(ran[1]) < 1) return 'bun test ran no tests';
+  return null;
+}
 
 export interface ShResult {
   code: number;
@@ -29,8 +59,9 @@ export interface ShResult {
   output: string;
 }
 
-export function sh(cmd: string[], cwd: string, timeoutMs = 600_000): ShResult {
-  const p = Bun.spawnSync(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs });
+/** `env`, when given, is the whole environment of the command; otherwise it inherits this process's. */
+export function sh(cmd: string[], cwd: string, timeoutMs = 600_000, env?: Record<string, string>): ShResult {
+  const p = Bun.spawnSync(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, ...(env ? { env } : {}) });
   const stdout = p.stdout.toString();
   const stderr = p.stderr.toString();
   return { code: p.exitCode ?? 1, stdout, stderr, output: stdout + stderr };
@@ -152,9 +183,13 @@ export function runGates(dir: string, from: string, to: string, checks: readonly
     return fail('git', err instanceof Error ? err.message : String(err));
   }
   try {
+    const env = checkEnv();
     for (const check of checks) {
-      const r = sh(check.cmd, tree);
+      const r = sh(check.cmd, tree, undefined, env);
       if (r.code !== 0) return fail(check.gate, r.output);
+      const problem = check.bunSummary ? bunSummaryProblem(r.output) : null;
+      // The reason goes last: fail() keeps the end of the output.
+      if (problem) return fail(check.gate, `${r.output}\n${problem}`);
     }
     return { ok: true, gate: 'all', output: '' };
   } finally {
