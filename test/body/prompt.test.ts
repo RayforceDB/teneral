@@ -81,7 +81,7 @@ test('it describes the smoke gate and the bare environment the checks run in', (
   expect(flat).toMatch(/`generation\.ready` and then a reply within 30 seconds/);
   expect(flat).toMatch(/OpenAI-compatible endpoint at `TENERAL_BASE_URL`/);
   expect(flat).toMatch(/fresh checkout of the commit/);
-  for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'BUN_INSTALL']) expect(flat).toContain(`\`${name}\``);
+  expect(flat).toMatch(/only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on, and `TMPDIR` points at a temporary directory made for that run/);
   expect(flat).toMatch(/a file that is not committed fails there/);
 });
 

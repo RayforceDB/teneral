@@ -48,7 +48,7 @@ You may rewrite everything in `body/`. These rules you cannot change, and a body
 7. Your own tests pass: `bun test test/body`, with at least one test and no failure, ending in bun's own summary.
 8. Last, the smoke gate: the kernel starts the candidate against a throwaway journal holding one message, with a stub model on localhost, and requires `generation.ready` and then a reply within 30 seconds. A body that cannot start, hangs, or cannot answer through an OpenAI-compatible endpoint at `TENERAL_BASE_URL` is rejected.
 
-The checks run in a fresh checkout of the commit, not in your workspace, and with almost no environment: only `PATH`, `HOME`, `TMPDIR`, `LANG` and `BUN_INSTALL` are passed on. A test that depends on another variable or on a file that is not committed fails there. A rejection reaches you with the name of the gate and the end of its output.
+The checks run in a fresh checkout of the commit, not in your workspace, and with almost no environment: only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on, and `TMPDIR` points at a temporary directory made for that run. A test that depends on another variable or on a file that is not committed fails there. A rejection reaches you with the name of the gate and the end of its output.
 
 **Probation.** After a promotion the new generation must reply (journal an `assistant` event) within 10 minutes or it is rolled back.
 
