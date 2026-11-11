@@ -35,10 +35,17 @@ export type FailureKind = 'own' | 'refused' | 'long' | 'passing';
 /** 4xx statuses that are not about what was sent: the key (401, 403), time (408), the rate (429). */
 const NOT_THE_REQUEST = new Set([401, 403, 408, 429]);
 
+/**
+ * A 403 that waiting will not mend: the account may not use its ChatGPT plan here, or this route is not open to
+ * it. The provider asks that such a request not be repeated. A usage limit (429) is not one of these: it passes.
+ */
+const NEVER = /subscription_sharing_(user_not_eligible|route_not_supported)|chatpass_v2_/;
+
 export function failureKind(err: unknown): FailureKind {
   if (!(err instanceof ProviderError)) return 'own';
   if (saysTooLong(err)) return 'long';
   const { status } = err;
+  if (status === 403 && NEVER.test(err.body)) return 'refused';
   const refused = status !== null && status >= 400 && status < 500 && !NOT_THE_REQUEST.has(status);
   return refused ? 'refused' : 'passing';
 }

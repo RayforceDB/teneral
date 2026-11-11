@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { appendEvent, readEvents } from '../kernel/journal';
 import { needsTurn } from './context';
 import { runTurn } from './loop';
-import { ProviderError, openAiProvider } from './provider';
+import { ProviderError, connect, type Provider } from './provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
@@ -21,7 +21,14 @@ function env(name: string): string {
 const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 const workspace = env('TENERAL_WORKSPACE');
-const provider = openAiProvider({ baseUrl: env('TENERAL_BASE_URL'), apiKey: env('TENERAL_API_KEY'), model: env('TENERAL_MODEL') });
+// Which provider, over which protocol, with which credentials: body/provider.ts reads that from the environment.
+let provider: Provider;
+try {
+  provider = connect(process.env);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 // Characters per request. Not a positive number, or not set: the default in body/context.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMessages, needsTurn } from '../../body/context';
+import { toResponsesInput } from '../../body/provider';
 import type { JournalEvent } from '../../kernel/journal';
 
 /** mulberry32: small, seeded, the same on every run. */
@@ -133,6 +134,44 @@ function checkNotWasteful(trimmed: ReturnType<typeof buildMessages>, whole: Retu
   if (sizeOf(whole) <= budget && trimmed.length !== whole.length) throw new Error('a request that fitted whole was trimmed');
 }
 
+/**
+ * The same request on the Responses wire: throws with the reason when it is not input the Responses API takes.
+ * Every call has exactly one result, after it; no result is without its call; nothing has an `id` or the system role.
+ */
+function checkResponses(messages: ReturnType<typeof buildMessages>): void {
+  const fail = (why: string) => { throw new Error(`as Responses input: ${why}`); };
+  for (const namespace of [undefined, 'teneral']) {
+    const { instructions, input } = toResponsesInput(messages, namespace);
+    if (instructions !== SYSTEM) fail('the instructions are not the system prompt');
+    const calls = new Map<unknown, number>();
+    for (const [i, item] of input.entries()) {
+      if ('id' in item) fail(`item ${i} has an id`);
+      if (item.type === 'function_call') {
+        if (calls.has(item.call_id)) fail(`call id ${String(item.call_id)} is used twice`);
+        if (typeof item.call_id !== 'string' || item.call_id === '') fail(`item ${i} has no call_id`);
+        if (typeof item.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.name)) fail(`item ${i} has a bad name`);
+        if (typeof item.arguments !== 'string') fail(`item ${i} has no arguments`);
+        if (item.namespace !== namespace) fail(`item ${i} is in the wrong namespace`);
+        calls.set(item.call_id, 0);
+      } else if (item.type === 'function_call_output') {
+        if (!calls.has(item.call_id)) fail(`item ${i} answers a call that was not made before it`);
+        calls.set(item.call_id, calls.get(item.call_id)! + 1);
+        if (typeof item.output !== 'string') fail(`item ${i} has no output`);
+      } else {
+        if (item.type !== undefined) fail(`item ${i} is of an unexpected type`);
+        if (item.role !== 'user' && item.role !== 'assistant') fail(`item ${i} has role ${String(item.role)}`);
+        if (typeof item.content !== 'string' || item.content === '') fail(`item ${i} is a message without text`);
+      }
+    }
+    for (const [id, results] of calls) if (results !== 1) fail(`call ${String(id)} has ${results} results`);
+    if (input.length === 0) fail('there is no input');
+    const sentCalls = messages.reduce((sum, m) => sum + (m.tool_calls?.length ?? 0), 0);
+    if (calls.size !== sentCalls) fail('a call was lost or made up');
+    const text = JSON.stringify(input);
+    if (!text.isWellFormed() || /\\u[dD][89a-fA-F]/.test(text)) fail('a lone surrogate is left in the input');
+  }
+}
+
 test('any journal at any budget gives a request a provider accepts', () => {
   const runs = 4000;
   for (let seed = 1; seed <= runs; seed++) {
@@ -141,6 +180,7 @@ test('any journal at any budget gives a request a provider accepts', () => {
       try {
         const trimmed = buildMessages(events, SYSTEM, budget);
         check(trimmed, budget);
+        checkResponses(trimmed);
         const whole = buildMessages(events, SYSTEM, Infinity);
         checkIsTail(trimmed, whole);
         if (budget !== undefined) checkNotWasteful(trimmed, whole, budget);
