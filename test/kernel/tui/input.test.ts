@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { EMPTY, edit, insert, layout, sent, type Edit } from '../../../kernel/tui/editor';
+import { EMPTY, attach, edit, insert, layout, sent, type Edit } from '../../../kernel/tui/editor';
+import type { Attachment } from '../../../kernel/tui/images';
 import { KeyParser, type Key } from '../../../kernel/tui/keys';
 
 // --- what the terminal sends, read back as keys ---
@@ -48,7 +49,7 @@ test('what was held with a key is told: Shift, Alt and Ctrl with arrows, Alt wit
 });
 
 test('an escape sequence split across two reads is one key, wherever it is split', () => {
-  for (const sequence of ['\x1b[A', '\x1b[1;5C', '\x1b[5~', '\x1bOH', '\x1b\r', '\x1b[<64;10;5M']) {
+  for (const sequence of ['\x1b[A', '\x1b[1;5C', '\x1b[5~', '\x1bOH', '\x1b\r']) {
     const whole = keys(sequence);
     expect(whole).toHaveLength(1);
     for (let at = 1; at < sequence.length; at++) {
@@ -87,11 +88,16 @@ test('a bracketed paste comes whole, line breaks and all, even when it arrives i
   expect(keys('\x1b[200~\r\x03\x1b[A\x1b[201~')).toEqual([{ kind: 'paste', text: '\n\x03\x1b[A' }]);
 });
 
-test('the mouse wheel is read in both report formats, and clicks are let go', () => {
-  expect(keys('\x1b[<64;10;5M\x1b[<65;10;5M')).toEqual([{ kind: 'wheel', up: true }, { kind: 'wheel', up: false }]);
+test('the mouse is the terminal\'s own: a report from a terminal left in a mouse mode is swallowed whole, in both formats, and nothing is made of it', () => {
+  expect(keys('\x1b[<64;10;5M\x1b[<65;10;5M')).toEqual([]);
   expect(keys('\x1b[<0;10;5M\x1b[<0;10;5m')).toEqual([]);
-  expect(keys('\x1b[M`!!\x1b[Ma!!')).toEqual([{ kind: 'wheel', up: true }, { kind: 'wheel', up: false }]);
+  expect(keys('\x1b[M`!!\x1b[Ma!!')).toEqual([]);
   expect(keys('\x1b[M !!x')).toEqual([{ kind: 'text', text: 'x' }]);
+});
+
+test('Ctrl+V arrives as the byte it is, a key of its own and no text', () => {
+  expect(keys('a\x16b')).toEqual([{ kind: 'text', text: 'a' }, { kind: 'key', name: 'v', ctrl: true }, { kind: 'text', text: 'b' }]);
+  expect(edit(at('a'), key('v', { ctrl: true }))).toBeNull();
 });
 
 test('sequences that mean nothing here are swallowed whole, not typed', () => {
@@ -168,7 +174,6 @@ test('Alt+Enter, Shift+Enter and Ctrl-J start a new line; a paste keeps its line
   expect(edit(at('a'), key('c', { ctrl: true }))).toBeNull();
   expect(edit(at('a'), key('up', { shift: true }))).toBeNull();
   expect(edit(at('a'), key('pageup'))).toBeNull();
-  expect(edit(at('a'), { kind: 'wheel', up: true })).toBeNull();
 });
 
 test('Up and Down move between the lines of a text, keeping the column', () => {
@@ -216,4 +221,39 @@ test('more rows than there is room for: the ones around the cursor are shown', (
   expect(layout(text, 0, 10, 3)).toEqual({ rows: ['l1', 'l2', 'l3'], row: 0, col: 0, above: 0 });
   expect(layout(text, 7, 10, 3)).toMatchObject({ rows: ['l3', 'l4', 'l5'], row: 0, above: 2 });
   expect(insert(at('ab', 1), 'X')).toMatchObject({ text: 'aXb', cursor: 2 });
+});
+
+// --- images attached to the line ---
+
+const image = (n: number): Attachment => ({ path: `memory/images/${String(n).repeat(64)}.png`, ext: 'png', width: 10 * n, height: 10, bytes: 1000 * n });
+
+test('an image is attached as a chip beside the text; Backspace at the very start takes the last chip, and anywhere else a character', () => {
+  let e = attach(attach(type(EMPTY, 'look'), image(1)), image(2));
+  expect(e.chips.map((chip) => chip.width)).toEqual([10, 20]);
+  expect(e.text).toBe('look');
+  // In the text, Backspace is Backspace.
+  e = type(e, key('backspace'));
+  expect([e.text, e.chips.length]).toEqual(['loo', 2]);
+  // At the start of the text the last chip goes, one press each, and then nothing.
+  e = type(e, key('home'), key('backspace'));
+  expect([e.text, e.cursor, e.chips.map((chip) => chip.width)]).toEqual(['loo', 0, [10]]);
+  e = type(e, key('backspace'), key('backspace'));
+  expect([e.text, e.chips.length]).toEqual(['loo', 0]);
+  // Other ways of deleting leave chips alone.
+  e = attach(type(EMPTY, key('u', { ctrl: true }), key('w', { ctrl: true }), key('delete')), image(3));
+  expect(type(e, key('u', { ctrl: true }), key('w', { ctrl: true }), key('delete'), key('backspace', { alt: true })).chips).toHaveLength(1);
+});
+
+test('a line carries at most four images, the same one only once, and sending it leaves no chip behind', () => {
+  let e = EMPTY;
+  for (let n = 1; n <= 6; n++) e = attach(e, image(n));
+  expect(e.chips).toHaveLength(4);
+  expect(attach(attach(EMPTY, image(1)), image(1)).chips).toHaveLength(1);
+  // Walking the history keeps what is attached; what is remembered is the words.
+  e = type({ ...attach(EMPTY, image(1)), history: ['earlier'] }, key('up'));
+  expect([e.text, e.chips.length]).toEqual(['earlier', 1]);
+  const after = sent(type(e, ' words'), 'earlier words');
+  expect([after.text, after.chips.length, after.history]).toEqual(['', 0, ['earlier', 'earlier words']]);
+  // A message of images only adds nothing to the history.
+  expect(sent(attach({ ...EMPTY, history: ['x'] }, image(2)), '').history).toEqual(['x']);
 });

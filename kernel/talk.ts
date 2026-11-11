@@ -386,13 +386,13 @@ if (import.meta.main) {
       i += 1;
     } else {
       console.error('usage: bun kernel/talk.ts [--plain] [--wait <seconds>]');
-      console.error('  --plain  at a terminal: plain text instead of the full screen. Piped input is always plain');
+      console.error('  --plain  at a terminal: plain text, without the panel and the input box. Piped input is always plain');
       console.error('  --wait   with piped input: how long the journal may stay silent before giving up (default 300)');
       process.exit(2);
     }
   }
   const p = paths(join(import.meta.dir, '..'));
-  // A person at a terminal gets the screen (kernel/tui/). Everything else is as it always was.
+  // A person at a terminal gets the client with its panel and input box (kernel/tui/). Everything else is as it always was.
   if (!plainText && process.stdin.isTTY === true && process.stdout.isTTY === true && process.env.TERM !== 'dumb') {
     const { runTalkScreen } = await import('./tui/talk');
     process.exit(await runTalkScreen(p, process.env, planNotice(process.env)));

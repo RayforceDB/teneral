@@ -1,4 +1,4 @@
-// What the terminal sends when the owner presses, pastes or scrolls, read from the bytes as they
+// What the terminal sends when the owner presses or pastes, read from the bytes as they
 // arrive. An escape sequence may come in two reads; a lone ESC may be the Escape key or the start
 // of a sequence, and only time tells: the caller calls `flush` when nothing followed.
 
@@ -13,7 +13,6 @@ export type Key =
   | { kind: 'paste'; text: string }
   /** A named key, or a letter held with Ctrl or Alt (`name` is then that letter). */
   | { kind: 'key'; name: KeyName | string; ctrl?: boolean; alt?: boolean; shift?: boolean }
-  | { kind: 'wheel'; up: boolean }
   /** No key: the terminal's answer to a status request. It is still there. */
   | { kind: 'alive' };
 
@@ -108,11 +107,9 @@ export class KeyParser {
     if (b.length === 1) return false;
     const next = b[1]!;
     if (next === '[') {
-      // The old mouse report: three bytes follow the M.
+      // An old-style mouse report, from a terminal left in that mode by something else: three bytes follow the M. Nothing here asks for the mouse.
       if (b[2] === 'M') {
         if (b.length < 6) return false;
-        const button = b.charCodeAt(3) - 32;
-        if (button & 64) keys.push({ kind: 'wheel', up: (button & 1) === 0 });
         this.buf = b.slice(6);
         return true;
       }
@@ -149,12 +146,8 @@ export class KeyParser {
   }
 
   private csi(params: string, final: string, keys: Key[]): void {
-    if (params.startsWith('<')) {
-      // A mouse report. Only the wheel is of use; presses and releases are let go.
-      const button = Number(params.slice(1).split(';')[0]);
-      if (final === 'M' && (button & 64)) keys.push({ kind: 'wheel', up: (button & 1) === 0 });
-      return;
-    }
+    // A mouse report: the mouse is the terminal's own, and nothing is made of it.
+    if (params.startsWith('<')) return;
     const p = params.split(';');
     if (final === '~') {
       if (p[0] === '200') this.paste = '';

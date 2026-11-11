@@ -1,16 +1,17 @@
 import { layout, type Edit } from './editor';
+import { describe, type Attachment } from './images';
 import { markdown } from './markdown';
 import type { Entry } from './model';
-import type { Frame } from './screen';
 import { clip, detab, fit, lineWidth, width, wrap, type Line, type Span } from './text';
 import type { Glyphs, Style } from './theme';
 
-// The talk screen as rows: what each transcript entry looks like at a given width, which rows of
-// the transcript are in view, and the header, the input and the hint around them. Pure: the same
-// state gives the same rows.
+// What the talk client shows, as rows: each transcript entry at a given width, the welcome panel
+// and the status lines under it, and the live region (what is still under way, the input box and
+// the footer). Pure: the same state gives the same rows. Nothing here writes to a terminal.
 
 const DIM: Style = { fg: 'dim' };
 const FAINT: Style = { fg: 'faint' };
+const BRAND: Style = { fg: 'brand' };
 /** Tool lines are not stretched over a very wide screen: the outcome stays near its call. */
 const TOOL_WIDTH = 100;
 /** Rows of a tool's output shown under it, and of a kernel notice's output. */
@@ -21,6 +22,8 @@ export interface Look {
   g: Glyphs;
   /** Whether tool output is shown under each call. */
   tools: boolean;
+  /** What a kept image is, by the path a line names it with; null when it is not there. */
+  image: (path: string) => Attachment | null;
 }
 
 /** How long something took, to the precision that matters at its size: 40ms, 2.5s, 48s, 3m07s. */
@@ -38,22 +41,94 @@ export function elapsed(ms: number): string {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}` : `${Math.floor(s / 60)}:${two(s % 60)}`;
 }
 
+/** A count of tokens in a few characters: 840, 71.9k, 500k, 1.05M. */
+export function tokens(n: number): string {
+  if (n < 1000) return String(Math.round(n));
+  if (n < 100_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+}
+
+/** How much of the model's context the last request used: `context 8% (71.9k/1.05M)`, or the count alone when the window is not known. */
+export function contextUse(used: number, window: number | null): string {
+  if (window === null || window <= 0) return `context ${tokens(used)}`;
+  return `context ${Math.min(100, Math.round((used / window) * 100))}% (${tokens(used)}/${tokens(window)})`;
+}
+
+/** A directory in little room: its last two parts, with a mark for what was left out. */
+export function shortDir(path: string, g: Glyphs): string {
+  const parts = path.split('/').filter((part) => part !== '');
+  return parts.length <= 2 ? path : `${g.ellipsis}/${parts.slice(-2).join('/')}`;
+}
+
 /** Text of several lines, wrapped, every row behind the same indent. */
 export function block(text: string, max: number, style: Style | undefined, indent: number): Line[] {
   const lead: Line = [{ text: ' '.repeat(indent) }];
   return text.split('\n').flatMap((line) => wrap([{ text: detab(line), style }], max, lead));
 }
 
+/** An image as the owner sees it in a line: `[image 1 · png · 1280×720 · 240 KB]`. */
+export function chip(n: number, image: Attachment | null, path: string, g: Glyphs): string {
+  const what = image !== null ? describe(image, g.sep, g.times) : `${/\.([a-z]+)$/.exec(path)?.[1] ?? 'image'} ${g.sep} not in memory/images`;
+  return `[image ${n} ${g.sep} ${what}]`;
+}
+
+/** Chips one after the other, on as many rows as they need, behind `indent` columns. */
+function chipRows(chips: string[], max: number, indent: number): Line[] {
+  const rows: Line[] = [];
+  let row = '';
+  for (const text of chips) {
+    if (row !== '' && indent + width(row) + 2 + width(text) > max) {
+      rows.push([{ text: ' '.repeat(indent) }, { text: row, style: BRAND }]);
+      row = '';
+    }
+    row += row === '' ? text : `  ${text}`;
+  }
+  if (row !== '') rows.push(clip([{ text: ' '.repeat(indent) }, { text: row, style: BRAND }], max));
+  return rows;
+}
+
+/** One tool call: what was called, and how it ended. With `output`, a few rows of what it returned. */
+function toolRows(e: Extract<Entry, { kind: 'tool' }>, max: number, g: Glyphs, output: boolean): Line[] {
+  const w = Math.min(max, TOOL_WIDTH);
+  const took = e.ms === null ? '' : ` ${duration(e.ms)}`;
+  const said = e.status === 'running' ? 'running' : e.status === 'ok' ? `${g.ok}${took}` : e.status === 'failed' ? `${g.failed} failed${took}` : e.status;
+  const right: Span = { text: said, style: e.status === 'failed' ? { fg: 'warn' } : e.status === 'ok' ? { fg: 'good' } : DIM };
+  const left = clip([{ text: `  ${g.call} `, style: FAINT }, { text: e.name, style: DIM }, { text: e.args === '' ? '' : `  ${e.args}`, style: FAINT }], Math.max(4, w - width(said) - 2), { text: g.ellipsis, style: DIM });
+  const rows: Line[] = [[...fit(left, Math.max(lineWidth(left), w - width(said))), right]];
+  if (output && e.output !== '') {
+    const lines = e.output.split('\n');
+    const few = e.status === 'failed' ? lines.slice(-OUTPUT_ROWS) : lines.slice(0, OUTPUT_ROWS);
+    const more = lines.length - few.length;
+    const cut = (line: string): Line => [{ text: '      ' }, ...clip([{ text: detab(line), style: FAINT }], Math.max(1, max - 6), { text: g.ellipsis, style: DIM })];
+    const note: Line = [{ text: `      ${g.ellipsis} ${more} more ${more === 1 ? 'line' : 'lines'}`, style: FAINT }];
+    // Of a failure the end is shown, which is where it says what went wrong.
+    rows.push(...(more > 0 && e.status === 'failed' ? [note] : []), ...few.map(cut), ...(more > 0 && e.status !== 'failed' ? [note] : []));
+  }
+  return rows;
+}
+
+/** A rule with a title in it: `── title ─────`. */
+function titled(title: string, max: number, g: Glyphs, style: Style, indent = 0): Line {
+  const head = clip([{ text: `${' '.repeat(indent)}${g.rule.repeat(2)} `, style }, { text: title, style: { ...style, bold: true } }], Math.max(1, max - 1), { text: g.ellipsis, style });
+  return [...head, { text: ` ${g.rule.repeat(Math.max(0, Math.min(max, 72) - lineWidth(head) - 1))}`, style }];
+}
+
 /**
  * The rows of one entry, `max` columns wide. Everything someone else wrote starts in the third
- * column or further in; the first two belong to this screen's own marks, which no reply can forge.
+ * column or further in; the first two belong to this client's own marks, which no reply can forge.
  */
 export function entryRows(e: Entry, max: number, look: Look): Line[] {
   const { g } = look;
   switch (e.kind) {
     case 'owner': {
       const mark: Line = [{ text: `${g.prompt} `, style: { fg: 'accent', bold: true } }];
-      const rows = e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: { fg: 'owner' } }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+      const rows = e.text === '' ? [] : e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: { bold: true } }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+      const chips = chipRows(e.images.map((path, i) => chip(i + 1, look.image(path), path, g)), max, 2);
+      // A message of images only: the mark stands before the first of them.
+      if (rows.length === 0 && chips.length > 0) chips[0] = [...mark, ...chips[0]!.slice(1)];
+      rows.push(...chips);
+      if (rows.length === 0) rows.push(mark);
       const tag = e.pending ? 'on its way' : e.elsewhere ? 'from another terminal' : '';
       if (tag !== '') {
         const last = rows.at(-1)!;
@@ -62,40 +137,33 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
       }
       return rows;
     }
+    case 'reasoning': {
+      const style: Style = { fg: 'dim', italic: true };
+      const mark: Line = [{ text: `${g.reasoning} `, style: FAINT }];
+      return e.text.split('\n').filter((line) => line.trim() !== '').flatMap((line, i) => wrap([{ text: detab(line.trim()), style }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+    }
     case 'reply': {
       const rows = markdown(e.text, Math.max(1, max - 2), g).map((line): Line => (line.length === 0 ? [] : [{ text: '  ' }, ...line]));
+      // The client's own mark stands before the first row of what was said.
+      if (rows.length > 0 && rows[0]!.length > 0) rows[0] = [{ text: `${g.reply} `, style: { bold: true } }, ...rows[0]!.slice(1)];
       // The first words this individual ever said get a line of their own before them. Once.
-      if (e.first) rows.unshift([{ text: '  ' }, { text: g.rule.repeat(Math.max(1, Math.min(24, max - 2))), style: { fg: 'accent' } }], []);
+      if (e.first) rows.unshift([{ text: '  ' }, { text: g.rule.repeat(Math.max(1, Math.min(24, max - 2))), style: BRAND }], []);
       if (e.early) rows.push(...block('(written before the line above had arrived)', max, DIM, 2));
       return rows;
     }
-    case 'tool': {
-      const w = Math.min(max, TOOL_WIDTH);
-      const said = e.status === 'running' ? 'running' : e.ms === null ? e.status : `${e.status} ${duration(e.ms)}`;
-      const right: Span = { text: said, style: e.status === 'failed' ? { fg: 'warn' } : DIM };
-      const left = clip([{ text: `  ${g.tool} `, style: FAINT }, { text: e.name, style: DIM }, { text: e.args === '' ? '' : `  ${e.args}`, style: DIM }], Math.max(4, w - said.length - 2), { text: g.ellipsis, style: DIM });
-      const rows: Line[] = [[...fit(left, Math.max(lineWidth(left), w - said.length)), right]];
-      if (look.tools && e.output !== '') {
-        const lines = e.output.split('\n');
-        const few = e.status === 'failed' ? lines.slice(-OUTPUT_ROWS) : lines.slice(0, OUTPUT_ROWS);
-        const more = lines.length - few.length;
-        const cut = (line: string): Line => [{ text: '      ' }, ...clip([{ text: detab(line), style: FAINT }], Math.max(1, max - 6), { text: g.ellipsis, style: DIM })];
-        const note: Line = [{ text: `      ${g.ellipsis} ${more} more ${more === 1 ? 'line' : 'lines'}`, style: FAINT }];
-        // Of a failure the end is shown, which is where it says what went wrong.
-        rows.push(...(more > 0 && e.status === 'failed' ? [note] : []), ...few.map(cut), ...(more > 0 && e.status !== 'failed' ? [note] : []));
-      }
-      return rows;
-    }
+    case 'tool':
+      return toolRows(e, max, g, look.tools);
     case 'notice': {
       const tone: Style = { fg: e.tone };
-      const title = `${e.title}${e.move ? `  ${e.move[0]} ${g.arrow} ${e.move[1]}` : ''}`;
-      const head = clip([{ text: `${g.rule.repeat(2)} `, style: tone }, { text: title, style: { ...tone, bold: true } }], Math.max(1, max - 1), { text: g.ellipsis, style: tone });
-      const rows: Line[] = [[...head, { text: ` ${g.rule.repeat(Math.max(0, max - lineWidth(head) - 1))}`, style: tone }]];
-      if (e.lead !== '') rows.push(...block(e.lead, max, undefined, 3));
+      const edge: Line = [{ text: `${g.edge} `, style: tone }];
+      const title: Span[] = [{ text: e.title, style: { ...tone, bold: true } }, ...(e.move ? [{ text: `  ${e.move[0]} ${g.arrow} ${e.move[1]}`, style: tone }] : [])];
+      const rows: Line[] = wrap(title, max, edge);
+      const under = (text: string, style: Style | undefined): Line[] => text.split('\n').flatMap((line) => wrap([{ text: detab(line), style }], max, [...edge, { text: '  ' }]));
+      if (e.lead !== '') rows.push(...under(e.lead, undefined));
       if (e.body !== '') {
-        const body = block(e.body, max, DIM, 3);
+        const body = under(e.body, DIM);
         const hidden = body.length - NOTICE_ROWS;
-        if (hidden > 0) rows.push([{ text: `   ${g.ellipsis} ${hidden} earlier ${hidden === 1 ? 'row' : 'rows'}; the journal has all of it`, style: FAINT }]);
+        if (hidden > 0) rows.push([...edge, { text: `  ${g.ellipsis} ${hidden} earlier ${hidden === 1 ? 'row' : 'rows'}; the journal has all of it`, style: FAINT }]);
         rows.push(...body.slice(-NOTICE_ROWS));
       }
       return rows;
@@ -104,254 +172,177 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
       return [clip([{ text: `  ${g.quiet} `, style: FAINT }, { text: e.label, style: DIM }, { text: e.text === '' ? '' : `  ${e.text}`, style: FAINT }], max, { text: g.ellipsis, style: FAINT })];
     case 'warning':
       return [
-        [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: 'not from the model', style: { fg: 'warn' } }],
-        ...block(e.text, max, undefined, 2),
+        [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: 'not from the model', style: { fg: 'warn', bold: true } }],
+        ...block(e.text, max, { fg: 'warn' }, 2),
       ];
     case 'note':
       return block(e.text, max, DIM, 2);
+    case 'page':
+      return [
+        titled(e.title, max, g, BRAND, 2),
+        ...e.text.flatMap((text) => block(text, max, undefined, 2)),
+        ...(e.tools ?? []).flatMap((tool) => toolRows(tool, max, g, true)),
+      ];
     default:
       return [];
   }
 }
 
 /** Blank rows between two entries: none inside a run of tool calls or of quiet lines, one otherwise. */
-function gap(before: Entry | undefined, e: Entry): number {
+export function gap(before: Entry | undefined, e: Entry): number {
   if (before === undefined) return 0;
   return (before.kind === 'tool' && e.kind === 'tool') || (before.kind === 'quiet' && e.kind === 'quiet') ? 0 : 1;
 }
 
-/** A place in the transcript: a row of an entry's block, the blank rows before the entry included. */
-interface Place {
-  index: number;
-  row: number;
+/** Rows in a thin frame with round corners, `max` columns wide over all. */
+export function panel(rows: Line[], max: number, g: Glyphs, style: Style): Line[] {
+  const inner = Math.max(1, max - 4);
+  const [tl, tr, bl, br] = g.corners;
+  const edge: Span = { text: g.bar, style };
+  return [
+    [{ text: `${tl}${g.rule.repeat(inner + 2)}${tr}`, style }],
+    ...rows.map((row): Line => [edge, { text: ' ' }, ...fit(row, inner), { text: ' ' }, edge]),
+    [{ text: `${bl}${g.rule.repeat(inner + 2)}${br}`, style }],
+  ];
 }
 
-/**
- * Which rows of the transcript are in view. Only the entries in view, and those scrolled past, are
- * ever laid out; what was laid out is kept while it stays near the window.
- */
-export class Scroller {
-  /** The row at the bottom of the window, by the entry it belongs to; null while following the newest. */
-  private anchor: { id: number; row: number } | null = null;
-  private cache = new Map<number, { key: string; rows: Line[]; frame: number }>();
-  private frame = 0;
-  private entries: readonly Entry[] = [];
-  private tail: Line[] = [];
-  private max = 0;
-  private look!: Look;
-
-  get following(): boolean {
-    return this.anchor === null;
-  }
-
-  follow(): void {
-    this.anchor = null;
-  }
-
-  /** Before anything else each frame: what there is to show. `tail` is rows after the last entry, such as the activity line. */
-  set(entries: readonly Entry[], tail: Line[], max: number, look: Look): void {
-    this.entries = entries;
-    this.tail = tail;
-    this.max = max;
-    this.look = look;
-    this.frame += 1;
-    if (this.cache.size > 300) {
-      for (const [id, laid] of this.cache) if (laid.frame < this.frame - 1) this.cache.delete(id);
-    }
-  }
-
-  private block(index: number): Line[] {
-    if (index >= this.entries.length) return this.tail;
-    const e = this.entries[index]!;
-    const blank = gap(this.entries[index - 1], e);
-    const key = `${this.max}|${e.rev}|${this.look.tools}|${blank}|${this.look.g.rule}`;
-    let laid = this.cache.get(e.id);
-    if (laid === undefined || laid.key !== key) {
-      laid = { key, rows: [...Array.from({ length: blank }, (): Line => []), ...entryRows(e, this.max, this.look)], frame: this.frame };
-      this.cache.set(e.id, laid);
-    }
-    laid.frame = this.frame;
-    return laid.rows;
-  }
-
-  private last(): number {
-    return this.tail.length > 0 ? this.entries.length : this.entries.length - 1;
-  }
-
-  private above(p: Place): Place | null {
-    if (p.row > 0) return { index: p.index, row: p.row - 1 };
-    for (let i = p.index - 1; i >= 0; i--) {
-      const n = this.block(i).length;
-      if (n > 0) return { index: i, row: n - 1 };
-    }
-    return null;
-  }
-
-  private below(p: Place): Place | null {
-    if (p.row + 1 < this.block(p.index).length) return { index: p.index, row: p.row + 1 };
-    for (let i = p.index + 1; i <= this.last(); i++) {
-      if (this.block(i).length > 0) return { index: i, row: 0 };
-    }
-    return null;
-  }
-
-  private end(): Place | null {
-    for (let i = this.last(); i >= 0; i--) {
-      const n = this.block(i).length;
-      if (n > 0) return { index: i, row: n - 1 };
-    }
-    return null;
-  }
-
-  /** Where the bottom of the window is now. */
-  private bottom(): Place | null {
-    if (this.anchor === null) return this.end();
-    const { id, row } = this.anchor;
-    // Entries are in the order of their ids, so the anchor's is found by halving.
-    let lo = 0;
-    let hi = this.entries.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (this.entries[mid]!.id < id) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo >= this.entries.length) return this.end();
-    // The entry itself, or, when it is gone, the one that came after it.
-    const n = this.block(lo).length;
-    return this.entries[lo]!.id === id ? { index: lo, row: Math.max(0, Math.min(row, n - 1)) } : { index: lo, row: 0 };
-  }
-
-  private hold(p: Place | null): void {
-    const e = p === null ? undefined : this.entries[p.index];
-    this.anchor = p === null || e === undefined || this.below(p) === null ? null : { id: e.id, row: p.row };
-  }
-
-  /** Move the window by `delta` rows, up when negative. A window of `height` rows never leaves the first row behind. */
-  scroll(delta: number, height: number): void {
-    let p = this.bottom();
-    if (p === null) return;
-    for (let n = delta; n < 0; n++) {
-      const up = this.above(p);
-      if (up === null) break;
-      p = up;
-    }
-    for (let n = delta; n > 0; n--) {
-      const down = this.below(p);
-      if (down === null) break;
-      p = down;
-    }
-    // Not further up than a full window: count the rows above, and come back down by what is missing.
-    let have = 1;
-    for (let q = this.above(p); q !== null && have < height; q = this.above(q)) have += 1;
-    for (; have < height; have++) {
-      const down = this.below(p);
-      if (down === null) break;
-      p = down;
-    }
-    this.hold(p);
-  }
-
-  /** The `height` rows in view, the newest at the bottom; a transcript shorter than the window sits at its bottom. */
-  rows(height: number): Line[] {
-    const out: Line[] = [];
-    const bottom = this.bottom();
-    for (let p = bottom; p !== null && out.length < height; p = this.above(p)) out.push(this.block(p.index)[p.row]!);
-    out.reverse();
-    // A window that grew, on a resize, while scrolled up near the start: it is filled from below, not left half empty.
-    let last = bottom;
-    while (last !== null && out.length < height) {
-      const next = this.below(last);
-      if (next === null) break;
-      out.push(this.block(next.index)[next.row]!);
-      last = next;
-    }
-    if (last !== bottom && this.anchor !== null) {
-      this.hold(last);
-      // Down to the last entry: from here on the window follows the newest again.
-      if (this.anchor === null) return this.rows(height);
-    }
-    while (out.length < height) out.unshift([]);
-    return out;
-  }
+export interface Welcome {
+  /** The individual's own name, when its soul gives one. */
+  name: string | null;
+  /** What is true of this individual and cheap to know: a label, and what there is to say. */
+  facts: [label: string, value: string][];
 }
 
-export interface TalkView {
+/** The panel the client starts with: teneral's mark, who is being talked to, and the facts as a table. */
+export function welcome(w: Welcome, max: number, g: Glyphs): Line[] {
+  const inner = Math.max(1, max - 4);
+  const greeting: Line = w.name
+    ? [{ text: 'Talking with ', style: { bold: true } }, { text: w.name, style: { fg: 'brand', bold: true } }]
+    : [{ text: 'Talking with your teneral agent', style: { bold: true } }];
+  const help: Line = [{ text: 'Type to talk, Enter sends. /help lists the keys and commands.', style: DIM }];
+  const rows: Line[] = [[]];
+  const markWidth = width(g.mark[0]!);
+  if (inner >= markWidth + 28) {
+    const beside: Line[] = [greeting, help, []];
+    g.mark.forEach((row, i) => {
+      // The creature in teneral's own colour; the skin it left, under it, set back.
+      rows.push([{ text: '  ' }, { text: row, style: i === g.mark.length - 1 ? FAINT : BRAND }, { text: '   ' }, ...clip(beside[i] ?? [], inner - markWidth - 5, { text: g.ellipsis, style: DIM })]);
+    });
+  } else {
+    rows.push(...wrap(greeting, inner), ...wrap(help, inner));
+  }
+  rows.push([]);
+  const label = Math.max(0, ...w.facts.map(([name]) => width(name))) + 3;
+  for (const [name, value] of w.facts) {
+    const lead: Line = [{ text: `  ${name.padEnd(label)}`, style: DIM }];
+    rows.push(...wrap([{ text: value }], inner, lead, [{ text: ' '.repeat(label + 2) }]));
+  }
+  rows.push([]);
+  return panel(rows, max, g, BRAND);
+}
+
+/** One status line under the panel: this client's accent mark, what it says, and under it what there is to add. */
+export function status(head: Span[], more: string[], max: number, g: Glyphs, tone: Style = BRAND): Line[] {
+  return [
+    ...wrap(head, max, [{ text: `${g.status} `, style: tone }], [{ text: '  ' }]),
+    ...more.flatMap((text) => block(text, max, DIM, 2)),
+  ];
+}
+
+export interface Live {
   cols: number;
   rows: number;
   g: Glyphs;
-  /** The individual's own name, when it has one. */
-  name: string | null;
-  /** `generation 3`, a short commit, the model: any of them may be empty. */
-  generation: string;
-  commit: string;
-  model: string;
-  state: string;
-  /** The transcript rows, as many as `transcriptHeight` says. */
-  transcript: Line[];
-  /** Scrolled up: the newest rows are out of view. */
-  more: boolean;
-  /** Shown instead of the transcript: a title, and as many of its rows as fit, from `top` on. */
-  overlay: { title: string; rows: Line[]; top: number } | null;
+  /** What is still under way, laid out: tool calls without a result, lines not yet in the journal. */
+  pending: Line[];
+  /** What the agent is doing, while it is doing something. */
+  activity: Line | null;
   edit: Edit;
+  /** The footer's left side, the most needed first: the model, the directory, the generation. */
+  about: string[];
+  /** The footer's right side: one thing worth knowing, and how full the model's context is. Either may be empty. */
+  tip: string;
+  context: string;
+  /** Under the footer's left side: what is attached, or what is being waited for. May be empty. */
+  hint: string;
 }
 
-/** How the rows of a screen are shared out. Small screens give up the spacing first, then input rows. */
-export function regions(cols: number, rows: number, text: string, cursor: number): { top: number; height: number; rule: boolean; input: ReturnType<typeof layout> } {
-  const airy = rows >= 14;
-  const rule = rows >= 12;
-  const fixed = 1 + (airy ? 1 : 0) + (rule ? 1 : 0) + 1;
-  const input = layout(text, cursor, Math.max(2, cols - 2), Math.max(1, Math.min(5, rows - fixed - 3)));
-  return { top: airy ? 2 : 1, height: Math.max(1, rows - fixed - input.rows.length), rule, input };
+/** `left` and `right` at the two ends of a row; when both do not fit, the right gives way. */
+function ends(left: Line, right: Line, max: number): Line {
+  const room = max - lineWidth(left) - lineWidth(right);
+  if (room < 3) return clip(left, max);
+  return [...left, { text: ' '.repeat(room) }, ...right];
 }
 
-function header(v: TalkView): Line {
-  const tone: Style = v.state === 'not running' ? { fg: 'warn' } : v.state === 'waiting for you' ? { fg: 'accent' } : DIM;
-  const state: Span = { text: v.state, style: tone };
-  const name: Line = [{ text: ' teneral', style: { fg: 'accent', bold: true } }];
-  const own: Line = v.name ? [{ text: ` ${v.g.sep} `, style: FAINT }, { text: v.name, style: { bold: true } }] : [];
-  const parts = [v.generation, v.commit, v.model].filter((part) => part !== '');
-  // What does not fit goes, the least needed first: the model, the commit, the ordinal, then the name.
-  for (let keep = parts.length; keep >= -1; keep--) {
-    const about: Line = keep > 0 ? [{ text: `   ${parts.slice(0, keep).join(` ${v.g.sep} `)}`, style: DIM }] : [];
-    const left = [...name, ...(keep >= 0 ? own : []), ...about];
-    const room = v.cols - lineWidth(left) - width(state.text) - 1;
-    if (room >= 2 || keep === -1) return [...fit(left, Math.max(lineWidth(left), v.cols - width(state.text) - 1)), state];
+/** One row of the input with the owner's cursor on it: the cell at `col` with its colours swapped. */
+function withCursor(text: string, col: number): Line {
+  let at = 0;
+  let w = 0;
+  const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  for (const { segment, index } of seg.segment(text)) {
+    if (w >= col) break;
+    at = index + segment.length;
+    w += width(segment);
   }
-  return name;
+  const under = seg.segment(text.slice(at))[Symbol.iterator]().next().value?.segment ?? '';
+  return [{ text: text.slice(0, at) }, { text: under === '' ? ' ' : under, style: { inverse: true } }, { text: text.slice(at + under.length) }];
 }
 
-function hint(v: TalkView): Line {
-  const who = v.name ?? 'the agent';
-  // In the order shown; the number is which to give up first when the row is too narrow.
-  const all: [text: string, rank: number][] = v.overlay !== null
-    ? [['Esc closes', 0], ['Up/Down scroll', 1]]
-    : [['Enter sends', 2], ['Alt+Enter new line', 5], ['PgUp/PgDn scroll', 4], ['Tab tool output', 6], ['/help', 3], [`Ctrl-C leaves; ${who} goes on`, 1]];
-  const sep = ` ${v.g.sep} `;
-  let shown = all;
-  for (let rank = 6; rank > 1 && width(shown.map(([text]) => text).join(sep)) + 2 > v.cols; rank--) shown = all.filter(([, r]) => r < rank);
-  return clip([{ text: ` ${shown.map(([text]) => text).join(sep)}`, style: DIM }], v.cols, { text: v.g.ellipsis, style: DIM });
-}
+/**
+ * The live region: what is under way, the input box with its attachments, and the footer. It
+ * never takes more than half of the screen's rows: a small screen gives up the footer's second
+ * row, rows of what is under way, the spacing, and at last the frame of the box.
+ *
+ * Half, because of what a terminal does when its window is made narrower: most wrap every row
+ * that no longer fits in two, the rows of this region with them. As long as the region, so
+ * doubled, still fits the screen, its first row (where the cursor rests) stays in view and the
+ * next frame can erase all of it. Wrapped beyond the height of the screen, by a window made much
+ * narrower and lower in one step, its first rows scroll away, and are then out of reach.
+ */
+export function liveRows(v: Live): Line[] {
+  const { g } = v;
+  const max = Math.max(8, v.cols - 1);
+  const room = Math.max(3, Math.min(v.rows - 1, Math.floor(v.rows / 2)));
+  const inner = Math.max(4, max - 4);
+  const chips = chipRows(v.edit.chips.map((image, i) => chip(i + 1, image, image.path, g)), inner, 0);
+  const text = layout(v.edit.text, v.edit.cursor, Math.max(2, inner - 2), Math.max(1, Math.min(8, room - 5 - chips.length)));
+  const typed = text.rows.map((row, i): Line => [
+    { text: i === 0 && text.above === 0 ? `${g.prompt} ` : '  ', style: { fg: 'accent', bold: true } },
+    ...(i === text.row ? withCursor(row, text.col) : [{ text: row }]),
+  ]);
+  const box = panel([...chips, ...typed], max, g, FAINT);
+  const bare = panel(typed, max, g, FAINT);
 
-/** The whole talk screen as one frame. */
-export function talkFrame(v: TalkView): Frame {
-  const r = regions(v.cols, v.rows, v.edit.text, v.edit.cursor);
-  const rows: Line[] = [header(v)];
-  if (r.top === 2) rows.push([]);
-  let body = v.transcript.slice(-r.height);
-  if (v.overlay !== null) {
-    body = [[{ text: `  ${v.overlay.title}`, style: { bold: true } }], [], ...v.overlay.rows.slice(v.overlay.top)].slice(0, r.height);
-  } else if (v.more && body.length > 0) {
-    const mark = ` ${v.g.below} more below ${v.g.sep} End `;
-    body = [...body.slice(0, -1), [{ text: ' '.repeat(Math.max(0, v.cols - width(mark))) }, { text: mark, style: { fg: 'accent' } }]];
-  }
-  while (body.length < r.height) body.push([]);
-  rows.push(...body);
-  if (r.rule) rows.push([{ text: v.g.rule.repeat(v.cols), style: FAINT }]);
-  const inputTop = rows.length;
-  r.input.rows.forEach((text, i) => {
-    const first = i === 0 && r.input.above === 0;
-    rows.push([{ text: first ? `${v.g.prompt} ` : '  ', style: { fg: 'accent', bold: true } }, { text }]);
-  });
-  rows.push(hint(v));
-  return { rows, cursor: v.overlay !== null ? null : { row: inputTop + r.input.row, col: 2 + r.input.col } };
+  const sep = ` ${g.sep} `;
+  let about = v.about.filter((part) => part !== '');
+  while (about.length > 1 && width(about.join(sep)) + 1 > max) about = about.slice(0, -1);
+  const left: Line = [{ text: ` ${about.join(sep)}`, style: DIM }];
+  const footer: Line[] = [ends(left, v.tip === '' ? [] : [{ text: v.tip, style: FAINT }], max)];
+  if (v.hint !== '' || v.context !== '') footer.push(ends([{ text: v.hint === '' ? '' : ` ${v.hint}`, style: BRAND }], v.context === '' ? [] : [{ text: v.context, style: DIM }], max));
+
+  // What a small screen gives up, in this order, until the region fits.
+  let pending = v.pending;
+  let blank = true;
+  let second = footer.length > 1;
+  let first = true;
+  let activity = v.activity;
+  let framed = true;
+  let chipped = true;
+  const build = (): Line[] => [
+    ...(blank ? [[]] : []),
+    ...pending,
+    ...(pending.length > 0 && blank ? [[]] : []),
+    ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
+    ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
+    ...(first ? footer.slice(0, second ? 2 : 1) : []),
+  ];
+  const fits = (): boolean => build().length <= room;
+  if (!fits()) second = false;
+  while (!fits() && pending.length > 0) pending = pending.slice(1);
+  if (!fits()) blank = false;
+  if (!fits()) first = false;
+  if (!fits()) activity = null;
+  if (!fits()) chipped = false;
+  if (!fits()) framed = false;
+  return build();
 }

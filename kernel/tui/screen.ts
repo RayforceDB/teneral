@@ -3,8 +3,10 @@ import { StringDecoder } from 'node:string_decoder';
 import { clip, lineWidth, type Line } from './text';
 import { capsOf, sgr, type Caps } from './theme';
 
-// The terminal itself: the alternate screen, and frames painted onto it. A frame is a list of
-// rows; only the rows that differ from the frame before are written, all in one write.
+// The terminal itself, in the two ways the owner's programs use it. `Screen` takes the alternate
+// screen and paints whole frames onto it: the setup. `Inline` stays on the normal screen, prints
+// what is finished once, to scroll away as any output does, and keeps a few live rows redrawn in
+// place under it: the talk client. Either way only what differs is written, all in one write.
 
 /** What a screen needs of a terminal. The real one is `terminal()`; tests give a made-up one. */
 export interface Term {
@@ -38,17 +40,25 @@ export interface Frame {
 }
 
 const ENTER = '\x1b[?1049h\x1b[?25l\x1b[?2004h';
-const MOUSE_ON = '\x1b[?1000h\x1b[?1006h';
-const MOUSE_OFF = '\x1b[?1006l\x1b[?1000l';
-/** Everything `ENTER` and the mouse changed, put back. Safe to send twice. */
-const LEAVE = `${MOUSE_OFF}\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l`;
+/** Everything `ENTER` changed, put back. Safe to send twice. */
+const LEAVE = '\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l';
+
+/** A row with its colours, cut to `max` columns. */
+function encode(row: Line, max: number, depth: Caps['depth']): string {
+  const line = lineWidth(row) > max ? clip(row, max) : row;
+  let text = '';
+  for (const span of line) {
+    const code = sgr(span.style, depth);
+    text += code === '' || span.text === '' ? span.text : `\x1b[${code}m${span.text}\x1b[0m`;
+  }
+  return text;
+}
 
 export class Screen {
   private shown: string[] = [];
   private cursor = '';
   private size = { cols: 0, rows: 0 };
   private inside = false;
-  private mouse = false;
 
   constructor(private readonly term: Term) {}
 
@@ -56,25 +66,17 @@ export class Screen {
     return this.inside;
   }
 
-  enter(mouse: boolean): void {
+  enter(): void {
     this.inside = true;
-    this.mouse = mouse;
-    this.term.write(ENTER + (mouse ? MOUSE_ON : ''));
+    this.term.write(ENTER);
     this.invalidate();
-  }
-
-  /** Whether the wheel is reported to this program (and a drag is then no longer the terminal's own selection). */
-  setMouse(on: boolean): void {
-    if (!this.inside || on === this.mouse) return;
-    this.mouse = on;
-    this.term.write(on ? MOUSE_ON : MOUSE_OFF);
   }
 
   /** Back to the screen that was there before. `keep`: stay on the alternate screen, for a program that takes over at once. */
   leave(keep = false): void {
     if (!this.inside) return;
     this.inside = false;
-    this.term.write(keep ? `${MOUSE_OFF}\x1b[?2004l\x1b[0m` : LEAVE);
+    this.term.write(keep ? '\x1b[?2004l\x1b[0m' : LEAVE);
   }
 
   /** The next frame is painted whole. */
@@ -110,14 +112,9 @@ export class Screen {
         }
         continue;
       }
-      const line = lineWidth(row) > cols ? clip(row, cols) : row;
-      let text = '';
-      for (const span of line) {
-        const code = sgr(span.style, depth);
-        text += code === '' ? span.text : `\x1b[${code}m${span.text}\x1b[0m`;
-      }
+      let text = encode(row, cols, depth);
       // Erasing to the end of a row that is full to its last column would take that column's character with it.
-      if (lineWidth(line) < cols) text += '\x1b[K';
+      if (lineWidth(row) < cols) text += '\x1b[K';
       next.push(text);
       if (this.shown[y] !== text) out += `\x1b[${y + 1};1H${text}`;
     }
@@ -132,6 +129,94 @@ export class Screen {
     this.cursor = cursor;
     // Between these two marks a terminal that knows them shows nothing half-drawn; one that does not ignores them.
     this.term.write(`\x1b[?2026h\x1b[?25l${out}${cursor}\x1b[?2026l`);
+  }
+}
+
+/**
+ * The normal screen, used as any program's output is: what is finished is printed once and
+ * scrolls away into the terminal's own scrollback, where the terminal's scrollbar, selection,
+ * copy and search work on it; under it a live region of a few rows is redrawn in place.
+ *
+ * Between two writes the terminal's cursor always rests, hidden, on the first column of the live
+ * region's first row, and it is only ever moved relative to there. That one rule is what keeps
+ * the screen clean: whatever the terminal does to the rows when its window changes size (cut
+ * them, or wrap them again and move them), the cursor stays with the row it was on, so erasing
+ * from the cursor down takes exactly the live region, old shape and all, and nothing above it.
+ * The cursor the owner sees in the input is drawn, as a cell with its colours swapped.
+ *
+ * No row is ever written into the last column: a full row would leave the cursor waiting to
+ * wrap, and terminals differ on what happens next.
+ */
+export class Inline {
+  /** The live rows as they were last written; null when the region has to be written whole. */
+  private shown: string[] | null = null;
+  private cols = 0;
+  private queue: Line[] = [];
+  private on = false;
+
+  constructor(private readonly term: Term) {}
+
+  get active(): boolean {
+    return this.on;
+  }
+
+  /** The widest a row may be. */
+  get width(): number {
+    return Math.max(1, this.term.size().cols - 1);
+  }
+
+  start(): void {
+    this.on = true;
+    this.shown = null;
+    // On a line of its own, whatever was printed before without a line break.
+    this.term.write('\x1b[?25l\x1b[?2004h\r');
+  }
+
+  /** Rows that are finished: printed above the live region with the next `paint`, in order, never again. */
+  print(rows: Line[]): void {
+    this.queue.push(...rows);
+  }
+
+  /** The live region is written whole with the next `paint`: after the window changed, or when asked to. */
+  invalidate(): void {
+    this.shown = null;
+  }
+
+  /** Print what is queued and make the live region these rows. More rows than fit under one row of what was printed are dropped from the top. */
+  paint(live: Line[]): void {
+    if (!this.on) return;
+    const { cols, rows } = this.term.size();
+    const depth = this.term.caps.depth;
+    const max = Math.max(1, cols - 1);
+    const next = live.slice(-Math.max(1, rows - 1)).map((row) => encode(row, max, depth));
+    let out = '';
+    if (this.queue.length > 0 || this.shown === null || this.shown.length !== next.length || cols !== this.cols) {
+      // From the first row of the region: the finished rows, then the region anew, then nothing below it.
+      for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
+      out += next.map((row) => `${row}\x1b[K`).join('\r\n');
+      out += '\x1b[J';
+      if (next.length > 1) out += `\x1b[${next.length - 1}A`;
+      out += '\r';
+      this.queue = [];
+    } else {
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] === this.shown[i]) continue;
+        out += `${i > 0 ? `\x1b[${i}B` : ''}${next[i]}\x1b[K${i > 0 ? `\x1b[${i}A` : ''}\r`;
+      }
+    }
+    this.cols = cols;
+    this.shown = next;
+    if (out === '') return;
+    // Between these two marks a terminal that knows them shows nothing half-drawn; one that does not ignores them.
+    this.term.write(`\x1b[?2026h\r${out}\x1b[?2026l`);
+  }
+
+  /** Print what is queued, take the live region away and give the terminal back, its cursor under the last row printed. Safe to call twice. */
+  stop(): void {
+    if (!this.on) return;
+    this.paint([]);
+    this.on = false;
+    this.term.write('\x1b[0m\x1b[?2004l\x1b[?25h');
   }
 }
 

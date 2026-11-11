@@ -1,0 +1,46 @@
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                 │
+│   ▚▖  ▗▞   Talking with Mica                                                                    │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.                        │
+│    ░▒▒░                                                                                         │
+│                                                                                                 │
+│   Directory    /home/owner/work/teneral                                                         │
+│   Individual   5e1f0a9c                                                                         │
+│   Generation   2nd · e5f6a7b · has lived in 2                                                   │
+│   Model        gpt-6.1-sol · ChatGPT plan                                                       │
+│   Version      teneral 0.0.0                                                                    │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                                                 │
+│   Sensors      clock every 20 min · inbox · your terminal                                       │
+│   Peers        alice, bob                                                                       │
+│                                                                                                 │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+◆ Mica is awake · waiting for you
+  Leaving this client stops nothing: Mica goes on.
+
+◆ Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage
+◆ Images: Ctrl+V attaches the clipboard's image; drag a file in, or /image <path>.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+┃ mutation accepted  a1b2c3d → e5f6a7b
+
+› what is in body/?
+
+  ▪ bash  command: ls body                                                                  ✓ 200ms
+
+● Ten files, about 1,400 lines:
+
+  • main.ts starts me
+  • loop.ts is one turn
+
+  Shall I go through them?
+
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol · waiting for you · …/work/teneral · gen 2 e5f6a7b

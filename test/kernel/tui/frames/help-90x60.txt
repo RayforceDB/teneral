@@ -1,0 +1,68 @@
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                       │
+│   ▚▖  ▗▞   Talking with your teneral agent                                            │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.              │
+│    ░▒▒░                                                                               │
+│                                                                                       │
+│   Directory    /home/owner/work/teneral                                               │
+│   Individual   5e1f0a9c                                                               │
+│   Generation   2nd · e5f6a7b · has lived in 2                                         │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                               │
+│   Version      teneral 0.0.0                                                          │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                                       │
+│   Sensors      clock every 30 min · inbox · your terminal                             │
+│                                                                                       │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+◆ The agent is awake · resting
+  Leaving this client stops nothing: the agent goes on.
+
+◆ Images: /image <path> attaches a file this client can read. The clipboard and files of
+  your machine need ./box talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+┃ mutation accepted  a1b2c3d → e5f6a7b
+
+● In the new body.
+
+  ── teneral talk ──────────────────────────────────────────────────────
+  Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a
+  new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W
+  delete to the start of the line, to its end, and the word before the cursor.
+
+  The conversation is ordinary output of your terminal: its scrollbar, PageUp and
+  PageDown, selection, copy and search all work on it. Only the box you type in and the
+  lines around it are redrawn.
+
+  Images: Ctrl+V attaches the image in your clipboard; dragging an image file into the
+  terminal, or pasting its path, attaches that file; so does /image <path>. An attached
+  image is a chip in the input box, and Backspace at the start of the line removes the
+  last one. A message carries at most 4 images of at most 10 MB each (PNG, JPEG, GIF,
+  WebP). They are kept in memory/images/. The agent sees them once its own body knows
+  how; until then it sees one line of text naming each file.
+
+    /help          this
+    /image <path>  attach an image file from your machine
+    /tools         show or hide what each tool call returned (also Tab)
+    /generations   the generations this individual has lived in
+    /history       print the earlier conversation that was read from the journal
+    /plain         how to get the plain text client
+    /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)
+
+  Leaving ends this client only. Nothing here stops the agent or changes it.
+
+  While the agent is doing something, the line over the input box says what: waking (its
+  first start, before its first words), thinking, running <tool>, mutating (it proposed a
+  change to its own body and the kernel is checking it), starting (between two runs). At
+  other times it is resting, not running, or waiting for you: its last finished reply
+  ended with a question mark and nothing has arrived since.
+
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                                     │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol · resting · …/work/teneral · gen 2 e5f6a7b

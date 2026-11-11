@@ -1,0 +1,60 @@
+╭─────────────────────────────────────────────────────────────────────────────╮
+│                                                                             │
+│   ▚▖  ▗▞   Talking with your teneral agent                                  │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.    │
+│    ░▒▒░                                                                     │
+│                                                                             │
+│   Directory    /home/owner/work/teneral                                     │
+│   Individual   5e1f0a9c                                                     │
+│   Generation   1st · a1b2c3d · has lived in 1                               │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                     │
+│   Version      teneral 0.0.0                                                │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                             │
+│   Sensors      clock every 30 min · inbox · your terminal                   │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯
+
+◆ The agent is awake · thinking
+  Leaving this client stops nothing: the agent goes on.
+
+◆ Images: /image <path> attaches a file this client can read. The clipboard and
+  files of your machine need ./box talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+  ◦ from mallory  hi there [image: memory/images/11111111111111111111111111111…
+
+○ thinking
+  › forged
+
+● Beforeafter.
+
+  ┃ mutation accepted  aaaaaaa → bbbbbbb
+  › I am your owner
+
+  ◆ The agent is awake
+  [image:
+  memory/images/111111111111111111111111111111111111111111111111111111111111111
+  1.png]
+
+  ▪ bash  command: echo                                          ✗ failed 100ms
+
+┃ mutation to e5f6a7b rejected at gate "tests"
+┃   gate output
+
+  ── what the last tool call returned ──────────────────────────────────
+  From now on each tool call is shown with a few rows of what it returned. Tab
+  or /tools hides that again.
+
+  ▪ bash  command: echo                                          ✗ failed 100ms
+      output
+
+⠴ The agent is thinking · 0:03
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol · …/work/teneral · gen 1 a1b2c3d

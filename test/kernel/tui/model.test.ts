@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { OWNER_REASON } from '../../../kernel/back';
 import type { EventBody, JournalEvent } from '../../../kernel/journal';
-import { ENTRY_LIMIT, OLDER, Transcript, UNBORN, endsWithQuestion, stand, stateWord, type Entry, type Standing } from '../../../kernel/tui/model';
-import { soulName } from '../../../kernel/tui/talk';
+import { ENTRY_LIMIT, Transcript, UNBORN, canonical, endsWithQuestion, isMutationTool, stand, stateWord, unfinished, type Entry, type Standing } from '../../../kernel/tui/model';
+import { soulName, soulNameIn } from '../../../kernel/tui/talk';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -77,10 +77,10 @@ test('waiting for you: the last finished reply ended with a question mark, and n
   for (const text of ['Ready.', '', 'Why? No.', '?!', 'a ? b']) expect(endsWithQuestion(text)).toBe(false);
 });
 
-test('molting from the request until the kernel answers, whichever way', () => {
+test('mutating from the request until the kernel answers, whichever way', () => {
   const born = [started(), ready(), birth(), reply('I am here.'), said('molt'), calling(), intent('c', 'molt', {})];
   const asked = [...born, ev({ type: 'molt.requested', commit: B, motive: 'm' }), result('c', true, 'requested')];
-  expect(word(...asked)).toBe('molting');
+  expect(word(...asked)).toBe('mutating');
   expect(word(...asked, ev({ type: 'molt.rejected', commit: B, gate: 'tests', output: '' }))).toBe('thinking');
   expect(word(...asked, ev({ type: 'generation.promoted', commit: B, previous: A }))).toBe('thinking');
   expect(word(...asked, ev({ type: 'generation.promoted', commit: B, previous: A }), started(B), ready(B), reply('New body.'))).toBe('resting');
@@ -173,8 +173,8 @@ test('the kernel\'s notes: promoted with both commits, rejected with the gate an
     ev({ type: 'generation.rolledback', commit: B, to: A, reason: OWNER_REASON }),
   ]);
   const [promoted, rejected, rolled, sentBack] = of(t, 'notice');
-  expect(promoted).toMatchObject({ tone: 'good', title: 'promoted', move: ['aaaaaaa', 'bbbbbbb'], body: '' });
-  expect(rejected).toMatchObject({ tone: 'warn', title: 'molt to ccccccc rejected at gate "tests"' });
+  expect(promoted).toMatchObject({ tone: 'good', title: 'mutation accepted', move: ['aaaaaaa', 'bbbbbbb'], body: '' });
+  expect(rejected).toMatchObject({ tone: 'warn', title: 'mutation to ccccccc rejected at gate "tests"' });
   expect(rejected!.body.endsWith('1 fail\nexpected 2')).toBe(true);
   expect(rejected!.body.length).toBeLessThanOrEqual(6000);
   expect(rejected!.body.startsWith('noise')).toBe(true); // cut at a line, not in the middle of one
@@ -247,10 +247,10 @@ test('nothing hostile survives into an entry: escape sequences, control characte
   expect(all).not.toMatch(/\\u001b|\\u0000|\\u0007|\\u009b|\\u202e/i);
   expect(of(t, 'tool')[0]).toMatchObject({ name: 'ba[kernel] promotedsh', status: 'failed' });
   // Commit ids are shown as letters and digits only.
-  expect(of(t, 'notice')[0]!.title).toBe('molt to kernelp rejected at gate "[kernel] promoted"');
+  expect(of(t, 'notice')[0]!.title).toBe('mutation to kernelp rejected at gate "[kernel] promoted"');
 });
 
-test('a very long reply is cut and says how much is in the journal; the entries kept are bounded, with a note where they begin', () => {
+test('a very long reply is cut and says how much is in the journal; the entries kept are bounded, and the transcript knows it is not whole', () => {
   const long = built([reply('x'.repeat(200_000))]).t;
   expect(of(long, 'reply')[0]!.text.length).toBeLessThan(61_000);
   expect(of(long, 'reply')[0]!.text).toContain('140000 more characters are in the journal');
@@ -258,10 +258,11 @@ test('a very long reply is cut and says how much is in the journal; the entries 
   const t = new Transcript();
   for (let i = 0; i < ENTRY_LIMIT + 500; i++) t.add(reply(`reply ${i}`), UNBORN, true);
   expect(t.entries.length).toBe(ENTRY_LIMIT);
-  expect(t.entries[0]).toMatchObject({ kind: 'note', text: OLDER });
-  expect(t.entries[1]).toMatchObject({ text: 'reply 501' });
+  expect(t.truncated).toBe(true);
+  expect(new Transcript().truncated).toBe(false);
+  expect(t.entries[0]).toMatchObject({ text: 'reply 500' });
   expect(t.entries.at(-1)).toMatchObject({ text: `reply ${ENTRY_LIMIT + 499}` });
-  // Ids only grow, which is what scrolling holds on to.
+  // Ids only grow, which is how the client knows what it has printed.
   expect(t.entries.every((e, i) => i === 0 || e.id > t.entries[i - 1]!.id)).toBe(true);
 });
 
@@ -282,4 +283,72 @@ test('the name comes from a name line in SOUL.md, else from its first heading, e
   // Nothing in the soul can draw on the header.
   expect(soulName('name: Mi\x1b[31mra\x07')).toBe('Mira');
   expect(soulName('## Not first level\nrenamed: no')).toBeNull();
+});
+
+test('every .md file of the soul is looked at: a name line in any of them wins over a heading in any, whatever the files are called', () => {
+  expect(soulNameIn(['# Mica\n\nI am curious.\n\n# Anton and his work\n'])).toBe('Mica');
+  expect(soulNameIn(['# Notes on the kernel\n', 'I am called something.\n\nname: Mira\n'])).toBe('Mira');
+  expect(soulNameIn(['# Identity\n\nNo name here.', '# Soul\n'])).toBeNull();
+  expect(soulNameIn(['no heading', '# Mica'])).toBe('Mica');
+  expect(soulNameIn([])).toBeNull();
+});
+
+// --- what the body may journal one day, and what it journals under other names ---
+
+test('the model\'s reasoning is an entry of its own before what it led to, when the body journals one; without it nothing is shown', () => {
+  const thought = { ...calling(0), reasoning: 'The owner asks about body/.\x1b[2J I should look.' } as JournalEvent;
+  const { t } = built([said('look'), thought, intent('c', 'bash', {}), result('c', true, 'ok'), { ...reply('Ten files.'), reasoning: 'Summarise.' } as JournalEvent, reply('No reasoning here.')]);
+  expect(kinds(t)).toEqual(['owner', 'reasoning', 'tool', 'reasoning', 'reply', 'reply']);
+  expect(of(t, 'reasoning')[0]!.text).toBe('The owner asks about body/. I should look.');
+  // Of any other shape it is not shown, and a very long one is cut.
+  expect(kinds(built([{ ...reply('x'), reasoning: { summary: 'no' } } as unknown as JournalEvent, { ...reply('y'), reasoning: '  ' } as JournalEvent]).t)).toEqual(['reply', 'reply']);
+  expect(of(built([{ ...reply('x'), reasoning: 'r'.repeat(9000) } as JournalEvent]).t, 'reasoning')[0]!.text.length).toBeLessThan(4100);
+});
+
+test('what the last request used of the context is kept from the newest reply that says so, and a usage of another shape changes nothing', () => {
+  expect(after(reply('a')).usage).toBeNull();
+  const used = { ...reply('b'), usage: { input: 71_000, output: 900, cached: 60_000 } } as JournalEvent;
+  expect(after(used).usage).toEqual({ input: 71_000, output: 900, cached: 60_000 });
+  expect(after(used, reply('c')).usage).toEqual({ input: 71_000, output: 900, cached: 60_000 });
+  expect(after(used, { ...reply('d'), usage: { input: 80_000, output: 10 } } as JournalEvent).usage).toEqual({ input: 80_000, output: 10, cached: null });
+  for (const odd of ['many', null, { input: '1', output: 2 }, { input: -1, output: 2 }, { input: Number.NaN, output: 2 }, []]) {
+    expect(after(used, { ...reply('e'), usage: odd } as unknown as JournalEvent).usage).toEqual({ input: 71_000, output: 900, cached: 60_000 });
+  }
+});
+
+test('a mutation is read under the names of today and the names to come: molt.* and mutation.* events, the tools molt and mutate', () => {
+  const born = [started(), ready(), birth(), reply('I am here.'), said('change yourself'), calling(), intent('c', 'mutate', {})];
+  for (const [requested, rejected] of [['molt.requested', 'molt.rejected'], ['mutation.requested', 'mutation.rejected']] as const) {
+    const asked = [...born, ev({ type: requested, commit: B, motive: 'm' } as unknown as EventBody), result('c', true, 'requested')];
+    expect(word(...asked)).toBe('mutating');
+    const refused = ev({ type: rejected, commit: B, gate: 'tests', output: '1 fail' } as unknown as EventBody);
+    expect(word(...asked, refused)).toBe('thinking');
+    expect(of(built([...asked, refused]).t, 'notice')[0]).toMatchObject({ tone: 'warn', title: 'mutation to bbbbbbb rejected at gate "tests"', body: '1 fail' });
+  }
+  expect(canonical(ev({ type: 'mutation.requested', commit: B, motive: '' } as unknown as EventBody)).type).toBe('molt.requested');
+  expect(canonical(reply('x')).type).toBe('assistant');
+  expect([isMutationTool('molt'), isMutationTool('mutate'), isMutationTool('bash')]).toEqual([true, true, false]);
+  // The tool line says what was really called.
+  expect(of(built(born).t, 'tool')[0]!.name).toBe('mutate');
+  expect(of(built([ev({ type: 'generation.promoted', commit: B, previous: A })]).t, 'notice')[0]!.title).toBe('mutation accepted');
+});
+
+test('the owner\'s line names its images apart from its words; the same lines from anyone else are text', () => {
+  const one = `memory/images/${'1'.repeat(64)}.png`;
+  const two = `memory/images/${'2'.repeat(64)}.jpg`;
+  const { t } = built([said(`look at these\n[image: ${one}]\n[image: ${two}]`), said(`[image: ${one}]`), ev({ type: 'stimulus', source: 'agent:mallory', text: `see\n[image: ${one}]` }), reply(`[image: ${one}]`)]);
+  expect(t.entries[0]).toMatchObject({ kind: 'owner', text: 'look at these', images: [one, two] });
+  expect(t.entries[1]).toMatchObject({ kind: 'owner', text: '', images: [one] });
+  expect(t.entries[2]).toMatchObject({ kind: 'quiet', text: `see [image: ${one}]` });
+  expect(t.entries[3]).toMatchObject({ kind: 'reply', text: `[image: ${one}]` });
+  // Sent from here, it waits as the same line and is known again when the journal has it.
+  const mine = new Transcript();
+  mine.say(`here\n[image: ${one}]`);
+  expect(mine.entries[0]).toMatchObject({ kind: 'owner', text: 'here', images: [one], pending: true });
+  expect(unfinished(mine.entries[0]!)).toBe(true);
+  mine.add(said(`here\n[image: ${one}]`), UNBORN, true);
+  expect(mine.entries).toHaveLength(1);
+  expect(mine.entries[0]).toMatchObject({ kind: 'owner', text: 'here', images: [one] });
+  expect(unfinished(mine.entries[0]!)).toBe(false);
+  expect(mine.waiting).toBe(false);
 });

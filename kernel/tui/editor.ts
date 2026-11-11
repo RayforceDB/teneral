@@ -1,3 +1,4 @@
+import { IMAGES_PER_MESSAGE, type Attachment } from './images';
 import type { Key } from './keys';
 import { charWidth, width } from './text';
 
@@ -14,9 +15,11 @@ export interface Edit {
   at: number | null;
   /** The draft set aside while the history is walked. */
   draft: string;
+  /** Images that go with the line when it is sent, in the order they were attached. */
+  chips: readonly Attachment[];
 }
 
-export const EMPTY: Edit = { text: '', cursor: 0, history: [], at: null, draft: '' };
+export const EMPTY: Edit = { text: '', cursor: 0, history: [], at: null, draft: '', chips: [] };
 
 /** The longest history kept. */
 const HISTORY = 200;
@@ -70,9 +73,15 @@ export function insert(e: Edit, text: string): Edit {
   return t === '' ? e : set(e, e.text.slice(0, e.cursor) + t + e.text.slice(e.cursor), e.cursor + t.length);
 }
 
-/** The line after it was sent: empty, with what was sent at the end of the history. */
+/** The line with one more image attached; unchanged when it already carries as many as a message may, or this very one. */
+export function attach(e: Edit, image: Attachment): Edit {
+  if (e.chips.length >= IMAGES_PER_MESSAGE || e.chips.some((chip) => chip.path === image.path)) return e;
+  return { ...e, chips: [...e.chips, image] };
+}
+
+/** The line after it was sent: empty, with what was sent at the end of the history. Words only are remembered, not images. */
 export function sent(e: Edit, text: string): Edit {
-  const history = e.history.at(-1) === text ? e.history : [...e.history, text].slice(-HISTORY);
+  const history = text === '' || e.history.at(-1) === text ? e.history : [...e.history, text].slice(-HISTORY);
   return { ...EMPTY, history };
 }
 
@@ -108,7 +117,7 @@ function vertical(e: Edit, dir: -1 | 1): Edit {
 
 /**
  * The line after one key, or null when the key is not the editor's: Enter, Tab, Escape, the
- * scrolling keys, and Ctrl-C and Ctrl-D, which the screen decides about.
+ * page keys, and Ctrl-C, Ctrl-D and Ctrl-V, which the client decides about.
  */
 export function edit(e: Edit, key: Key): Edit | null {
   if (key.kind === 'text' || key.kind === 'paste') return insert(e, key.text);
@@ -116,7 +125,6 @@ export function edit(e: Edit, key: Key): Edit | null {
   const { text, cursor } = e;
   const word = key.ctrl === true || key.alt === true;
   if (key.name === 'enter') return key.alt || key.shift ? insert(e, '\n') : null;
-  // Shift with an arrow scrolls the transcript.
   if (key.shift) return null;
   switch (key.name) {
     case 'left': return move(e, word ? wordLeft(text, cursor) : step(text, cursor, -1));
@@ -126,6 +134,8 @@ export function edit(e: Edit, key: Key): Edit | null {
     case 'up': return vertical(e, -1);
     case 'down': return vertical(e, 1);
     case 'backspace': {
+      // At the very start there is no text to take: the last image goes instead.
+      if (cursor === 0 && e.chips.length > 0 && !key.alt) return { ...e, chips: e.chips.slice(0, -1) };
       const from = key.alt ? wordLeft(text, cursor) : step(text, cursor, -1);
       return set(e, text.slice(0, from) + text.slice(cursor), from);
     }

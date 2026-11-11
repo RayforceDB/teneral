@@ -110,7 +110,7 @@ export class SetupScreens implements Dialogue {
   start(): void {
     if (this.open) return;
     this.open = true;
-    this.screen.enter(false);
+    this.screen.enter();
     const ticker = setInterval(() => this.paint(), SPIN_MS);
     this.stops.push(
       this.term.listen((text) => this.input(text), () => { this.ended = true; this.pending?.(null); }),
@@ -575,7 +575,7 @@ export class SetupScreens implements Dialogue {
     await this.ask(() => {
       const rows = page();
       return { rows, focus: rows.length - 1, hint: ['Enter goes on'] };
-    }, (key) => (key.kind === 'wheel' ? undefined : true));
+    }, () => true);
     this.after.push(`Wrote .env, readable only by you: ${names.join(', ')}.`, ...(this.o.thenStart ? [] : [NEXT_STEP]));
     this.close();
   }

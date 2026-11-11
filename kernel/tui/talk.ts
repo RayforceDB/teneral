@@ -1,44 +1,63 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
 import { tell } from '../owner';
+import * as providers from '../providers';
 import { holder, readState, type Paths } from '../supervisor';
 import { Follower } from '../talk';
-import { EMPTY, edit, sent, type Edit } from './editor';
+import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
+import {
+  Clip, IMAGES_PER_MESSAGE, IMAGE_MAX_BYTES, NotKept, keep, look, namedLikeImage, pathsIn, sizeText, whyNoClipboard, withMarkers,
+  type Attachment,
+} from './images';
 import { KeyParser, type Key } from './keys';
-import { Transcript, UNBORN, shortSha, stand, stateWord, type Alive, type Entry, type Standing } from './model';
-import { Lifeline, Screen, terminal, type Term } from './screen';
-import { clean, type Line } from './text';
-import { SPIN_MS, glyphs } from './theme';
-import { Scroller, block, elapsed, regions, talkFrame } from './view';
+import { Transcript, UNBORN, isMutationTool, shortSha, stand, stateWord, unfinished, type Alive, type Entry, type Standing } from './model';
+import { Inline, Lifeline, terminal, type Term } from './screen';
+import { clean, type Line, type Span } from './text';
+import { SPIN_MS, glyphs, type Glyphs } from './theme';
+import { contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look } from './view';
 
-// The talk screen: `./box talk` at a terminal. The owner's lines go out through the owner channel
+// The talk client: `./box talk` at a terminal. The owner's lines go out through the owner channel
 // (kernel/owner.ts) and everything shown is read back from the journal, exactly as the plain
 // client does it, so any number of these can be attached and leaving one ends nothing else.
 // Nothing here can stop the agent or change it.
+//
+// It does not take the screen. What is finished (the welcome panel, a line, a reply, a tool call
+// with its outcome, a notice) is printed once and scrolls away into the terminal's own
+// scrollback; only the live region at the bottom is redrawn (see `Inline` in screen.ts).
 
-/** How far back the history shown on attaching looks, as in the plain client. */
+/** How far back the journal is read on attaching, as in the plain client. */
 const HISTORY_BYTES = 256_000;
+/** How much of that is shown at once: the last few things the owner said, and what came of them. */
+const SHOWN_EXCHANGES = 3;
+const SHOWN_ENTRIES = 40;
 const TICK_MS = 125;
 /** A lone ESC is the Escape key once this long has passed with nothing after it. */
 const ESCAPE_MS = 40;
+/** How long each tip stays in the footer. */
+const TIP_MS = 20_000;
+/** Entries still under way that the live region lays out; older ones wait unseen. */
+const PENDING_SHOWN = 12;
 
 const HELP = [
   'Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W delete to the start of the line, to its end, and the word before the cursor.',
   '',
-  'PageUp and PageDown, and Shift+Up and Shift+Down, scroll. End, Esc or typing comes back to the newest. The mouse is left to your terminal, so selecting, copying and pasting work as usual. /mouse makes the wheel scroll here instead; while it does, hold Shift to select text.',
+  'The conversation is ordinary output of your terminal: its scrollbar, PageUp and PageDown, selection, copy and search all work on it. Only the box you type in and the lines around it are redrawn.',
+  '',
+  'Images: Ctrl+V attaches the image in your clipboard; dragging an image file into the terminal, or pasting its path, attaches that file; so does /image <path>. An attached image is a chip in the input box, and Backspace at the start of the line removes the last one. A message carries at most 4 images of at most 10 MB each (PNG, JPEG, GIF, WebP). They are kept in memory/images/. The agent sees them once its own body knows how; until then it sees one line of text naming each file.',
   '',
   '  /help          this',
-  '  /generations   the generations this individual has lived in',
+  '  /image <path>  attach an image file from your machine',
   '  /tools         show or hide what each tool call returned (also Tab)',
-  '  /mouse         let the mouse wheel scroll here, or give the mouse back to the terminal',
+  '  /generations   the generations this individual has lived in',
+  '  /history       print the earlier conversation that was read from the journal',
   '  /plain         how to get the plain text client',
   '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
   '',
-  'Leaving ends this screen only. Nothing here stops the agent or changes it.',
+  'Leaving ends this client only. Nothing here stops the agent or changes it.',
   '',
-  'The word at the top right says where the agent stands: waking (its first start, before its first words), thinking, running <tool>, molting (it asked for a new body and the kernel is checking it), starting (between two runs), resting, not running, and waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
+  'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the kernel is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
 ];
 
 /**
@@ -78,21 +97,76 @@ export function lineage(path: string, upTo: number): Pick<Standing, 'spoke' | 'k
   return { spoke: s.spoke, known: s.known, current: s.current };
 }
 
+const tidyName = (raw: string | undefined): string | null => {
+  const name = (raw ?? '').replace(/[*_`#[\]]/g, '').replace(/\s+/g, ' ').replace(/[.,;:!]+$/, '').trim();
+  return name !== '' && [...name].length <= 32 ? name : null;
+};
+const nameLine = (text: string): string | null => tidyName(/^[ \t]*(?:[-*+][ \t]+)?[*_]{0,2}(?:my[ \t]+)?(?:name|имя)[*_]{0,2}[ \t]*[:：—–-][ \t]*(.+)$/imu.exec(text)?.[1]);
+/** A first-level heading is taken for a name only when it could be one: a word or two, and not the page's own title. */
+const nameHeading = (text: string): string | null => {
+  const heading = /^#[ \t]+(.+?)[ \t]*#*[ \t]*$/m.exec(text);
+  if (!heading || /^(soul(\.md)?|identity|who i am|about me|me|notes?|душа|кто я)$/iu.test(heading[1]!.trim())) return null;
+  const name = tidyName(heading[1]);
+  return name !== null && name.split(' ').length <= 2 ? name : null;
+};
+
 /**
- * The individual's own name, from its SOUL.md: a line `name: ...` (or `имя: ...`), else the first
- * first-level heading unless that is only the page's title. Null when neither gives a short name.
+ * The individual's own name, from one file of its soul: a line `name: ...` (or `имя: ...`), else
+ * the first first-level heading unless that is only the page's title. Null when neither gives a
+ * short name.
  */
 export function soulName(text: string): string | null {
   const t = clean(text);
-  const tidy = (raw: string | undefined): string | null => {
-    const name = (raw ?? '').replace(/[*_`#[\]]/g, '').replace(/\s+/g, ' ').replace(/[.,;:!]+$/, '').trim();
-    return name !== '' && [...name].length <= 32 ? name : null;
-  };
-  const line = /^[ \t]*(?:[-*+][ \t]+)?[*_]{0,2}(?:my[ \t]+)?(?:name|имя)[*_]{0,2}[ \t]*[:：—–-][ \t]*(.+)$/imu.exec(t);
-  if (line) return tidy(line[1]);
-  const heading = /^#[ \t]+(.+?)[ \t]*#*[ \t]*$/m.exec(t);
-  if (heading && !/^(soul(\.md)?|who i am|about me|me|душа|кто я)$/iu.test(heading[1]!.trim())) return tidy(heading[1]);
+  return /^[ \t]*(?:[-*+][ \t]+)?[*_]{0,2}(?:my[ \t]+)?(?:name|имя)[*_]{0,2}[ \t]*[:：—–-]/imu.test(t) ? nameLine(t) : nameHeading(t);
+}
+
+/**
+ * The name the soul gives, whatever its files are called: every `.md` file there is looked at,
+ * `SOUL.md` and `identity.md` first. A `name:` line in any of them wins over a heading in any.
+ */
+export function soulNameIn(texts: string[]): string | null {
+  const cleaned = texts.map(clean);
+  for (const text of cleaned) {
+    const name = nameLine(text);
+    if (name !== null) return name;
+  }
+  for (const text of cleaned) {
+    const name = nameHeading(text);
+    if (name !== null) return name;
+  }
   return null;
+}
+
+/** The soul's `.md` files, the likeliest to name the individual first, with the newest change among them. */
+function soulFiles(dir: string): { files: string[]; stamp: string } {
+  try {
+    const rank = (name: string): number => (/^soul\.md$/i.test(name) ? 0 : /^identity\.md$/i.test(name) ? 1 : 2);
+    const names = readdirSync(dir).filter((name) => /\.md$/i.test(name)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).slice(0, 24);
+    const files = names.map((name) => join(dir, name));
+    return { files, stamp: files.map((file) => `${file}:${statSync(file).mtimeMs}`).join('|') };
+  } catch {
+    return { files: [], stamp: '' };
+  }
+}
+
+const ordinal = (n: number): string => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+
+/** How long ago, in the one unit that matters. */
+export function ago(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.floor(min / 60)} h ago`;
+  return `${Math.floor(min / 60 / 24)} days ago`;
+}
+
+/** A value from `.env`, for the few settings worth showing where the environment does not have them. Never a secret. */
+function envLine(root: string, key: 'TENERAL_MODEL' | 'TENERAL_PROVIDER' | 'TENERAL_HEARTBEAT_MINUTES'): string | undefined {
+  try {
+    return new RegExp(`^${key}=(.*)$`, 'm').exec(readFileSync(join(root, '.env'), 'utf8'))?.[1]?.trim();
+  } catch {
+    return undefined;
+  }
 }
 
 export interface TalkScreenOptions {
@@ -108,27 +182,42 @@ export interface TalkScreenOptions {
   lifelineMs?: number;
 }
 
+/** Something asked of the helper on the owner's machine, and what to do with the answer. */
+interface Ask {
+  n: number | null;
+  /** `key`: Ctrl+V. `paste`: a path was pasted. `enter`: a path was the whole line sent. `command`: /image. */
+  origin: 'key' | 'paste' | 'enter' | 'command';
+  path: string;
+  /** What was pasted or typed, to put back as text when it turns out to be no image. */
+  raw: string;
+}
+
 export class TalkScreen {
-  private readonly screen: Screen;
+  private readonly inline: Inline;
   private readonly keys = new KeyParser();
   private readonly transcript = new Transcript();
-  private readonly scroller = new Scroller();
+  private readonly clip: Clip;
   private readonly now: () => number;
   private readonly alive: () => Alive;
+  private readonly g: Glyphs;
+  private readonly root: string;
   private follower!: Follower;
   private shown = new Set<string>();
   private standing: Standing = UNBORN;
   private edit: Edit = EMPTY;
-  /** A page shown over the transcript: its title, its text by paragraphs, and how far it is scrolled. */
-  private overlay: { title: string; text: string[]; top: number } | null = null;
-  /** The note that nothing has been said yet, for as long as that is so. */
-  private silence: Entry | null = null;
+  /** The last entry printed, and the id of the last one from the journal that was: everything up to it is in the scrollback. */
+  private last: Entry | null = null;
+  private printed = 0;
+  /** Entries read from the journal on attaching and not shown: `/history` prints them. */
+  private earlier: Entry[] = [];
   private tools = false;
-  /** Off by default: while the wheel is read, the terminal cannot select and copy text. */
-  private mouse = false;
   private name: string | null = null;
-  private soulStamp = -1;
+  private soulStamp = '?';
   private ticks = 0;
+  private readonly asks: Ask[] = [];
+  /** Keys pressed while a line that may be a file's path is looked up: they are taken once it is known. */
+  private held: Key[] | null = null;
+  private readonly images = new Map<string, Attachment | null>();
   /** What the last frame was made from, to tell whether another is due. */
   private painted = '';
   private dirty = true;
@@ -139,11 +228,15 @@ export class TalkScreen {
   closed = false;
 
   constructor(private readonly o: TalkScreenOptions) {
-    this.screen = new Screen(o.term);
+    this.inline = new Inline(o.term);
+    this.g = glyphs(o.term.caps.utf8);
     // A terminal that went away without a word: the client ends, as if the owner had left.
     this.lifeline = new Lifeline(o.term, () => this.close(0), o.lifelineMs);
     this.now = o.now ?? Date.now;
     const p = o.paths;
+    this.root = dirname(dirname(p.journal));
+    const id = o.env.TENERAL_CLIP ?? '';
+    this.clip = new Clip(/^[A-Za-z0-9_-]{1,64}$/.test(id) ? join(p.owner, '.clip', id) : null, this.now);
     this.alive = o.alive ?? (() => {
       try {
         return { supervisor: holder(p.lock) !== null, body: existsSync(p.child) };
@@ -153,7 +246,24 @@ export class TalkScreen {
     });
   }
 
-  /** Take the screen and show where things stand. */
+  private get who(): string {
+    return this.name ?? 'the agent';
+  }
+
+  private get look(): Look {
+    return { g: this.g, tools: this.tools, image: (path) => this.image(path) };
+  }
+
+  /** What a kept image is; looked at once. */
+  private image(path: string): Attachment | null {
+    if (!this.images.has(path)) {
+      if (this.images.size > 500) this.images.clear();
+      this.images.set(path, look(this.root, path));
+    }
+    return this.images.get(path) ?? null;
+  }
+
+  /** Print the welcome panel, where things stand and the recent history, then keep the live region under it. */
   open(): void {
     const { journal } = this.o.paths;
     const size = journalSize(journal);
@@ -164,12 +274,9 @@ export class TalkScreen {
     } catch { /* a journal that cannot be read has no history to show */ }
     if (from > 0) {
       this.standing = { ...UNBORN, ...lineage(journal, from) };
-      this.transcript.older();
+      this.transcript.truncated = true;
     }
-    if (before.length === 0) this.silence = this.transcript.note('Nothing has been said yet.');
     for (const e of before) this.take(e, false);
-    // Under the history, where it is read on attaching, not above it and out of view.
-    if (this.o.banner) this.transcript.note(this.o.banner);
     // That read may have gone past `size`, where the follower starts.
     this.shown = new Set(before.map((e) => e.id));
     this.follower = new Follower(journal, size);
@@ -179,12 +286,32 @@ export class TalkScreen {
         this.standing = { ...this.standing, current, known: this.standing.known.includes(current) ? this.standing.known : [...this.standing.known, current] };
       } catch { /* never started here */ }
     }
-    const said = this.transcript.entries.flatMap((e) => (e.kind === 'owner' ? [e.text] : []));
-    this.edit = said.reduce((e, text) => sent(e, text), EMPTY);
-    this.screen.enter(this.mouse);
+    const entries = this.transcript.entries;
+    this.edit = entries.reduce((e, entry) => (entry.kind === 'owner' && entry.text !== '' ? sent(e, entry.text) : e), EMPTY);
+    this.readName();
+
+    // The last few things the owner said and what came of them; the rest stays in the journal.
+    let start = entries.length;
+    for (let said = 0; start > 0 && entries.length - start < SHOWN_ENTRIES && said < SHOWN_EXCHANGES;) {
+      start -= 1;
+      if (entries[start]!.kind === 'owner') said += 1;
+    }
+    this.earlier = entries.slice(0, start);
+    this.printed = start > 0 ? entries[start - 1]!.id : 0;
+
+    this.inline.start();
+    const max = this.inline.width;
+    this.inline.print(welcome({ name: this.name, facts: this.facts() }, max, this.g));
+    // Where things stand, on its own; then what else is worth knowing, together.
+    this.statusLines(max).forEach((rows, i) => this.inline.print(i < 2 ? [[], ...rows] : rows));
+    if (entries.length === 0) this.inline.print([[], [{ text: '  Nothing has been said yet.', style: { fg: 'dim' } }]]);
     this.stops.push(
       this.o.term.listen((text) => this.input(text), () => this.close(0)),
-      this.o.term.onResize(() => { this.dirty = true; this.paint(); }),
+      this.o.term.onResize(() => {
+        this.inline.invalidate();
+        this.dirty = true;
+        this.paint();
+      }),
     );
     this.tick();
   }
@@ -201,28 +328,104 @@ export class TalkScreen {
     });
   }
 
-  /** Give the terminal back. Safe to call twice, and from a signal handler. */
+  /** Take the live region away and give the terminal back: the conversation stays in its scrollback. Safe to call twice, and from a signal handler. */
   close(status = 0): void {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.escape);
     for (const stop of this.stops) stop();
-    this.screen.leave();
+    this.inline.print([[], [{ text: `  You left. ${this.who === 'the agent' ? 'The agent' : this.who} goes on; ./box talk attaches again.`, style: { fg: 'dim' } }]]);
+    this.inline.stop();
     this.finish?.(status);
   }
 
-  private take(e: JournalEvent, live: boolean): void {
-    if (this.silence !== null) {
-      this.transcript.drop(this.silence);
-      this.silence = null;
+  // --- what there is to say on attaching ---
+
+  private facts(): [string, string][] {
+    const { paths: p, env } = this.o;
+    const s = this.standing;
+    const sep = ` ${this.g.sep} `;
+    const facts: [string, string][] = [['Directory', clean(env.TENERAL_HOST_DIR || p.root)]];
+    let id = '';
+    try {
+      id = clean(readFileSync(join(p.root, '.teneral', 'id'), 'utf8')).trim().slice(0, 8);
+    } catch { /* never started here */ }
+    if (id !== '') facts.push(['Individual', id]);
+    const at = s.current === null ? 0 : s.known.indexOf(s.current) + 1;
+    if (s.current !== null) {
+      const lived = s.known.length;
+      facts.push(['Generation', [...(at > 0 ? [ordinal(at)] : []), shortSha(s.current), ...(lived > 0 ? [`has lived in ${lived}`] : [])].join(sep)]);
     }
+    const model = clean(env.TENERAL_MODEL ?? '').slice(0, 60);
+    const provider = providers.providerFor(env.TENERAL_PROVIDER).name.replace(/\s*\(.*\)$/, '').replace(/^Another /, '');
+    facts.push(['Model', model === '' ? `not set${sep}${provider}` : `${model}${sep}${provider}`]);
+    facts.push(['Version', providers.userAgent().replace('/', ' ')]);
+    const born = this.born();
+    if (born !== null) facts.push(['Born', `${new Date(born).toISOString().slice(0, 16).replace('T', ' ')} UTC${sep}${ago(this.now() - born)}`]);
+    const minutes = Number(env.TENERAL_HEARTBEAT_MINUTES ?? '30');
+    const clock = minutes > 0 ? `clock every ${minutes} min` : minutes === 0 ? 'clock off' : null;
+    facts.push(['Sensors', [...(clock ? [clock] : []), 'inbox', 'your terminal'].join(sep)]);
+    try {
+      const peers = Object.keys(JSON.parse(readFileSync(p.peers, 'utf8')) as Record<string, unknown>).map((name) => clean(name).slice(0, 24)).filter((name) => name !== '');
+      if (peers.length > 0) facts.push(['Peers', `${peers.slice(0, 6).join(', ')}${peers.length > 6 ? ` and ${peers.length - 6} more` : ''}`]);
+    } catch { /* no peers */ }
+    return facts;
+  }
+
+  /** When the first event was journaled, in ms; null for a journal without one. */
+  private born(): number | null {
+    try {
+      const fd = openSync(this.o.paths.journal, 'r');
+      try {
+        const head = Buffer.alloc(4096);
+        const n = readSync(fd, head, 0, head.length, 0);
+        const at = Date.parse(/"ts":"([^"]+)"/.exec(head.toString('utf8', 0, n).split('\n')[0] ?? '')?.[1] ?? '');
+        return Number.isNaN(at) ? null : at;
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  private statusLines(max: number): Line[][] {
+    const g = this.g;
+    const lines: Line[][] = [];
+    const word = stateWord(this.standing, this.alive());
+    const name: Span = { text: this.who === 'the agent' ? 'The agent' : this.who, style: { fg: 'brand', bold: true } };
+    if (word === 'not running') {
+      lines.push(status([{ text: 'Nobody is running here.', style: { fg: 'warn', bold: true } }], ['./box up starts the agent. What you send now waits for it.'], max, g, { fg: 'warn' }));
+    } else {
+      lines.push(status([name, { text: ' is awake', style: { bold: true } }, { text: ` ${g.sep} ${word}`, style: { fg: 'dim' } }], [`Leaving this client stops nothing: ${this.who} goes on.`], max, g));
+    }
+    if (this.o.banner) {
+      // The address stands out, and in one piece, so that it can be opened or copied.
+      const parts = clean(this.o.banner).split(/(https?:\/\/\S+)/);
+      lines.push(status(parts.filter((part) => part !== '').map((text): Span => (/^https?:\/\//.test(text) ? { text, style: { underline: true } } : { text })), [], max, g));
+    }
+    const tool = this.clip.tool();
+    const images = !this.clip.there ? 'Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./box talk.'
+      : tool === null || tool.startsWith('none') ? `Images: drag a file in, or /image <path>. Ctrl+V needs ${tool === 'none wayland' ? 'wl-clipboard' : tool === 'none x11' ? 'xclip' : 'a display'} on your machine.`
+        : 'Images: Ctrl+V attaches the clipboard\'s image; drag a file in, or /image <path>.';
+    lines.push(status([{ text: images, style: { fg: 'dim' } }], [], max, g, { fg: 'faint' }));
+    if (this.earlier.length > 0 || this.transcript.truncated) {
+      const what = this.earlier.length > 0 ? 'Showing the last of the conversation. /history prints what came before; ' : 'Earlier conversation is not shown: ';
+      lines.push(status([{ text: `${what}memory/journal.jsonl has all of it.`, style: { fg: 'dim' } }], [], max, g, { fg: 'faint' }));
+    }
+    return lines;
+  }
+
+  // --- the journal ---
+
+  private take(e: JournalEvent, live: boolean): void {
     this.transcript.add(e, this.standing, live);
     try {
       this.standing = stand(this.standing, e);
     } catch { /* an event of a shape nobody foresaw changes nothing */ }
   }
 
-  /** Look at the journal and at the records under `.teneral/` once, and paint if anything shows differently. */
+  /** Look at the journal, the helper's answers and the soul once, print what is finished, and paint if the live region shows differently. */
   tick(): void {
     if (this.closed) return;
     this.ticks += 1;
@@ -231,25 +434,67 @@ export class TalkScreen {
       this.take(e, true);
       this.dirty = true;
     }
+    this.answers();
     if (this.ticks % 8 === 1) this.readName();
     this.paint();
   }
 
   private readName(): void {
-    const file = join(this.o.paths.soul, 'SOUL.md');
-    let stamp = 0;
-    try {
-      stamp = statSync(file).mtimeMs;
-    } catch { /* no soul yet */ }
+    const { files, stamp } = soulFiles(this.o.paths.soul);
     if (stamp === this.soulStamp) return;
     this.soulStamp = stamp;
-    try {
-      this.name = stamp === 0 ? null : soulName(readFileSync(file, 'utf8').slice(0, 20_000));
-    } catch {
-      this.name = null;
+    const texts: string[] = [];
+    for (const file of files) {
+      try {
+        texts.push(readFileSync(file, 'utf8').slice(0, 20_000));
+      } catch { /* a file that went away */ }
     }
+    this.name = soulNameIn(texts);
     this.dirty = true;
   }
+
+  /** Print one entry above the live region, for good. */
+  private print(e: Entry): void {
+    const blank = this.last === null ? 1 : gap(this.last, e);
+    this.inline.print([...Array.from({ length: blank }, (): Line => []), ...entryRows(e, this.inline.width, this.look)]);
+    this.last = e;
+    this.dirty = true;
+  }
+
+  /** Something this client says itself: printed at once, whatever else is still under way. */
+  private say(text: string): void {
+    this.print({ kind: 'note', text, id: 0, rev: 0 });
+  }
+
+  private page(title: string, text: string[], tools?: Extract<Entry, { kind: 'tool' }>[]): void {
+    this.print({ kind: 'page', title, text, ...(tools ? { tools } : {}), id: 0, rev: 0 });
+  }
+
+  /**
+   * Print every entry that will not change any more, in the journal's order, and return the rest:
+   * from the first tool call still without its result on, and the owner's lines not yet journaled.
+   */
+  private settle(): Entry[] {
+    const pending: Entry[] = [];
+    const mine: Entry[] = [];
+    let blocked = false;
+    for (const e of this.transcript.entries) {
+      if (e.kind === 'owner' && e.pending) {
+        mine.push(e);
+      } else if (e.id <= this.printed) {
+        continue;
+      } else if (blocked || unfinished(e)) {
+        blocked = true;
+        pending.push(e);
+      } else {
+        this.print(e);
+        this.printed = e.id;
+      }
+    }
+    return [...pending, ...mine];
+  }
+
+  // --- keys ---
 
   private input(text: string): void {
     clearTimeout(this.escape);
@@ -264,15 +509,10 @@ export class TalkScreen {
   }
 
   /** For a caller that feeds keys itself: what is still held back counts as pressed. */
-  settle(): void {
+  settleKeys(): void {
     clearTimeout(this.escape);
     for (const key of this.keys.flush()) this.key(key);
     this.paint();
-  }
-
-  private height(): number {
-    const { cols, rows } = this.o.term.size();
-    return regions(cols, rows, this.edit.text, this.edit.cursor).height;
   }
 
   private key(key: Key): void {
@@ -281,76 +521,96 @@ export class TalkScreen {
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
     if (ctrl('c')) return this.close(0);
-    if (this.overlay !== null) {
-      // The scrolling keys move it; any other key puts it away.
-      const by = key.kind === 'wheel' ? (key.up ? -3 : 3)
-        : key.kind !== 'key' ? null
-          : key.name === 'up' ? -1 : key.name === 'down' ? 1 : key.name === 'pageup' ? -this.height() : key.name === 'pagedown' ? this.height() : null;
-      if (by === null) this.overlay = null;
-      else this.overlay.top = Math.max(0, this.overlay.top + by);
+    if (this.held !== null) {
+      this.held.push(key);
       return;
     }
-    if (ctrl('d') && this.edit.text === '') return this.close(0);
-    if (key.kind === 'wheel') return this.scroller.scroll(key.up ? -3 : 3, this.height());
+    if (ctrl('d') && this.edit.text === '' && this.edit.chips.length === 0) return this.close(0);
+    if (ctrl('v')) return this.fromClipboard();
+    if (key.kind === 'paste' && this.pasted(key.text)) return;
     if (key.kind === 'key') {
-      const page = Math.max(1, this.height() - 2);
-      if (key.name === 'pageup') return this.scroller.scroll(-page, this.height());
-      if (key.name === 'pagedown') return this.scroller.scroll(page, this.height());
-      if (key.shift && key.name === 'up') return this.scroller.scroll(-1, this.height());
-      if (key.shift && key.name === 'down') return this.scroller.scroll(1, this.height());
-      if (key.name === 'tab') { this.tools = !this.tools; return; }
-      if (key.name === 'escape') return this.scroller.follow();
-      if (ctrl('l')) return this.screen.invalidate();
+      if (key.name === 'tab') return this.toggleTools();
+      if (ctrl('l')) return this.inline.invalidate();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
       if (key.name === 'enter' && !key.alt && !key.shift) return this.submit();
     }
     const next = edit(this.edit, key);
-    if (next === null) return;
-    this.edit = next;
-    if (key.kind !== 'key' || key.name === 'end') this.scroller.follow();
+    if (next !== null) this.edit = next;
   }
 
   private submit(): void {
     const text = this.edit.text.trim();
-    if (text === '') return;
-    this.scroller.follow();
-    if (/^\/[a-z]+$/.test(text)) {
+    if (text === '' && this.edit.chips.length === 0) return;
+    const command = /^(\/[a-z]+)(?:[ \t]+(.*))?$/.exec(text);
+    if (command && (command[2] === undefined || command[1] === '/image')) {
       this.edit = { ...this.edit, text: '', cursor: 0, at: null };
-      return this.command(text);
+      return this.command(command[1]!, (command[2] ?? '').trim());
     }
+    // A line that is a file's path and nothing else, as a terminal types it when a file is dragged in: an image is attached, anything else is sent as the words it is.
+    const paths = pathsIn(text);
+    if (paths !== null && paths.length === 1 && (this.clip.there || this.readable(paths[0]!))) {
+      this.held = [];
+      return this.bring(paths[0]!, text, 'enter');
+    }
+    this.send(text);
+  }
+
+  private send(text: string): void {
     try {
-      tell(this.o.paths.owner, text);
-      this.transcript.say(text);
+      const message = withMarkers(text, this.edit.chips.map((chip) => chip.path));
+      tell(this.o.paths.owner, message);
+      this.transcript.say(message);
       this.edit = sent(this.edit, text);
     } catch (err) {
-      this.transcript.note(`That line could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+      this.say(`That line could not be sent: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  private command(name: string): void {
+  private toggleTools(): void {
+    this.tools = !this.tools;
+    if (!this.tools) return this.say('What tool calls return is no longer shown. Tab or /tools shows it again.');
+    // What is printed stays as it is: the calls since the owner last spoke are shown once more, with what they returned.
+    const entries = this.transcript.entries.filter((e) => e.id <= this.printed);
+    const since = entries.findLastIndex((e) => e.kind === 'owner');
+    const calls = entries.slice(since + 1).filter((e): e is Extract<Entry, { kind: 'tool' }> => e.kind === 'tool').slice(-8);
+    const from = 'From now on each tool call is shown with a few rows of what it returned. Tab or /tools hides that again.';
+    if (calls.length === 0) return this.say(from);
+    this.page(`what the last ${calls.length === 1 ? 'tool call' : `${calls.length} tool calls`} returned`, [from, ''], calls);
+  }
+
+  private command(name: string, arg: string): void {
     switch (name) {
       case '/quit':
         return this.close(0);
       case '/help':
-        this.overlay = { title: 'teneral talk', text: HELP, top: 0 };
-        return;
+        return this.page('teneral talk', HELP);
       case '/tools':
-        this.tools = !this.tools;
+        return this.toggleTools();
+      case '/image': {
+        if (arg === '') return this.say('/image <path> attaches an image file from your machine: /image ~/Pictures/plan.png');
+        const paths = pathsIn(arg) ?? (arg.startsWith('/') || arg.startsWith('~/') ? [arg] : null);
+        if (paths === null) return this.say(`${arg} is not a path this client can ask for: give the whole path, from / or from ~/.`);
+        for (const path of paths) this.bring(path, path, 'command');
         return;
-      case '/mouse':
-        this.mouse = !this.mouse;
-        this.screen.setMouse(this.mouse);
-        this.transcript.note(this.mouse
-          ? 'The mouse wheel scrolls here again. Hold Shift to select text.'
-          : 'The mouse is the terminal\'s again: select and copy as usual. PageUp and PageDown still scroll; /mouse takes the wheel back.');
-        return;
+      }
       case '/plain':
-        this.overlay = { title: 'the plain client', top: 0, text: [
-          './box talk --plain is the same conversation as plain text, without this screen. With its input from a pipe, ./box talk is always plain:',
+        return this.page('the plain client', [
+          './box talk --plain is the same conversation as plain text. With its input from a pipe, ./box talk is always plain:',
           '',
           '    echo "What are you working on?" | ./box talk',
-        ] };
+        ]);
+      case '/history': {
+        if (this.earlier.length === 0) return this.say('Nothing earlier was read from the journal. memory/journal.jsonl has all of it.');
+        const earlier = this.earlier;
+        this.earlier = [];
+        this.page('earlier, from the journal', [`The ${earlier.length} entries before what was shown when you attached.${this.transcript.truncated ? ' What is older still is in memory/journal.jsonl.' : ''}`]);
+        const last = this.last;
+        this.last = null;
+        for (const e of earlier) if (!unfinished(e)) this.print(e);
+        this.page('back to now', []);
+        this.last = last ?? this.last;
         return;
+      }
       case '/generations': {
         let list: string;
         try {
@@ -360,75 +620,233 @@ export class TalkScreen {
         } catch (err) {
           list = `They could not be read: ${err instanceof Error ? err.message : String(err)}`;
         }
-        // The newest are at the end of the list, so that is where it opens.
-        this.overlay = { title: 'generations, oldest first', text: clean(list).split('\n'), top: Number.MAX_SAFE_INTEGER };
-        return;
+        return this.page('generations, oldest first', clean(list).split('\n'));
       }
       default:
-        this.transcript.note(`${name} is not a command here, and was not sent. /help lists them.`);
+        this.say(`${name} is not a command here, and was not sent. /help lists them.`);
     }
   }
 
+  // --- images ---
+
+  /** Whether this client can read `path` itself: it can when it runs on the owner's machine, or the file is in the repo. */
+  private readable(path: string): boolean {
+    try {
+      return statSync(this.local(path)).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private local(path: string): string {
+    return path.startsWith('~/') ? join(this.o.env.HOME ?? '/', path.slice(2)) : path;
+  }
+
+  private full(): boolean {
+    if (this.edit.chips.length + this.asks.filter((ask) => ask.origin === 'key' || ask.origin === 'command').length < IMAGES_PER_MESSAGE) return false;
+    this.say(`A message carries at most ${IMAGES_PER_MESSAGE} images. Backspace at the start of the line removes the last one.`);
+    return true;
+  }
+
+  /** Ctrl+V: the image in the clipboard of the owner's machine, which only the helper there can reach. */
+  private fromClipboard(): void {
+    if (this.full()) return;
+    const why = whyNoClipboard(this.clip.tool(), this.clip.there);
+    if (why !== null) return this.say(why);
+    const n = this.clip.ask('clipboard');
+    if (n === null) return this.say('The request could not be left for the helper on your machine. ./box talk starts a new one.');
+    this.asks.push({ n, origin: 'key', path: '', raw: '' });
+  }
+
+  /** A paste that names files and nothing else: each is asked for. Returns false for any other paste, which is text. */
+  private pasted(text: string): boolean {
+    const paths = pathsIn(text);
+    if (paths === null) return false;
+    if (!this.clip.there && !paths.some((path) => this.readable(path))) {
+      if (!paths.some(namedLikeImage)) return false;
+      this.say(`This client was started without its helper on your machine (./box talk starts one), so it cannot read ${paths.join(', ')} there. It was left as the text you pasted.`);
+      return false;
+    }
+    for (const path of paths) this.bring(path, paths.length === 1 ? text.trim() : path, 'paste');
+    return true;
+  }
+
+  /** Ask for the file at `path`: of the helper when there is one, else of this client's own disk. */
+  private bring(path: string, raw: string, origin: Ask['origin']): void {
+    const ask: Ask = { n: null, origin, path, raw };
+    if (origin === 'command' && this.full()) return;
+    if (this.clip.there) {
+      ask.n = this.clip.ask('file', path);
+      if (ask.n === null) return this.failed(ask, 'gone', '');
+      this.asks.push(ask);
+      return;
+    }
+    try {
+      const file = this.local(path);
+      const stat = statSync(file);
+      if (!stat.isFile()) return this.failed(ask, 'not-file', '');
+      if (stat.size > IMAGE_MAX_BYTES) return this.failed(ask, 'too-large', String(stat.size));
+      this.arrived(ask, readFileSync(file));
+    } catch (err) {
+      const here = 'This client was started without its helper on your machine (./box talk starts one), and the file is not where this client can read it.';
+      this.failed(ask, (err as { code?: unknown }).code === 'ENOENT' ? 'not-found' : 'not-file', here);
+    }
+  }
+
+  /** Take the helper's answers that have come. */
+  private answers(): void {
+    for (let i = 0; i < this.asks.length;) {
+      const ask = this.asks[i]!;
+      const reply = this.clip.answer(ask.n!);
+      if (reply === null) {
+        i += 1;
+        continue;
+      }
+      this.asks.splice(i, 1);
+      this.dirty = true;
+      if (reply.ok) this.arrived(ask, reply.bytes);
+      else this.failed(ask, reply.code, clean(reply.detail).slice(0, 300));
+    }
+  }
+
+  private arrived(ask: Ask, bytes: Uint8Array): void {
+    const what = ask.origin === 'key' ? 'The clipboard\'s image' : ask.path;
+    let image: Attachment;
+    try {
+      image = keep(this.root, bytes);
+    } catch (err) {
+      if (err instanceof NotKept && err.message.startsWith('it is not')) return this.failed(ask, 'not-image', '');
+      this.say(`${what} was not attached: ${err instanceof Error ? err.message : String(err)}.`);
+      return this.release(ask, false);
+    }
+    this.images.set(image.path, image);
+    if (this.edit.chips.some((chip) => chip.path === image.path)) this.say('That image is attached already.');
+    else if (this.edit.chips.length >= IMAGES_PER_MESSAGE) this.say(`A message carries at most ${IMAGES_PER_MESSAGE} images, so ${what === ask.path ? what : 'that one'} was not attached. Backspace at the start of the line removes the last one.`);
+    else this.edit = attach(this.edit, image);
+    this.release(ask, true);
+  }
+
+  private failed(ask: Ask, code: string, detail: string): void {
+    const limit = `the limit is ${IMAGE_MAX_BYTES / 1024 / 1024} MB for one image`;
+    const size = Number(detail) > 0 ? sizeText(Number(detail)) : 'too large';
+    if (ask.origin === 'key') {
+      this.say(code === 'no-image' ? 'There is no image in the clipboard.'
+        : code === 'too-large' ? `The clipboard's image is ${size}, and ${limit}. It was not attached.`
+          : code === 'no-tool' ? whyNoClipboard(this.clip.tool(), true) ?? 'Your machine has no tool to read the clipboard with.'
+            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./box talk again to start a new one.'
+              : `The clipboard could not be read${detail === '' ? '' : `: ${detail}`}.`);
+      return;
+    }
+    // A path that was pasted or sent as a line and is no picture is the owner's words after all; only what was named as a picture, or asked for outright, gets an explanation.
+    if (ask.origin === 'command' || namedLikeImage(ask.path)) {
+      this.say(code === 'not-found' ? `No such file${this.clip.there ? ' on your machine' : ''}: ${ask.path}${!this.clip.there && detail !== '' ? `. ${detail}` : ''}`
+        : code === 'not-image' ? `${ask.path} is not a PNG, JPEG, GIF or WebP image, so it was not attached.`
+          : code === 'too-large' ? `${ask.path} is ${size}, and ${limit}. It was not attached.`
+            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./box talk again to start a new one.'
+              : `${ask.path} is not a file that can be read.`);
+    }
+    this.release(ask, false);
+  }
+
+  /** What becomes of the text that named a file, once it is known whether the file was attached. */
+  private release(ask: Ask, attached: boolean): void {
+    if (ask.origin === 'paste' && !attached) this.edit = insert(this.edit, ask.raw);
+    if (ask.origin !== 'enter') return;
+    const held = this.held ?? [];
+    this.held = null;
+    if (attached) this.edit = { ...this.edit, text: '', cursor: 0, at: null };
+    else if (!namedLikeImage(ask.path)) this.send(this.edit.text.trim());
+    for (const key of held) this.key(key);
+  }
+
+  // --- the live region ---
+
   private paint(): void {
     if (this.closed) return;
+    const pending = this.settle();
     const { cols, rows } = this.o.term.size();
-    const g = glyphs(this.o.term.caps.utf8);
+    const g = this.g;
     const s = this.standing;
-    const alive = this.alive();
-    const word = stateWord(s, alive);
+    const word = stateWord(s, this.alive());
     const now = this.now();
-    // The line at the foot of the transcript while something is under way.
-    const active = ['waking', 'thinking', 'molting', 'starting'].includes(word) || word.startsWith('running ');
+    const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
-    const tool = word === 'waking' && s.tool !== null ? ` ${g.sep} running ${s.tool.name}` : '';
-    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${tool}|${this.name}|${s.current}`;
+    const tip = Math.floor(now / TIP_MS);
+    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
 
-    const tail: Line[] = active
-      ? [[], [{ text: `  ${g.spinner[spin]} `, style: { fg: 'accent' } }, { text: `${word}${tool}` }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }]]
-      : [];
-    const r = regions(cols, rows, this.edit.text, this.edit.cursor);
-    this.scroller.set(this.transcript.entries, tail, cols, { g, tools: this.tools });
-    let overlay: { title: string; rows: Line[]; top: number } | null = null;
-    if (this.overlay !== null) {
-      const laid = this.overlay.text.flatMap((text) => block(text, cols, undefined, 2));
-      this.overlay.top = Math.max(0, Math.min(this.overlay.top, laid.length - (r.height - 2)));
-      overlay = { title: this.overlay.title, rows: laid, top: this.overlay.top };
+    const max = this.inline.width;
+    const laid: Line[] = [];
+    let before: Entry | undefined;
+    for (const e of pending.slice(-PENDING_SHOWN)) {
+      laid.push(...Array.from({ length: gap(before, e) }, (): Line => []), ...entryRows(e, max, this.look));
+      before = e;
     }
-    const ordinal = s.current === null ? 0 : s.known.indexOf(s.current) + 1;
-    this.screen.paint(talkFrame({
+    const doing = word === 'waking' && s.tool !== null ? `waking ${g.sep} running ${s.tool.name}`
+      : s.tool !== null && isMutationTool(s.tool.name) && word.startsWith('running ') ? 'asking for a mutation' : word;
+    const activity: Line | null = active
+      ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }]
+      : null;
+
+    const model = clean(this.o.env.TENERAL_MODEL ?? '').slice(0, 40);
+    const effort = clean(this.o.env.TENERAL_REASONING_EFFORT ?? '').slice(0, 16);
+    const at = s.current === null ? 0 : s.known.indexOf(s.current) + 1;
+    const generation = s.current === null ? '' : `${at > 0 ? `gen ${at} ` : ''}${shortSha(s.current)}`;
+    const state = active ? '' : word;
+    const waiting = this.asks.length > 0 ? (this.asks.some((ask) => ask.origin === 'key') ? 'asking your machine for the clipboard\'s image' : 'asking your machine for the file') : '';
+    const chips = this.edit.chips.length;
+    const hint = waiting !== '' ? `${waiting} ${g.ellipsis}`
+      : chips > 0 ? `attached: ${this.edit.chips.map((_, i) => `image ${i + 1}`).join(', ')} ${g.sep} Backspace at the start removes the last` : '';
+    let context = '';
+    if (s.usage !== null) {
+      const window = (providers as { contextWindow?: unknown }).contextWindow;
+      let known: number | null = null;
+      try {
+        const said: unknown = typeof window === 'function' ? window(this.o.env.TENERAL_PROVIDER ?? providers.DEFAULT_PROVIDER, this.o.env.TENERAL_MODEL ?? '') : null;
+        known = typeof said === 'number' && said > 0 ? said : null;
+      } catch { /* not known */ }
+      context = contextUse(s.usage.input + s.usage.output, known);
+    }
+    this.inline.paint(liveRows({
       cols, rows, g,
-      name: this.name,
-      generation: ordinal > 0 ? `generation ${ordinal}` : '',
-      commit: shortSha(s.current),
-      model: clean(this.o.env.TENERAL_MODEL ?? '').slice(0, 40),
-      state: word,
-      transcript: this.scroller.rows(r.height),
-      more: !this.scroller.following,
-      overlay,
+      pending: laid,
+      activity,
       edit: this.edit,
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      tip: this.tips()[tip % this.tips().length]!,
+      context,
+      hint,
     }));
   }
-}
 
-/** The model's name where the environment does not have it: the one line of `.env` that names it. */
-function modelIn(root: string): string | undefined {
-  try {
-    return /^TENERAL_MODEL=(.*)$/m.exec(readFileSync(join(root, '.env'), 'utf8'))?.[1]?.trim();
-  } catch {
-    return undefined;
+  /** Things worth knowing, one at a time in the footer. Every one names a real key or command. */
+  private tips(): string[] {
+    return [
+      '/help lists the keys and commands',
+      'Alt+Enter starts a new line',
+      'Tab shows what the tool calls returned',
+      ...(this.clip.there ? ['Ctrl+V attaches the clipboard\'s image', 'drag an image file in to attach it'] : []),
+      '/image <path> attaches an image file',
+      'Up brings back what you sent before',
+      '/generations lists the bodies it has lived in',
+      '/history prints the earlier conversation',
+      `Ctrl-C leaves; ${this.who} goes on`,
+      './box talk --plain is this as plain text',
+    ];
   }
 }
 
 /**
- * The talk screen at the process's own terminal, until the owner leaves. However it ends (a key,
+ * The talk client at the process's own terminal, until the owner leaves. However it ends (a key,
  * a signal, the terminal closing, an error in this program) the terminal is given back first.
  */
 export async function runTalkScreen(p: Paths, env: Record<string, string | undefined>, banner: string | null): Promise<number> {
-  const app = new TalkScreen({ term: terminal(env), paths: p, env: { ...env, TENERAL_MODEL: env.TENERAL_MODEL ?? modelIn(p.root) }, banner });
+  const filled = { ...env };
+  for (const key of ['TENERAL_MODEL', 'TENERAL_PROVIDER', 'TENERAL_HEARTBEAT_MINUTES'] as const) filled[key] ??= envLine(p.root, key);
+  const app = new TalkScreen({ term: terminal(env), paths: p, env: filled, banner });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => app.close(0));
   const failed = (err: unknown) => {
     app.close(1);
@@ -437,7 +855,7 @@ export async function runTalkScreen(p: Paths, env: Record<string, string | undef
   };
   process.on('uncaughtException', failed);
   process.on('unhandledRejection', failed);
-  // Whatever else ends the process, the terminal is not left on the alternate screen.
+  // Whatever else ends the process, the live region is not left on the terminal.
   process.on('exit', () => app.close(0));
   return app.run();
 }

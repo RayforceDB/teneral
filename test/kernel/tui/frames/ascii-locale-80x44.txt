@@ -1,0 +1,49 @@
++-----------------------------------------------------------------------------+
+|                                                                             |
+|   \\  //   Talking with your teneral agent                                  |
+|    (oo)    Type to talk, Enter sends. /help lists the keys and commands.    |
+|    '::'                                                                     |
+|                                                                             |
+|   Directory    /home/owner/work/teneral                                     |
+|   Individual   5e1f0a9c                                                     |
+|   Generation   2nd | e5f6a7b | has lived in 2                               |
+|   Model        gpt-6.1-sol | OpenAI-compatible endpoint                     |
+|   Version      teneral 0.0.0                                                |
+|   Born         2027-01-15 08:00 UTC | just now                              |
+|   Sensors      clock every 30 min | inbox | your terminal                   |
+|                                                                             |
++-----------------------------------------------------------------------------+
+
+* The agent is awake | thinking
+  Leaving this client stops nothing: the agent goes on.
+
+* Images: Ctrl+V attaches the clipboard's image; drag a file in, or /image
+  <path>.
+
+  . the birth letter
+
+  - read  path: body/main.ts                                            ok 40ms
+  - read  path: body/loop.ts                                            ok 30ms
+  - read  path: body/tools.ts                                           ok 55ms
+  - bash  command: wc -l body/*.ts && cat BACKLOG.md | head -50         ok 1.9s
+
+  ------------------------
+
+* * one
+  * two
+
+  | quoted
+
+  | code
+
+  ------------------------------------------------
+
+| mutation accepted  a1b2c3d -> e5f6a7b
+
+| The agent is thinking | 0:01
++-----------------------------------------------------------------------------+
+| [image 1 | png | 64x48 | 29 B]                                              |
+| >                                                                           |
++-----------------------------------------------------------------------------+
+ gpt-6.1-sol | .../work/teneral | gen 2 e5f6a7b
+ attached: image 1 | Backspace at the start removes the last
