@@ -60,19 +60,19 @@ prepare() {
   # No -t when stdin is not a terminal, so this also works from a script or a service.
   if [ -t 0 ]; then tty=(--tty); fi
   # More options for `docker run`, split on spaces. Nothing here needs any; it is for an unusual
-  # host, or a test that has to reach a model server on the machine itself.
+  # host, a limit such as --memory or --pids-limit, or a test that has to reach a model server on
+  # the machine itself.
   if [ -n "${BOX_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$BOX_DOCKER_ARGS"; fi
 }
 
 # --init puts a small init at pid 1: it passes signals on to the kernel and reaps what the
 # agent's shell leaves behind.
+# No memory or process limit is set here; an owner who wants one passes it in BOX_DOCKER_ARGS.
 cage=(--init
   --env-file .env
   --volume "$PWD":/teneral
   --cap-drop ALL
-  --security-opt no-new-privileges
-  --pids-limit 512
-  --memory 4g)
+  --security-opt no-new-privileges)
 
 command="${1:-}"
 [ "$#" -eq 0 ] || shift
