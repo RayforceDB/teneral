@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Run teneral inside its container. The repo is the only thing it can see.
+#   ./box            the agent
+#   ./box <command>  that command instead, e.g. ./box bun test
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if [ ! -f .env ]; then
+  echo "No .env here. Copy .env.example to .env and fill it in." >&2
+  exit 1
+fi
+
+docker build --quiet --tag teneral \
+  --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >/dev/null
+
+# No -t when stdin is not a terminal, so the script also works from a service.
+# (The ${x[@]+...} form is for bash before 4.4, where an empty array counts as unset.)
+tty=()
+if [ -t 0 ]; then tty=(--tty); fi
+
+# Only the agent itself gets the name: a second one for this directory is then refused,
+# while a one-off command can still run beside it.
+name=()
+if [ "$#" -eq 0 ]; then name=(--name "teneral-$(basename "$PWD")"); fi
+
+# --init puts a small init at pid 1: it passes Ctrl-C and `docker stop` on to the kernel
+# and reaps what the agent's shell leaves behind.
+exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} --init \
+  ${name[@]+"${name[@]}"} \
+  --env-file .env \
+  --volume "$PWD":/teneral \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --memory 4g \
+  teneral "$@"

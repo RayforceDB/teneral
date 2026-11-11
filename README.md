@@ -53,13 +53,13 @@ Messages are not signed. The agent is told to treat them as untrusted and not to
 
 ## Run it
 
-Requires [Bun](https://bun.sh) and git.
+Requires Docker and git.
 
-    bun install
     cp .env.example .env    # fill in an OpenAI-compatible endpoint, key and model
-    bun start
+    ./box bun install
+    ./box
 
-Commit your changes before the first `bun start`: the kernel creates its worktrees from `HEAD`.
+Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
 
 Type to talk. `/quit` stops the agent; typed while it is working, it takes effect when the turn ends. Ctrl-C stops it without waiting.
 
@@ -73,13 +73,27 @@ Settings, in `.env`:
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. |
 
+Write values without quotes and without a comment after them: Docker passes the whole line on as written.
+
 To start over as a new individual, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`.
 
-**The agent runs shell commands with your privileges and there is no sandbox.** Run it in a container or on a machine where that is acceptable.
+### Why a container
+
+The agent runs shell commands. `./box` builds a small image (Bun, git, a few standard tools) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped, at most 512 processes and 4 GB of memory. Anything it writes outside this directory is gone when the container exits. Run it that way.
+
+What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key, it could send elsewhere.
+
+`./box <command>` runs that command in the same container instead of the agent: `./box bun test`, `./box bash`. Ctrl-C, `/quit` and `docker stop` all end the agent and remove the container.
+
+An individual lives where it was born. Worktrees record absolute paths, and inside the container this directory is `/teneral`, so an agent first started with `./box` must always be started with `./box`. For the same reason, do not run `git worktree prune` here from outside the container while that individual exists: git would not find `/teneral` and would forget its worktrees.
+
+A peer's inbox in `soul/peers.json` has to be a path the agent can see, and in the container that means inside this directory. Dropping files into `inbox/` from outside works as it is.
+
+To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. There the agent's shell has everything your account has.
 
 ## What it does not do yet
 
-- **The kernel guards against mistakes, not against intent.** The body has a shell and runs as the same user as the kernel. A molt cannot change the kernel, but a shell command can edit `kernel/`, the journal or `.teneral/state.json` directly. Nothing here stops a body that goes around the molt path.
+- **The kernel guards against mistakes, not against intent.** The body has a shell and runs as the same user as the kernel, in the same container. A molt cannot change the kernel, but a shell command can edit `kernel/`, the journal or `.teneral/state.json` directly. Nothing here stops a body that goes around the molt path.
 - **Messages between agents are unsigned.** The `from` on a message is whatever the sender wrote.
 - **Nothing measures whether a generation is better.** The checks show it is not broken: it type-checks, its tests pass, it starts. Whether it is an improvement is for you and the agent to judge from the journal.
 
