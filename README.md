@@ -23,25 +23,25 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 3. The kernel checks the commit:
    - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused;
    - `body/` may hold only regular files, and no more than 200,000 bytes of them;
-   - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run without the agent's environment, so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
-   - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
+   - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
+   - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
 4. If a check fails, the same generation starts again and is told which check and what it printed. If all pass, the kernel switches to the new commit and starts it.
-5. A new generation has 60 seconds to report that it is ready, and 10 minutes to produce its first reply: the note about its promotion is waiting for it, so a working one answers. If it exits abnormally or is not ready in time, or is alive but silent after those 10 minutes, or later crashes three times in a row without producing a reply, or needs more than ten restarts, the kernel returns to the generation before it and tells the agent why, with the end of what the failed generation wrote to stderr. There is one step back, not a history: if that generation fails too, or there is none because this is the first, the kernel stops.
+5. A new generation has 60 seconds to report that it is ready, and 10 minutes to produce its first reply: the note about its promotion is waiting for it, so a working one answers. If it exits abnormally before it is ready, or is not ready in time, or is alive but silent after those 10 minutes, or later crashes three times in a row without producing a reply, or needs more than ten restarts, the kernel returns to the generation before it and tells the agent why, with the end of what the failed generation wrote to stderr. There is one step back, not a history: if that generation fails too, or there is none because this is the first, the kernel stops.
 
 Around that:
 
 - Only a generation that became ready may molt, so the one kept for rollback is always one that started.
-- The 10 minutes apply until a promoted generation's first reply and never after. An outage of the model does not roll back a generation that has already answered once.
+- The 10 minutes apply until a promoted generation's first reply and never after. An outage of the model does not roll back a generation that has already answered once. Neither does anything else: a generation that answers once and then stays alive without answering again is not caught, and you will only see it as silence in `./box talk`.
 - A restart after a crash waits a second longer for each crash in a row. The ten restarts are given back when a run lasted an hour before it failed.
 - A rejected molt is followed by a wait as well. Asking for a different commit each time is ordinary work and is never limited. Asking for the same commit and having it rejected three times in a row stops the supervisor and leaves it to you.
-- Every molt request gets an answer. If the kernel is stopped while the checks run (`./box down`, Ctrl-C in `./box fg`), the running check is killed and the kernel exits at once; at the next start the agent is told that nothing was decided and to ask again. The same happens when the agent's process dies between asking and exiting.
+- Every molt request gets an answer. If the kernel is stopped while the checks run (`./box down`, Ctrl-C in `./box fg`), the running check is killed and the kernel exits within a few seconds; at the next start the agent is told that nothing was decided and to ask again. The same happens when the agent's process dies between asking and exiting.
 - A lock file keeps a second supervisor from running the same checkout, and a body left behind by a supervisor that was killed is stopped before a new one starts.
 
-The agent is woken by sensors, not only by you typing: your lines are one, a clock is another (every 30 minutes unless you change it), its inbox is a third, and it can build more. It runs in the background, so the clock and the inbox reach it whether or not a terminal is open.
+The agent is woken by sensors, not only by you typing: your lines are one, a clock is another (every 30 minutes unless you change it, and silent until the soul is written), its inbox is a third, and it can build more. It runs in the background, so the clock and the inbox reach it whether or not a terminal is open.
 
 ## Birth
 
-The first time you start it, the agent speaks first. Its journal is empty, so the first thing in it becomes the letter in `BIRTH.md`. The letter asks the agent to read its own code, tell you what it found, and ask who it should be for you: its name, what you want from it, how much initiative to take. Then it writes its soul, `soul/SOUL.md` and `soul/OWNER.md`, and from then on those files are part of every turn. They are the agent's own to revise, and they are never committed.
+The first time you start it, the agent speaks first. Its journal holds no message yet, so the first one in it becomes the letter in `BIRTH.md`. The letter asks the agent to read its own code, tell you what it found, and ask who it should be for you: its name, what you want from it, how much initiative to take. Then it writes its soul, `soul/SOUL.md` and `soul/OWNER.md`, and from then on those files are part of every turn. They are the agent's own to revise, and they are never committed.
 
 If you want a different beginning, edit `BIRTH.md` and commit it before the first start.
 
@@ -81,7 +81,7 @@ Commit your changes before the first start: the kernel creates its worktrees fro
 
 Then it shows no history. It sends one line at a time: a line goes out when the agent is at rest, and the next line, or the exit, waits until the agent has finished its reply to that one. The exit status is 0 after the reply to the last line. If nothing is journaled for 300 seconds while a line waits, it gives up with status 1; `./box talk --wait 60` changes that time. With no lines at all (`./box talk </dev/null`) it prints the last few exchanges and exits.
 
-`./box down` stops the agent: the kernel is asked to stop, stops the agent and exits, and the container is removed. Nothing is lost by it. The journal, the soul and the code are in this directory, and `./box up` goes on from there.
+`./box down` stops the agent: the kernel is asked to stop, stops the agent and exits, and the container is removed. A terminal attached with `./box talk` ends with it. Nothing is lost by it. The journal, the soul and the code are in this directory, and `./box up` goes on from there.
 
 `./box logs` follows what the container prints: the kernel's `[teneral]` lines, `[thinking]` and `[tool]` as the agent works, and its replies.
 
@@ -97,7 +97,7 @@ Settings, in `.env`:
 | `TENERAL_API_KEY` | The key for it. Required. |
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
-| `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. |
+| `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
 
 Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
 
@@ -115,7 +115,7 @@ The agent runs shell commands. `./box` builds a small image (Bun, git, a few sta
 
 What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. It sets no limit on memory or on the number of processes, so a runaway command inside the container can exhaust the machine's memory or process table; `BOX_DOCKER_ARGS="--memory 4g --pids-limit 512"` puts limits back if you want them. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key, it could send elsewhere.
 
-`./box run <command>` runs that command in a fresh container of the same kind instead of the agent: `./box run bun test`, `./box run bash`. It can run beside the agent. The agent's own container is named `teneral-` and the name of this directory, so a second agent for the same directory is refused. `BOX_DOCKER_ARGS` in the environment adds options to `docker run`, for a host that needs them or for limits you want; a normal run needs none.
+`./box run <command>` runs that command in a fresh container of the same kind instead of the agent: `./box run bun test`, `./box run bash`. It can run beside the agent. The agent's own container is named `teneral-` and the name of this directory, so a second agent for the same directory, or for another directory of the same name, is refused. `BOX_DOCKER_ARGS` in the environment adds options to `docker run`, for a host that needs them or for limits you want; a normal run needs none.
 
 Worktrees record absolute paths, and inside the container this directory is `/teneral`. The kernel mends those records at every start, so this directory can be moved while the agent is down, and an individual raised with `./box` can later be started without it, or the other way round. What it cannot mend is a record that is gone: do not run `git worktree prune` here from outside the container while the individual's paths are the container's. Git would not find `/teneral` and would forget its worktrees. (`git gc` does the same to worktrees it has not found for three months; the kernel switches that off in this repository's git config, with `gc.worktreePruneExpire never`.)
 
