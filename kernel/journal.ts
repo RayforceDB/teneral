@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, writeSync,
+  closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -66,10 +66,9 @@ function isEventShaped(value: unknown): value is JournalEvent {
     && typeof e.ts === 'string' && typeof e.v === 'number';
 }
 
-export function readEvents(path: string): JournalEvent[] {
-  if (!existsSync(path)) return [];
+function parseLines(text: string): JournalEvent[] {
   const events: JournalEvent[] = [];
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (line === '') continue;
     let parsed: unknown;
     try {
@@ -82,4 +81,46 @@ export function readEvents(path: string): JournalEvent[] {
     if (isEventShaped(parsed)) events.push(parsed);
   }
   return events;
+}
+
+export function readEvents(path: string): JournalEvent[] {
+  if (!existsSync(path)) return [];
+  return parseLines(readFileSync(path, 'utf8'));
+}
+
+/** Bytes in the journal now: the offset at which the next event will start. 0 when there is no journal. */
+export function journalSize(path: string): number {
+  return existsSync(path) ? statSync(path).size : 0;
+}
+
+/**
+ * The events appended at or after `byteOffset`, without reading what came before.
+ * An offset inside a line skips the rest of that line: only whole lines are parsed.
+ */
+export function readEventsFrom(path: string, byteOffset: number): JournalEvent[] {
+  if (!existsSync(path)) return [];
+  const fd = openSync(path, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, Math.floor(byteOffset));
+    if (start >= size) return [];
+    // One byte earlier than asked, to see whether the offset is the start of a line.
+    const from = Math.max(0, start - 1);
+    const bytes = Buffer.alloc(size - from);
+    let filled = 0;
+    while (filled < bytes.length) {
+      const n = readSync(fd, bytes, filled, bytes.length - filled, from + filled);
+      if (n === 0) break;
+      filled += n;
+    }
+    let begin = start - from;
+    if (start > 0 && bytes[0] !== 0x0a) {
+      const newline = bytes.indexOf(0x0a, begin);
+      if (newline === -1) return [];
+      begin = newline + 1;
+    }
+    return parseLines(bytes.toString('utf8', begin, filled));
+  } finally {
+    closeSync(fd);
+  }
 }

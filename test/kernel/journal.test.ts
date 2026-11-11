@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test';
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { appendEvent, readEvents, SCHEMA_VERSION } from '../../kernel/journal';
+import {
+  appendEvent, journalSize, readEvents, readEventsFrom, SCHEMA_VERSION,
+} from '../../kernel/journal';
 
 function tmpJournal(): string {
   return join(mkdtempSync(join(tmpdir(), 'teneral-journal-')), 'data', 'journal.jsonl');
@@ -75,4 +77,48 @@ test('a torn tail with no later append reads as just the earlier events', () => 
   appendFileSync(path, '{"v":1,"type":"stim');
 
   expect(readEvents(path)).toEqual([first, second]);
+});
+
+test('a missing journal has size 0 and nothing to read from any offset', () => {
+  const path = tmpJournal();
+  expect(journalSize(path)).toBe(0);
+  expect(readEventsFrom(path, 0)).toEqual([]);
+  expect(readEventsFrom(path, 100)).toEqual([]);
+});
+
+test('reading from an offset returns only what was appended after it', () => {
+  const path = tmpJournal();
+  appendEvent(path, 'gen-a', { type: 'stimulus', source: 'terminal', text: 'héllo' });
+  const mark = journalSize(path);
+  expect(readEventsFrom(path, mark)).toEqual([]);
+  const second = appendEvent(path, 'gen-a', { type: 'assistant', text: 'hi', toolCalls: [] });
+  const third = appendEvent(path, 'gen-a', { type: 'stimulus', source: 'clock', text: 'tick' });
+
+  expect(readEventsFrom(path, mark)).toEqual([second, third]);
+  expect(readEventsFrom(path, 0)).toEqual(readEvents(path));
+  expect(readEventsFrom(path, journalSize(path))).toEqual([]);
+  expect(readEventsFrom(path, journalSize(path) + 10)).toEqual([]);
+});
+
+test('an offset in the middle of a line skips the rest of that line', () => {
+  const path = tmpJournal();
+  // The nested object means a cut inside the first line can leave a tail that is itself event-shaped JSON.
+  const inner = { type: 'stimulus', id: 'forged', gen: 'g', ts: 't', v: 1 };
+  appendEvent(path, 'gen-a', { type: 'tool.intent', callId: 'c', name: 'n', args: [inner] });
+  const second = appendEvent(path, 'gen-a', { type: 'stimulus', source: 'clock', text: 'tick' });
+  const firstLineLength = journalSize(path) - Buffer.byteLength(`${JSON.stringify(second)}\n`);
+
+  for (let offset = 1; offset < firstLineLength; offset++) {
+    expect(readEventsFrom(path, offset)).toEqual([second]);
+  }
+  expect(readEventsFrom(path, firstLineLength)).toEqual([second]);
+});
+
+test('an offset at the end of a torn line reads the events appended after it', () => {
+  const path = tmpJournal();
+  appendEvent(path, 'gen-a', { type: 'stimulus', source: 'terminal', text: 'one' });
+  appendFileSync(path, '{"type":"stimulus","te');
+  const mark = journalSize(path);
+  const next = appendEvent(path, 'gen-a', { type: 'stimulus', source: 'terminal', text: 'two' });
+  expect(readEventsFrom(path, mark)).toEqual([next]);
 });
