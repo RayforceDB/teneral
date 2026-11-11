@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBash, TOOLS, type ToolContext } from '../../body/tools';
@@ -52,10 +52,12 @@ test('a missing argument is refused by name', async () => {
 
 test('long output is cut with a note saying how much is missing', async () => {
   const ctx = context(mkdtempSync(join(tmpdir(), 'teneral-ws-')));
-  await tool('write').run({ path: 'big.txt', content: 'x'.repeat(30_000) }, ctx);
+  await tool('write').run({ path: 'big.txt', content: `HEAD${'x'.repeat(30_000)}TAIL` }, ctx);
   const out = await tool('read').run({ path: 'big.txt' }, ctx);
   expect(out.length).toBeLessThan(21_000);
-  expect(out).toContain('10000 more characters');
+  expect(out).toContain('[10008 characters dropped here]');
+  expect(out.startsWith('HEADxxx')).toBe(true);
+  expect(out.endsWith('xxxTAIL')).toBe(true);
 });
 
 test('molt commits the workspace, journals the request and marks the context', async () => {
@@ -106,10 +108,64 @@ test('edit with no new text is refused before the file is touched', async () => 
   expect(readFileSync(join(ctx.workspace, 'f.txt'), 'utf8')).toBe('one');
 });
 
-test('a command that outlives the limit is killed and reported as timed out, with what it printed', () => {
-  const out = runBash('echo before; sleep 5; echo late', mkdtempSync(join(tmpdir(), 'teneral-ws-')), 300);
+test('a command that outlives the limit is killed and reported as timed out, with what it printed', async () => {
+  const out = await runBash('echo before; sleep 5; echo late', mkdtempSync(join(tmpdir(), 'teneral-ws-')), 300);
   expect(out).toContain('timed out');
   expect(out).toContain('before');
   expect(out).not.toContain('late');
   expect(out).not.toContain('null');
+});
+
+test('text at the limit is returned whole', async () => {
+  const ctx = context(mkdtempSync(join(tmpdir(), 'teneral-ws-')));
+  await tool('write').run({ path: 'fits.txt', content: 'y'.repeat(20_000) }, ctx);
+  expect(await tool('read').run({ path: 'fits.txt' }, ctx)).toBe('y'.repeat(20_000));
+});
+
+test('the process keeps running while a command runs', async () => {
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 20);
+  try {
+    expect(await runBash('sleep 0.4; echo slept', mkdtempSync(join(tmpdir(), 'teneral-ws-')))).toBe('exit 0\nslept\n');
+  } finally {
+    clearInterval(timer);
+  }
+  expect(ticks).toBeGreaterThan(5);
+});
+
+test('on timeout everything the command started is killed, not only bash', async () => {
+  // The marker makes this run's sleep findable among every process on the machine.
+  const marker = `30.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+  const survivors = () => Bun.spawnSync(['pgrep', '-f', `sleep ${marker}`]).stdout.toString().trim();
+  const running = runBash(`sleep ${marker} & wait`, mkdtempSync(join(tmpdir(), 'teneral-ws-')), 300);
+  await Bun.sleep(150);
+  expect(survivors()).not.toBe('');
+
+  expect(await running).toContain('timed out');
+
+  for (let i = 0; i < 50 && survivors() !== ''; i++) await Bun.sleep(20);
+  expect(survivors()).toBe('');
+});
+
+test('endless output is bounded, keeps both ends and still reports the exit', async () => {
+  const out = await runBash('echo first; yes | head -c 5000000; echo last; exit 7', mkdtempSync(join(tmpdir(), 'teneral-ws-')));
+  expect(out.length).toBeLessThan(21_000);
+  expect(out.startsWith('exit 7\nfirst\ny\n')).toBe(true);
+  expect(out.endsWith('y\nlast\n')).toBe(true);
+  expect(out).toMatch(/\[49\d{5} characters dropped here\]/);
+});
+
+test('molt does not depend on the hooks or signing of the repo it runs in', async () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  writeFiles(dir, { '.git/hooks/pre-commit': '#!/bin/sh\necho hook says no >&2\nexit 1\n' });
+  chmodSync(join(dir, '.git/hooks/pre-commit'), 0o755);
+  git(dir, 'config', 'commit.gpgsign', 'true');
+  git(dir, 'config', 'gpg.program', '/bin/false');
+  const ctx = context(dir, seed);
+  writeFiles(dir, { 'body/a.ts': 'b\n' });
+
+  await tool('molt').run({ motive: 'hooked' }, ctx);
+
+  expect(ctx.moltCommit).toBe(git(dir, 'rev-parse', 'HEAD'));
+  expect(ctx.moltCommit).not.toBe(seed);
 });
