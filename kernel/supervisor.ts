@@ -1,7 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { git, linkModules, runGates, type GateResult } from './gates';
-import { appendEvent, readEvents, type JournalEvent } from './journal';
+import {
+  closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
+import { git, linkModules, runGates, sh, type GateResult } from './gates';
+import {
+  appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
+} from './journal';
 
 /** The agent exits with this code to ask for a molt. */
 export const MOLT_EXIT = 75;
@@ -28,6 +32,8 @@ export function decide(exit: Exit, s: { hasPrevious: boolean; crashes: number })
 
 /** The branch the agent's own commits live on. Never pushed by the kernel. */
 export const LINEAGE_BRANCH = 'lineage/local';
+/** The longest the supervisor waits before restarting a crashed generation. */
+export const RESTART_DELAY_CAP_MS = 30_000;
 
 export interface Paths {
   root: string;
@@ -37,6 +43,8 @@ export interface Paths {
   candidate: string;
   journal: string;
   state: string;
+  /** Holds the pid of the supervisor running this install. */
+  lock: string;
 }
 
 export function paths(root: string): Paths {
@@ -46,6 +54,7 @@ export function paths(root: string): Paths {
     candidate: join(root, '.teneral', 'candidate'),
     journal: join(root, 'memory', 'journal.jsonl'),
     state: join(root, '.teneral', 'state.json'),
+    lock: join(root, '.teneral', 'lock'),
   };
 }
 
@@ -55,34 +64,156 @@ export interface State {
   previous: string | null;
 }
 
+const COMMIT = /^[0-9a-f]{40}$/;
+const isCommit = (value: unknown): value is string => typeof value === 'string' && COMMIT.test(value);
+const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+function readState(p: Paths): State {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(p.state, 'utf8'));
+  } catch (err) {
+    throw new Error(`${p.state} cannot be read as JSON: ${reasonOf(err)}`);
+  }
+  const s = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Record<string, unknown>;
+  if (!isCommit(s.current) || !(s.previous === null || isCommit(s.previous))) {
+    throw new Error(`${p.state} does not hold a state: "current" must be a 40-character commit and "previous" a commit or null`);
+  }
+  return { current: s.current, previous: s.previous };
+}
+
+/** The state reaches the disk before anything is done about it, so a kill at any point can be repaired from it. */
 function saveState(p: Paths, state: State): void {
-  mkdirSync(join(p.root, '.teneral'), { recursive: true });
+  mkdirSync(dirname(p.state), { recursive: true });
   const tmp = `${p.state}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
+  const bytes = Buffer.from(`${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const fd = openSync(tmp, 'w');
+  try {
+    let offset = 0;
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, p.state);
 }
 
-/** First run: create both worktrees at HEAD. Later runs: read the state back. */
+const isWorktree = (dir: string): boolean => existsSync(join(dir, '.git'));
+
+/**
+ * Create whatever is missing of: the live worktree, the candidate worktree on the
+ * lineage branch, the state file. Safe to run again after an init that died partway,
+ * and on every start. The state is written last, so its presence means init finished.
+ */
 export function init(root: string): State {
   const p = paths(root);
-  if (existsSync(p.state)) return JSON.parse(readFileSync(p.state, 'utf8')) as State;
-  const head = git(root, 'rev-parse', 'HEAD');
+  const known = existsSync(p.state) ? readState(p) : null;
+  const head = known?.current ?? git(root, 'rev-parse', 'HEAD');
   mkdirSync(join(root, '.teneral'), { recursive: true });
-  git(root, 'worktree', 'add', '--detach', p.live, head);
-  git(root, 'worktree', 'add', '-b', LINEAGE_BRANCH, p.candidate, head);
+  // Forget worktrees whose directories are gone; git refuses to add those again otherwise.
+  git(root, 'worktree', 'prune');
+  if (!isWorktree(p.live)) git(root, 'worktree', 'add', '--detach', p.live, head);
+  if (!isWorktree(p.candidate)) {
+    const hasBranch = sh(['git', 'show-ref', '--verify', '--quiet', `refs/heads/${LINEAGE_BRANCH}`], root).code === 0;
+    if (hasBranch) git(root, 'worktree', 'add', p.candidate, LINEAGE_BRANCH);
+    else git(root, 'worktree', 'add', '-b', LINEAGE_BRANCH, p.candidate, head);
+  }
   linkModules(root, p.live);
   linkModules(root, p.candidate);
+  if (known) return known;
   const state: State = { current: head, previous: null };
   saveState(p, state);
   return state;
+}
+
+/** Make the live worktree exactly `commit`: no other checkout, no local edits, no stray files. */
+function syncLive(p: Paths, commit: string): void {
+  git(p.live, 'checkout', '-q', '-f', '--detach', commit);
+  git(p.live, 'clean', '-q', '-fdx', '-e', 'node_modules');
+}
+
+/**
+ * The state is saved before the journal hears of a promotion or rollback. If the
+ * supervisor died in between, write the missing event now, so the agent still
+ * finds the kernel's note about what happened to it.
+ */
+function reconcileJournal(p: Paths, state: State): void {
+  const events = readEvents(p.journal);
+  let journaled: string | null = null;
+  for (let i = events.length - 1; i >= 0 && journaled === null; i--) {
+    const e = events[i]!;
+    if (e.type === 'generation.promoted') journaled = e.commit;
+    else if (e.type === 'generation.rolledback') journaled = e.to;
+  }
+  if (journaled === state.current) return;
+  if (state.previous !== null) {
+    appendEvent(p.journal, state.current, { type: 'generation.promoted', commit: state.current, previous: state.previous });
+  } else if (journaled !== null) {
+    appendEvent(p.journal, state.current, {
+      type: 'generation.rolledback', commit: journaled, to: state.current,
+      reason: 'the kernel was stopped while rolling back, before it recorded why',
+    });
+  }
+}
+
+/** Locks this process holds, so a lock file naming our own pid can be told from one a dead process with the same pid left. */
+const heldLocks = new Set<string>();
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: it exists but belongs to someone else.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Takes the lock and returns null, or returns the pid of the live supervisor that holds it. */
+function takeLock(lock: string): number | null {
+  mkdirSync(dirname(lock), { recursive: true });
+  // Written aside and linked into place, so the lock never exists without a pid in it.
+  const mine = `${lock}.${process.pid}`;
+  writeFileSync(mine, `${process.pid}\n`);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        linkSync(mine, lock);
+        heldLocks.add(lock);
+        return null;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      let pid = Number.NaN;
+      try { pid = Number(readFileSync(lock, 'utf8').trim()); } catch { /* gone again: try once more */ }
+      const ours = pid === process.pid && heldLocks.has(lock);
+      const alive = Number.isInteger(pid) && pid > 0 && pidAlive(pid) && (pid !== process.pid || ours);
+      if (alive) return pid;
+      rmSync(lock, { force: true });
+    }
+    throw new Error('it keeps reappearing');
+  } finally {
+    rmSync(mine, { force: true });
+  }
+}
+
+function dropLock(lock: string): void {
+  heldLocks.delete(lock);
+  rmSync(lock, { force: true });
 }
 
 export interface Options {
   root: string;
   agentCmd?: string[];
   gates?: (dir: string, from: string, to: string) => GateResult;
-  /** How long a generation has to journal `generation.ready` before it is killed. */
+  /** How long a generation has to journal `generation.ready` before it is killed. Default 60 s. */
   readyTimeoutMs?: number;
+  /** How long a generation told to stop (SIGTERM) has before it is killed outright (SIGKILL). Default 5 s. */
+  killGraceMs?: number;
+  /** Wait before a restart: this times the crashes in a row so far, at most RESTART_DELAY_CAP_MS. Default 1 s. */
+  restartDelayMs?: number;
+  /** Restarts one generation gets in total, whether or not it replied in between, before it is given up on. Default 10. */
+  restartBudget?: number;
   log?: (line: string) => void;
 }
 
@@ -94,96 +225,173 @@ function lastOf<T extends JournalEvent['type']>(events: JournalEvent[], type: T)
   return undefined;
 }
 
-/** Run generations until the agent exits cleanly ('stopped') or nothing can run ('halted'). */
+/**
+ * Run generations until the agent exits cleanly or the owner stops it ('stopped'),
+ * or nothing can run ('halted').
+ */
 export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
   const p = paths(opts.root);
   const gates = opts.gates ?? runGates;
   const cmd = opts.agentCmd ?? ['bun', 'body/main.ts'];
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 30_000;
+  const readyTimeoutMs = opts.readyTimeoutMs ?? 60_000;
+  const killGraceMs = opts.killGraceMs ?? 5_000;
+  const restartDelayMs = opts.restartDelayMs ?? 1_000;
+  const restartBudget = opts.restartBudget ?? 10;
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));
-  let state = init(opts.root);
-  let crashes = 0;
+
+  try {
+    const holder = takeLock(p.lock);
+    if (holder !== null) {
+      log(`another supervisor is running this install (pid ${holder}, named in ${p.lock}); not starting`);
+      return 'halted';
+    }
+  } catch (err) {
+    log(`cannot take the lock ${p.lock}: ${reasonOf(err)}`);
+    return 'halted';
+  }
+
   let stopping = false;
-  let child: ReturnType<typeof Bun.spawn> | null = null;
-  const onSignal = () => { stopping = true; child?.kill(); };
+  /** Stops the running generation, if there is one. */
+  let terminate: (() => void) | null = null;
+  /** Ends the wait before a restart, if one is in progress. */
+  let wake: (() => void) | null = null;
+  const onSignal = () => { stopping = true; terminate?.(); wake?.(); };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 
-  try {
-    for (;;) {
-      const mark = readEvents(p.journal).length;
-      appendEvent(p.journal, state.current, { type: 'generation.started', commit: state.current });
-      const since = () => readEvents(p.journal).slice(mark);
-      const isReady = () => since().some((e) => e.type === 'generation.ready' && e.gen === state.current);
+  const pause = (ms: number) => new Promise<void>((resolve) => {
+    const done = () => { clearTimeout(timer); wake = null; resolve(); };
+    const timer = setTimeout(done, ms);
+    wake = done;
+  });
 
-      child = Bun.spawn(cmd, {
+  try {
+    let state: State;
+    try {
+      state = init(opts.root);
+      reconcileJournal(p, state);
+    } catch (err) {
+      log(`cannot start: ${reasonOf(err)}`);
+      return 'halted';
+    }
+    /** Crashes in a row with no reply in between. */
+    let crashes = 0;
+    /** Restarts of this generation in total. */
+    let restarts = 0;
+
+    /** Write-ahead: the state first, then the checkout, and only then (by the caller) the journal. */
+    const moveTo = (next: State): boolean => {
+      try {
+        saveState(p, next);
+        syncLive(p, next.current);
+      } catch (err) {
+        log(`cannot switch to generation ${next.current}: ${reasonOf(err)}`);
+        return false;
+      }
+      state = next;
+      crashes = 0;
+      restarts = 0;
+      return true;
+    };
+
+    for (;;) {
+      if (stopping) return 'stopped';
+      try {
+        // Whatever a kill, a stray process or the body itself left in live, this is what runs.
+        syncLive(p, state.current);
+      } catch (err) {
+        log(`cannot check out generation ${state.current}: ${reasonOf(err)}`);
+        return 'halted';
+      }
+      const gen = state.current;
+      const mark = journalSize(p.journal);
+      appendEvent(p.journal, gen, { type: 'generation.started', commit: gen });
+      const since = () => readEventsFrom(p.journal, mark);
+      const isReady = () => since().some((e) => e.type === 'generation.ready' && e.gen === gen);
+
+      const running = Bun.spawn(cmd, {
         cwd: p.live,
-        env: { ...process.env, TENERAL_GEN: state.current, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate },
+        env: { ...process.env, TENERAL_GEN: gen, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate },
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
-      const running = child;
-      const timer = setTimeout(() => {
+      const timers: { ready?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout> } = {};
+      // Ask first; a generation that does not go within the grace period is killed outright.
+      const stop = () => {
+        if (timers.kill !== undefined) return;
+        running.kill('SIGTERM');
+        timers.kill = setTimeout(() => running.kill('SIGKILL'), killGraceMs);
+      };
+      terminate = stop;
+      timers.ready = setTimeout(() => {
         // Nothing may throw out of a timer: a journal that cannot be read counts as not ready.
         let ready = false;
         try { ready = isReady(); } catch { /* not ready */ }
-        if (!ready) running.kill();
+        if (!ready) stop();
       }, readyTimeoutMs);
       const code = await running.exited;
-      clearTimeout(timer);
-      child = null;
+      clearTimeout(timers.ready);
+      clearTimeout(timers.kill);
+      terminate = null;
       if (stopping) return 'stopped';
 
       const events = since();
       const replied = events.some((e) => e.type === 'assistant');
       if (replied) crashes = 0;
-      const ready = isReady();
+      const ready = events.some((e) => e.type === 'generation.ready' && e.gen === gen);
       const standing = { hasPrevious: state.previous !== null, crashes };
       let decision = decide({ code, ready }, standing);
       const request = lastOf(events, 'molt.requested');
       if (decision === 'gate' && !request) {
         // A molt with no commit named is a crash like any other, so it is counted and cannot spin.
-        log(`generation ${state.current} exited with ${code} but named no commit; treating it as a crash`);
+        log(`generation ${gen} exited with ${code} but named no commit; treating it as a crash`);
         decision = decide({ code: 1, ready }, standing);
       }
+      // The budget is not reset by a reply: a generation that answers and then dies, over and over, is still broken.
+      const spent = decision === 'restart' && restarts >= restartBudget;
+      if (spent) decision = state.previous !== null ? 'rollback' : 'halt';
 
       if (decision === 'stop') return 'stopped';
       if (decision === 'halt') {
-        log(`generation ${state.current} exited with ${code} and there is nothing to roll back to`);
+        const why = spent ? `kept crashing after ${restartBudget} restarts` : `exited with ${code}`;
+        log(`generation ${gen} ${why} and there is nothing to roll back to`);
         return 'halted';
       }
       if (decision === 'restart') {
         crashes += 1;
-        log(`generation ${state.current} exited with ${code}; restarting (${crashes}/${CRASH_LIMIT})`);
+        restarts += 1;
+        const delay = Math.min(restartDelayMs * crashes, RESTART_DELAY_CAP_MS);
+        log(`generation ${gen} exited with ${code}; restarting in ${delay} ms (${crashes}/${CRASH_LIMIT})`);
+        await pause(delay);
         continue;
       }
       if (decision === 'rollback') {
         const to = state.previous!;
-        const reason = ready ? `crashed ${CRASH_LIMIT} times without a reply` : `exited with ${code} before it was ready`;
-        git(p.live, 'checkout', '-q', '--detach', to);
-        appendEvent(p.journal, to, { type: 'generation.rolledback', commit: state.current, to, reason });
-        log(`rolled back ${state.current} to ${to}: ${reason}`);
-        state = { current: to, previous: null };
-        saveState(p, state);
-        crashes = 0;
+        let reason = `exited with ${code} before it was ready`;
+        if (spent) reason = `kept crashing after ${restartBudget} restarts`;
+        else if (ready) reason = `crashed ${CRASH_LIMIT} times without a reply`;
+        if (!moveTo({ current: to, previous: null })) return 'halted';
+        appendEvent(p.journal, to, { type: 'generation.rolledback', commit: gen, to, reason });
+        log(`rolled back ${gen} to ${to}: ${reason}`);
         continue;
       }
       // decision === 'gate', and the request exists or the decision would have been replaced above.
       if (!request) throw new Error('unreachable: gate without a molt request');
-      const result = gates(p.candidate, state.current, request.commit);
+      const result = gates(p.candidate, gen, request.commit);
+      // The gates block this thread; let a stop signal that arrived meanwhile be heard before acting on the result.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      if (stopping) return 'stopped';
       if (!result.ok) {
-        appendEvent(p.journal, state.current, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });
+        appendEvent(p.journal, gen, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });
         log(`molt to ${request.commit} rejected at gate ${result.gate}`);
         continue;
       }
-      git(p.live, 'checkout', '-q', '--detach', request.commit);
-      appendEvent(p.journal, request.commit, { type: 'generation.promoted', commit: request.commit, previous: state.current });
+      if (!moveTo({ current: request.commit, previous: gen })) return 'halted';
+      appendEvent(p.journal, request.commit, { type: 'generation.promoted', commit: request.commit, previous: gen });
       log(`promoted ${request.commit}`);
-      state = { current: request.commit, previous: state.current };
-      saveState(p, state);
-      crashes = 0;
     }
   } finally {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    dropLock(p.lock);
   }
 }
