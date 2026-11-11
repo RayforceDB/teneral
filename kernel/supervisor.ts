@@ -127,7 +127,12 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
       const running = child;
-      const timer = setTimeout(() => { if (!isReady()) running.kill(); }, readyTimeoutMs);
+      const timer = setTimeout(() => {
+        // Nothing may throw out of a timer: a journal that cannot be read counts as not ready.
+        let ready = false;
+        try { ready = isReady(); } catch { /* not ready */ }
+        if (!ready) running.kill();
+      }, readyTimeoutMs);
       const code = await running.exited;
       clearTimeout(timer);
       child = null;
@@ -136,7 +141,15 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       const events = since();
       const replied = events.some((e) => e.type === 'assistant');
       if (replied) crashes = 0;
-      const decision = decide({ code, ready: isReady() }, { hasPrevious: state.previous !== null, crashes });
+      const ready = isReady();
+      const standing = { hasPrevious: state.previous !== null, crashes };
+      let decision = decide({ code, ready }, standing);
+      const request = lastOf(events, 'molt.requested');
+      if (decision === 'gate' && !request) {
+        // A molt with no commit named is a crash like any other, so it is counted and cannot spin.
+        log(`generation ${state.current} exited with ${code} but named no commit; treating it as a crash`);
+        decision = decide({ code: 1, ready }, standing);
+      }
 
       if (decision === 'stop') return 'stopped';
       if (decision === 'halt') {
@@ -150,7 +163,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       }
       if (decision === 'rollback') {
         const to = state.previous!;
-        const reason = isReady() ? `crashed ${CRASH_LIMIT} times without a reply` : `exited with ${code} before it was ready`;
+        const reason = ready ? `crashed ${CRASH_LIMIT} times without a reply` : `exited with ${code} before it was ready`;
         git(p.live, 'checkout', '-q', '--detach', to);
         appendEvent(p.journal, to, { type: 'generation.rolledback', commit: state.current, to, reason });
         log(`rolled back ${state.current} to ${to}: ${reason}`);
@@ -159,12 +172,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         crashes = 0;
         continue;
       }
-      // decision === 'gate'
-      const request = lastOf(events, 'molt.requested');
-      if (!request) {
-        log('the agent exited with 75 but named no commit; restarting');
-        continue;
-      }
+      // decision === 'gate', and the request exists or the decision would have been replaced above.
+      if (!request) throw new Error('unreachable: gate without a molt request');
       const result = gates(p.candidate, state.current, request.commit);
       if (!result.ok) {
         appendEvent(p.journal, state.current, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });

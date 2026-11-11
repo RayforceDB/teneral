@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readEvents } from '../../kernel/journal';
-import { init, paths, supervise } from '../../kernel/supervisor';
+import { CRASH_LIMIT, init, paths, supervise } from '../../kernel/supervisor';
 import type { GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
@@ -81,4 +81,79 @@ test('every event carries the generation that was running', async () => {
   await supervise({ root: dir, gates: () => PASS, readyTimeoutMs: 5000, log: () => {} });
   const ready = readEvents(p.journal).filter((e) => e.type === 'generation.ready').map((e) => e.gen);
   expect(ready).toEqual([seed, next]);
+});
+
+const HEAD = `
+import { appendEvent, readEvents } from ${JSON.stringify(JOURNAL_MODULE)};
+const journal = process.env.TENERAL_JOURNAL;
+const gen = process.env.TENERAL_GEN;
+`;
+/** Becomes ready, then exits with the given code, every time. */
+const readyThenExit = (code: number) => `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+process.exit(${code});
+`;
+
+/** Runs a seed-only repo (no previous generation) to the end. */
+async function seedOnly(body: string) {
+  const { dir, seed } = makeRepo({ 'body/main.ts': body });
+  const p = paths(dir);
+  const outcome = await supervise({ root: dir, gates: () => PASS, readyTimeoutMs: 5000, log: () => {} });
+  return { outcome, seed, events: readEvents(p.journal) };
+}
+
+test('a ready generation that crashes once is restarted, not rolled back', async () => {
+  const r = await seedOnly(`${HEAD}
+const before = readEvents(journal);
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+process.exit(before.some((e) => e.type === 'generation.ready') ? 0 : 1);
+`);
+  const types = r.events.map((e) => e.type);
+  expect(r.outcome).toBe('stopped');
+  expect(types.filter((t) => t === 'generation.started')).toHaveLength(2);
+  expect(types).not.toContain('generation.rolledback');
+});
+
+test('a promoted generation that keeps crashing after it is ready is rolled back at the crash limit', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': readyThenExit(1) });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  const outcome = await supervise({ root: dir, gates: () => PASS, readyTimeoutMs: 5000, log: () => {} });
+  const events = readEvents(p.journal);
+  expect(outcome).toBe('stopped');
+  expect(events.filter((e) => e.type === 'generation.started' && e.gen === next)).toHaveLength(CRASH_LIMIT);
+  const rollbacks = events.filter((e) => e.type === 'generation.rolledback');
+  expect(rollbacks).toHaveLength(1);
+  expect(rollbacks[0]).toMatchObject({ commit: next, to: seed, gen: seed });
+  expect((rollbacks[0] as { reason: string }).reason).toContain(`crashed ${CRASH_LIMIT} times`);
+  // The seed runs once before the molt and once more after the rollback, where it exits cleanly.
+  expect(events.filter((e) => e.type === 'generation.started' && e.gen === seed)).toHaveLength(2);
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+test('with no previous generation, a ready one that keeps crashing halts the supervisor at the crash limit', async () => {
+  const r = await seedOnly(readyThenExit(1));
+  expect(r.outcome).toBe('halted');
+  expect(r.events.filter((e) => e.type === 'generation.started')).toHaveLength(CRASH_LIMIT);
+  expect(r.events.map((e) => e.type)).not.toContain('generation.rolledback');
+});
+
+// Exit 75 without a molt.requested is handled as a crash (as if the code were 1).
+// This body journals nothing, so it is never ready, and a generation that is not
+// ready is given up on at once: with no previous generation that is a halt after
+// ONE start, not CRASH_LIMIT. The crash limit only applies to ready generations.
+test('exit 75 with no request from a generation that never became ready halts after one start', async () => {
+  const r = await seedOnly('process.exit(75);\n');
+  expect(r.outcome).toBe('halted');
+  expect(r.events.map((e) => e.type)).toEqual(['generation.started']);
+});
+
+test('exit 75 with no request from a ready generation is counted as a crash and halts at the crash limit', async () => {
+  const r = await seedOnly(readyThenExit(75));
+  expect(r.outcome).toBe('halted');
+  expect(r.events.filter((e) => e.type === 'generation.started')).toHaveLength(CRASH_LIMIT);
 });
