@@ -43,13 +43,20 @@ export interface BodyPlaces {
   peers: string;
   soul: string;
   owner: string;
+  /** The configured provider's id (kernel/providers.ts), when one is set. It decides the wire protocol the body speaks. */
+  provider?: string;
+  /** Where sign-in credentials are kept. Left out of a smoke run, which must not reach them. */
+  auth?: string;
 }
 
+/** Everything the kernel itself sets for a body. The supervisor and the smoke gate both start one with exactly this. */
 export function bodyEnv(at: BodyPlaces): Record<string, string> {
   return {
     TENERAL_GEN: at.gen, TENERAL_JOURNAL: at.journal, TENERAL_WORKSPACE: at.workspace,
     TENERAL_ID: at.id, TENERAL_INBOX: at.inbox, TENERAL_PEERS: at.peers,
     TENERAL_SOUL: at.soul, TENERAL_OWNER: at.owner,
+    ...(at.provider ? { TENERAL_PROVIDER: at.provider } : {}),
+    ...(at.auth ? { TENERAL_AUTH: at.auth } : {}),
   };
 }
 
@@ -357,9 +364,10 @@ async function runCheck(
 const STUB_REPLY = 'This is the kernel\'s stand-in for the model during a smoke test. Nothing to do.';
 
 /**
- * A chat-completions endpoint on a free local port that answers every request with one fixed
- * assistant message, streamed if the request asks for that. It exists only while a smoke run
- * needs it: the candidate has to show it can take a turn, not that the real model is reachable.
+ * A model endpoint on a free local port that answers every request with one fixed assistant
+ * message: as chat-completions (streamed if the request asks for that), or, at `/responses`, as a
+ * Responses event stream. It exists only while a smoke run needs it: the candidate has to show it
+ * can take a turn over the protocol its configuration uses, not that the real model is reachable.
  */
 export function startStubProvider(): { url: string; stop: () => void } {
   const head = { id: 'chatcmpl-smoke', created: 0, model: 'smoke' };
@@ -367,6 +375,20 @@ export function startStubProvider(): { url: string; stop: () => void } {
     hostname: '127.0.0.1',
     port: 0,
     async fetch(req) {
+      const sse = (body: string) => new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      if (new URL(req.url).pathname.endsWith('/responses')) {
+        const response = { id: 'resp_smoke', object: 'response', model: 'smoke', store: false };
+        const item = {
+          type: 'message', id: 'msg_smoke', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text: STUB_REPLY, annotations: [] }],
+        };
+        const events = [
+          { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+          { type: 'response.output_item.done', output_index: 0, item },
+          { type: 'response.completed', response: { ...response, status: 'completed', output: [item] } },
+        ];
+        return sse(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+      }
       let wantsStream = false;
       try {
         wantsStream = (await req.json() as { stream?: unknown } | null)?.stream === true;
@@ -381,8 +403,7 @@ export function startStubProvider(): { url: string; stop: () => void } {
       const chunk = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({
         ...head, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }],
       })}\n\n`;
-      const body = `${chunk({ role: 'assistant', content: STUB_REPLY }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
-      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      return sse(`${chunk({ role: 'assistant', content: STUB_REPLY }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`);
     },
   });
   return { url: `http://127.0.0.1:${server.port}/v1`, stop: () => { void server.stop(true); } };
@@ -397,7 +418,7 @@ const SMOKE_STIMULUS = 'This is the kernel checking that a new generation can st
  * a body starts and can take a turn; this does. Returns null when it did, else what was missing.
  */
 async function smokeRun(
-  tree: string, commit: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number },
+  tree: string, commit: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number; provider?: string },
 ): Promise<{ problem: string | null; interrupted: boolean }> {
   const home = join(tree, GATE_SMOKE);
   const at: BodyPlaces = {
@@ -410,6 +431,9 @@ async function smokeRun(
     peers: join(home, 'soul', 'peers.json'),
     soul: join(home, 'soul'),
     owner: join(home, 'owner'),
+    // The provider the owner configured, so the candidate is tried over the protocol it will really speak.
+    // No `auth`: with the dummy key below a body has no reason to look for a sign-in, and is not told where one is.
+    provider: o.provider,
   };
   for (const dir of [at.inbox, at.soul, at.owner]) mkdirSync(dir, { recursive: true });
   appendEvent(at.journal, commit, { type: 'stimulus', source: 'terminal', text: SMOKE_STIMULUS });
@@ -473,6 +497,8 @@ export interface GateOptions {
   smokeTimeoutMs?: number;
   /** How long one check may run. Default 10 minutes. */
   checkTimeoutMs?: number;
+  /** The configured provider's id. The smoke run is made as that provider, against the stub, with a dummy key. */
+  provider?: string;
 }
 
 /**
@@ -528,7 +554,7 @@ export async function runGates(
     }
     if (smoke) {
       // Last, so a body is only ever started once its types and tests are in order.
-      const r = await smokeRun(tree, to, env, { signal: opts.signal, graceMs, timeoutMs: opts.smokeTimeoutMs ?? 30_000 });
+      const r = await smokeRun(tree, to, env, { signal: opts.signal, graceMs, timeoutMs: opts.smokeTimeoutMs ?? 30_000, provider: opts.provider });
       if (r.interrupted) return interrupted();
       if (r.problem !== null) return fail('smoke', r.problem);
     }

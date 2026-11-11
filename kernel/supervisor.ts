@@ -9,6 +9,7 @@ import {
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
 } from './journal';
+import { authDir } from './providers';
 
 /** The agent exits with this code to ask for a molt. */
 export const MOLT_EXIT = 75;
@@ -60,6 +61,8 @@ export interface Paths {
   soul: string;
   /** Where the owner's typed lines are left for the body, one file each. See kernel/owner.ts. */
   owner: string;
+  /** Where sign-in credentials are kept. See kernel/signin.ts. */
+  auth: string;
 }
 
 export function paths(root: string): Paths {
@@ -75,6 +78,7 @@ export function paths(root: string): Paths {
     peers: join(root, 'soul', 'peers.json'),
     soul: join(root, 'soul'),
     owner: join(root, '.teneral', 'owner'),
+    auth: authDir(root),
   };
 }
 
@@ -432,7 +436,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
   const stableRunMs = opts.stableRunMs ?? 3_600_000;
   const showStderr = opts.stderr ?? ((chunk: Uint8Array) => { process.stderr.write(chunk); });
   const gates = opts.gates
-    ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, { signal: stop, killGraceMs }));
+    ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, { signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER }));
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));
 
   try {
@@ -527,6 +531,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,
+            provider: process.env.TENERAL_PROVIDER, auth: p.auth,
           }),
         },
         // stderr is passed on as it comes and its end kept, to say why if this generation has to be given up on.

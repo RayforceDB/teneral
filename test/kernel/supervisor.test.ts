@@ -613,6 +613,31 @@ process.exit(0);
   expect(readEvents(p.journal).find((e) => e.type === 'stimulus')).toMatchObject({ text: p.owner });
 });
 
+test('the body is told which provider is configured and where sign-ins are kept, and gets no token of the kernel\'s making', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
+const names = Object.keys(process.env).filter((name) => name.startsWith('TENERAL_')).sort().join(' ');
+appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_AUTH, names].join('|') });
+process.exit(0);
+` });
+  const p = paths(dir);
+  expect(p.auth).toBe(join(dir, '.teneral', 'auth'));
+  const before = process.env.TENERAL_PROVIDER;
+  process.env.TENERAL_PROVIDER = 'chatgpt';
+  try {
+    expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  } finally {
+    if (before === undefined) delete process.env.TENERAL_PROVIDER; else process.env.TENERAL_PROVIDER = before;
+  }
+  const [provider, auth, names] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
+  expect(provider).toBe('chatgpt');
+  expect(auth).toBe(p.auth);
+  // The whole list of what the kernel itself sets: one place, bodyEnv, decides it.
+  expect(names!.split(' ').filter((name) => !['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS'].includes(name))).toEqual([
+    'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER',
+    'TENERAL_SOUL', 'TENERAL_WORKSPACE',
+  ]);
+});
+
 test('init tells git never to forget worktrees during gc, once however often it runs', () => {
   const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
   init(dir);

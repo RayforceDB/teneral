@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   BODY_SIZE_LIMIT, DEFAULT_CHECKS, git, runGates, sh, startStubProvider, type GateOptions,
 } from '../../kernel/gates';
+import { readResponsesStream } from '../../body/provider';
+import { PROVIDERS } from '../../kernel/providers';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
 const NO_CHECKS: never[] = [];
@@ -548,3 +550,111 @@ test('the stub endpoint answers a chat-completions request, plain or streamed, a
   }
   await expect(fetch(`${stub.url}/chat/completions`, { method: 'POST', body: '{}' })).rejects.toThrow();
 });
+
+// --- the smoke gate and the Responses protocol ---
+
+test('the stub endpoint answers a Responses request as an event stream that ends completed', async () => {
+  const stub = startStubProvider();
+  try {
+    const res = await fetch(`${stub.url}/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'smoke', input: [{ role: 'user', content: 'hello' }], store: false, stream: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    const text = await res.text();
+    const events = text.trim().split('\n\n').map((block) => {
+      const [event, data] = block.split('\n');
+      expect(event).toStartWith('event: ');
+      expect(data).toStartWith('data: ');
+      const parsed = JSON.parse(data!.slice(6)) as { type: string; response?: { status: string; output: { type: string; content: { type: string; text: string }[] }[] } };
+      // Each event is named twice, on its `event:` line and in its data, and the two agree.
+      expect(parsed.type).toBe(event!.slice(7));
+      return parsed;
+    });
+    expect(events[0]!.type).toBe('response.created');
+    expect(events.map((e) => e.type)).toContain('response.output_item.done');
+    const last = events.at(-1)!;
+    expect(last.type).toBe('response.completed');
+    expect(last.response!.status).toBe('completed');
+    expect(last.response!.output[0]!.content[0]!.type).toBe('output_text');
+    expect(last.response!.output[0]!.content[0]!.text.length).toBeGreaterThan(0);
+    // And the body's own reader takes it: text, and no tool calls, so a turn ends with it.
+    const reply = readResponsesStream(text);
+    expect(reply.text.length).toBeGreaterThan(0);
+    expect(reply.toolCalls).toEqual([]);
+  } finally {
+    stub.stop();
+  }
+});
+
+test('smoke: run for a sign-in provider, the body is told the provider, handed a dummy token, and not told where sign-ins are kept', async () => {
+  const r = await smoke("console.error('ENV=' + JSON.stringify(process.env));\nprocess.exit(1);\n", { provider: 'chatgpt' });
+  const env = JSON.parse(r.result.output.split('\n').find((l) => l.startsWith('ENV='))!.slice(4)) as Record<string, string>;
+  expect(env.TENERAL_PROVIDER).toBe('chatgpt');
+  expect(env.TENERAL_API_KEY).toBe('smoke');
+  expect(env.TENERAL_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+  expect('TENERAL_AUTH' in env).toBe(false);
+  expect(JSON.stringify(env)).not.toContain(join('.teneral', 'auth'));
+}, SLOW);
+
+/** A repository holding this project's own kernel and body, as a candidate's checkout would. */
+function ownRepo(): { dir: string; seed: string } {
+  const here = join(import.meta.dir, '..', '..');
+  const { dir } = makeRepo({});
+  for (const name of ['body', 'kernel', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
+  return { dir, seed: commitAll(dir, 'own') };
+}
+
+/** Smokes this project's body, with `change` applied to it, as the provider `provider`. */
+async function smokeOwn(provider: string | undefined, change?: (dir: string) => void) {
+  const { dir, seed } = ownRepo();
+  let next = seed;
+  if (change) {
+    change(dir);
+    next = commitAll(dir, 'candidate');
+  }
+  return runGates(dir, seed, next, [], { smoke: true, smokeTimeoutMs: change ? 4000 : 20_000, killGraceMs: 200, provider });
+}
+
+test('smoke: this project\'s own body passes under every provider in the table, and with none set', async () => {
+  for (const provider of [undefined, ...PROVIDERS.map((p) => p.id)]) {
+    expect({ provider, result: await smokeOwn(provider) }).toEqual({ provider, result: OK });
+  }
+}, 4 * SLOW);
+
+test('smoke: a body whose Responses path is broken is rejected when the configuration uses that protocol, where it would pass as chat', async () => {
+  const breakResponses = (dir: string) => {
+    const file = join(dir, 'body', 'provider.ts');
+    const code = readFileSync(file, 'utf8');
+    expect(code).toContain('}/responses`');
+    writeFileSync(file, code.replace('}/responses`', '}/responsesX`'));
+  };
+  const broken = await smokeOwn('chatgpt', breakResponses);
+  expect(broken.ok).toBe(false);
+  expect(broken.gate).toBe('smoke');
+  expect(broken.output).toMatch(/became ready but did not reply/);
+  expect(await smokeOwn(undefined, breakResponses)).toEqual(OK);
+}, 4 * SLOW);
+
+test('smoke: for a sign-in provider the real sign-in is neither read nor renewed, even when one is there to find', async () => {
+  // A sign-in where the supervisor would keep it, pointing at a server that counts what reaches it.
+  let hits = 0;
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => { hits += 1; return new Response('no', { status: 500 }); } });
+  const { dir, seed } = ownRepo();
+  const auth = join(dir, '.teneral', 'auth');
+  const file = join(auth, 'chatgpt.json');
+  const address = `http://127.0.0.1:${server.port}`;
+  writeFiles(dir, { '.teneral/auth/chatgpt.json': JSON.stringify({
+    issuer: address, client_id: 'oaiapp_real', access_token: 'at-real', refresh_token: 'rt-real', expires_at: 0, api_base: `${address}/v1`,
+  }) });
+  const before = readFileSync(file, 'utf8');
+  try {
+    expect(await runGates(dir, seed, seed, [], { smoke: true, smokeTimeoutMs: 20_000, killGraceMs: 200, provider: 'chatgpt' })).toEqual(OK);
+  } finally {
+    void server.stop(true);
+  }
+  expect(hits).toBe(0);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(readdirSync(auth)).toEqual(['chatgpt.json']);
+}, SLOW);
