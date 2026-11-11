@@ -25,16 +25,20 @@ export function terminal(lines: AsyncIterable<string>, onQuit: () => void): Sens
   };
 }
 
-/** A tick every `intervalMs`, so the agent gets time of its own. 0 turns it off. */
+/** The longest delay a timer holds; a longer one fires at once. About 24 days. */
+const TIMER_MAX_MS = 2 ** 31 - 1;
+
+/** A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off. */
 export function clock(intervalMs: number): Sensor {
   return (emit) => {
-    if (intervalMs <= 0) return () => {};
+    // Not `<= 0`: NaN, from a mistyped setting, must also mean off. A timer given NaN fires without pause.
+    if (!(intervalMs > 0)) return () => {};
     const timer = setInterval(() => {
       emit({
         source: 'clock',
         text: `It is ${new Date().toISOString()}. No one is waiting for a reply. If something on your backlog is worth doing now, do it; if not, say so in one line.`,
       });
-    }, intervalMs);
+    }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);
   };
 }

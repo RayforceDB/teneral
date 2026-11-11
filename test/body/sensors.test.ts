@@ -79,3 +79,22 @@ test('inbox sets a bad file aside without emitting', async () => {
   expect(got).toEqual([]);
   expect(existsSync(join(dir, 'rejected', '1-bad.json'))).toBe(true);
 });
+
+test('a clock given an interval that is not a positive number never emits', async () => {
+  // A timer set to NaN fires as fast as it can; a mistyped setting must not flood the journal.
+  for (const interval of [Number.NaN, -5, Number('thirty')]) {
+    const got: Stimulus[] = [];
+    const stop = clock(interval)((s) => got.push(s));
+    await settle();
+    stop();
+    expect(got).toEqual([]);
+  }
+});
+
+test('a clock interval longer than a timer can hold does not fire at once', async () => {
+  const got: Stimulus[] = [];
+  const stop = clock(2 ** 31 + 1000)((s) => got.push(s));
+  await settle();
+  stop();
+  expect(got).toEqual([]);
+});
