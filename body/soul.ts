@@ -26,8 +26,8 @@ export function loadSoul(dir: string): string {
 }
 
 /** The species' prompt, then the individual's soul. Built again every turn, since the soul can change. */
-export function composeSystem(prompt: string, soulDir: string): string {
-  const head = `${prompt.trim()}\n\n## Who you are\n\nYour soul directory is ${soulDir}.`;
+export function composeSystem(prompt: string, soulDir: string, journal: string): string {
+  const head = `${prompt.trim()}\n\n## Who you are\n\nYour journal is the file ${journal}. Your soul directory is ${soulDir}.`;
   const soul = loadSoul(soulDir);
   if (soul === '') return `${head} It is empty: you have not been born yet. Your first message tells you what to do.`;
   const shown = soul.length <= SOUL_CAP

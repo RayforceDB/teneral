@@ -25,20 +25,22 @@ test('soul files are joined in name order, each under its file name; other files
 
 test('before birth the system prompt says the soul is empty and where it goes', () => {
   const dir = soulDir();
-  const system = composeSystem('PROMPT\n', dir);
+  const system = composeSystem('PROMPT\n', dir, '/data/memory/journal.jsonl');
   expect(system.startsWith('PROMPT\n\n## Who you are')).toBe(true);
   expect(system).toContain(dir);
+  expect(system).toContain('Your journal is the file /data/memory/journal.jsonl.');
   expect(system).toContain('not been born yet');
 });
 
 test('after birth the system prompt carries the soul', () => {
-  const system = composeSystem('PROMPT', soulDir({ 'SOUL.md': 'I am Wren.' }));
+  const system = composeSystem('PROMPT', soulDir({ 'SOUL.md': 'I am Wren.' }), '/j.jsonl');
+  expect(system).toContain('Your journal is the file /j.jsonl.');
   expect(system).toContain('### SOUL.md\n\nI am Wren.');
   expect(system).not.toContain('not been born yet');
 });
 
 test('an oversized soul is cut with a note, so it cannot crowd out the conversation', () => {
-  const system = composeSystem('P', soulDir({ 'SOUL.md': 'x'.repeat(SOUL_CAP + 500) }));
+  const system = composeSystem('P', soulDir({ 'SOUL.md': 'x'.repeat(SOUL_CAP + 500) }), '/j.jsonl');
   expect(system.length).toBeLessThan(SOUL_CAP + 1000);
   expect(system).toContain('soul is longer than');
 });

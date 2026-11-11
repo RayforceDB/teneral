@@ -63,7 +63,7 @@ async function turn(): Promise<{ error: unknown } | null> {
     const outcome = await runTurn({
       journal, gen, provider, tools: TOOLS, ctx, budgetChars,
       // Composed again every round: the agent may have just rewritten its soul.
-      system: () => composeSystem(prompt, soulDir),
+      system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
       onTool: (name) => console.error(`[tool] ${name}`),
     });
