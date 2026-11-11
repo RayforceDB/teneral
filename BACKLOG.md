@@ -12,11 +12,14 @@ Each item: what is wrong, how to tell it got better. Add to this file before cha
 ## Conversation
 
 5. **A late stimulus can be lost.** Something that arrives while a reply is being written is journaled before that reply and gets an extra round. If the process dies before that round, the journal ends with a finished reply and nothing looks owed. It needs a record of how far the model had been shown. Better when: a test that stops the process between the reply and the extra round still sees the stimulus answered after the restart.
-6. **`/quit` waits for the turn.** Typed while a turn is running, it takes effect only when the turn ends, which can be minutes. Better when: `/quit` ends the process within a second or two without leaving a tool half-run and unreported.
-7. **Lines typed around a molt may be dropped.** What the old process had already read from the terminal but not yet journaled dies with it. Better when: a line typed at any moment around a molt is in the journal afterwards.
+6. **`/quit` waits for the turn.** Only in the foreground, where a terminal is attached to the process itself: typed while a turn is running, it takes effect only when the turn ends, which can be minutes. Through `./box talk` there is no `/quit`; the lines are files and the owner stops the agent from outside. Better when: `/quit` in the foreground ends the process within a second or two without leaving a tool half-run and unreported.
+7. **Lines typed around a molt may be dropped.** Only in the foreground: what the old process had already read from the terminal but not yet journaled dies with it. Lines sent through `./box talk` are files in the owner directory, removed only after they are journaled, so they survive a molt. Better when: a line typed in the foreground at any moment around a molt is in the journal afterwards.
 8. **The `> ` prompt is printed again on every wake.** A clock tick or an inbox message leaves another `> ` on the screen, also in the middle of what the person is typing. Better when: there is one prompt per place to type.
 9. **A reply cut off by the model's length limit is treated as complete.** `body/provider.ts` does not read why the model stopped, so half a reply, or half a tool call, is journaled as if it were whole. Better when: a cut-off reply is marked as such and continued or asked for again.
 10. **Adjacent user messages are not merged.** Two stimuli in a row, or a stimulus after a kernel note, go out as two user messages. Some endpoints that are not OpenAI's refuse that. Better when: no request holds two user messages in a row, and a test says so.
+
+18. **The whole journal is read again every round.** `body/loop.ts` re-reads and re-parses the journal for each request, and `body/context.ts` renders all of it before cutting. The work grows in step with the journal, which is fine today, but at hundreds of megabytes it is seconds of time and several times the file in memory, every round. `kernel/journal.ts` can read from a byte offset. Better when: the time and memory of one round do not grow with the age of the journal, shown by a test with a large one.
+19. **Each round sends the whole window again.** A turn of ten tool calls sends the context ten times, so cost grows with the size of the context times the number of rounds. The front is now cut in steps so a provider's prompt cache can hit, but nothing checks that it does. Measure it: with the cost report (item 1), record the cached and uncached input tokens the provider reports per call, and compare a day's total with the sum of the reply sizes. Better when: the share of input tokens served from cache is known, and a change to the context can be judged by it.
 
 ## Sensors
 
@@ -24,12 +27,16 @@ Each item: what is wrong, how to tell it got better. Add to this file before cha
 12. **Workspace watcher.** Notice when the person edits files in the repository. Better when: such an edit shows up as a stimulus without the person saying so.
 13. **Wake policy.** Not every stimulus deserves a full turn. Decide cheaply which ones do. Better when: the cost report shows less spent on turns that end in one line.
 
+20. **A peer has two names.** `send` addresses a peer by the name in `soul/peers.json`, but what that peer writes arrives as `[agent:<its own id>]`. Nothing connects the two, so telling which peer a message came from, or that a reply came from the one that was asked, is done by hand. Better when: an incoming message is shown under the name it is known by in `peers.json` when its sender is listed there, and marked as unknown when not.
+
 ## Robustness
 
 14. **Idempotent tools.** A tool interrupted mid-run is only reported, never repeated. Add a way for a tool to declare itself safe to repeat. Better when: an interrupted `read` is simply run again.
-15. **Provider limits.** A failed turn is tried again after 10 s, 1 min, 5 min and then every 15 min, whatever the cause (`body/retry.ts`). A rate-limit answer is not told apart, and the time the provider says to wait is not read. Better when: after a rate-limit answer the next attempt comes when the provider said it would be accepted.
+15. **Provider limits.** A failed turn is tried again after 10 s, 1 min, 5 min and then every 15 min (`body/retry.ts`); only a request the provider refuses outright is given up on, after three tries. A rate-limit answer is waited out like any other failure, and the time the provider says to wait is not read. Better when: after a rate-limit answer the next attempt comes when the provider said it would be accepted.
 16. **Streaming.** Replies arrive all at once. Better when: the first words of a long reply are on the screen while the rest is still being written.
 17. **File tools reach outside the workspace.** `read`, `write` and `edit` take any path, absolute or with `..`. The soul directory has to stay reachable; nothing else outside the workspace needs to be. Better when: a path outside the workspace and the soul directory is refused, with a test.
+
+21. **Background jobs outlive the generation that started them.** Something started with `bash` and left running (`cmd >/dev/null 2>&1 &`) survives a molt and a restart, and can keep writing into the workspace: into files a later molt commits, or under the gates' feet. Nothing lists such jobs or stops them. Better when: jobs started in the background are recorded, shown after a restart, and can be stopped by name.
 
 ## Needs the owner, not a molt
 
