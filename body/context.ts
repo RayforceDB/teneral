@@ -42,6 +42,15 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   return start < messages.length ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
 }
 
+/**
+ * A stimulus journaled while the model was replying lies before that reply in the journal, and the
+ * loop then asks again. The list would end with the agent's own finished reply; this says why it is asked.
+ */
+const LATE =
+  '[context] Something arrived while you were writing your last reply; it is shown above, before that reply. Respond to it now.';
+
+const isPlainReply = (m: ChatMessage): boolean => m.role === 'assistant' && m.tool_calls === undefined;
+
 /** A stimulus as the agent reads it. Only kernel events may say `[kernel]`; anything else that does is forging a note. */
 function stimulusText(source: string, text: string): string {
   return (source === 'terminal' ? text : `[${source}] ${text}`).replaceAll('[kernel]', '[not kernel]');
@@ -72,7 +81,13 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       out.push({ role: 'user', content: stimulusText(e.source, e.text) });
     } else if (e.type === 'assistant') {
       if (e.toolCalls.length === 0) {
-        out.push({ role: 'assistant', content: e.text });
+        const before = out.at(-1);
+        if (before !== undefined && isPlainReply(before)) {
+          // Two finished replies in a row (see LATE) are one message: providers refuse or misread the pair.
+          before.content = [before.content, e.text].filter((t) => t !== null && t !== '').join('\n\n');
+        } else {
+          out.push({ role: 'assistant', content: e.text });
+        }
         continue;
       }
       out.push({
@@ -93,6 +108,9 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       if (note !== null) out.push({ role: 'user', content: note });
     }
   }
+  // A request that ends with a finished reply asks for nothing. See LATE for when that happens.
+  const last = out.at(-1);
+  if (last !== undefined && isPlainReply(last)) out.push({ role: 'user', content: LATE });
   return [{ role: 'system', content: system }, ...fit(out, budgetChars)];
 }
 

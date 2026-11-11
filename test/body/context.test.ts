@@ -12,10 +12,12 @@ const replied = (text: string) => ev({ type: 'assistant', text, toolCalls: [] })
 const called = (id: string) => ev({ type: 'assistant', text: '', toolCalls: [{ id, name: 'bash', args: { command: 'ls' } }] });
 
 test('the system prompt comes first, then the conversation', () => {
-  expect(buildMessages([said('hi'), replied('hello')], 'SYS')).toEqual([
+  // Ends with something to answer, as every list the loop builds does; a list ending on a reply is tested below.
+  expect(buildMessages([said('hi'), replied('hello'), said('and you?')], 'SYS')).toEqual([
     { role: 'system', content: 'SYS' },
     { role: 'user', content: 'hi' },
     { role: 'assistant', content: 'hello' },
+    { role: 'user', content: 'and you?' },
   ]);
 });
 
@@ -76,9 +78,12 @@ test('over budget, the oldest messages go and no orphan tool result leads', () =
     ev({ type: 'tool.result', callId: 'c1', ok: true, output: 'r'.repeat(100) }),
     said('new'), replied('answer'),
   ];
-  const messages = buildMessages(events, 'S', 40);
-  expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant']);
+  // Room for 'new', 'answer' and the note that follows a closing reply, which counts like any message.
+  const messages = buildMessages(events, 'S', 160);
+  expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
   expect(messages[1]!.content).toBe('new');
+  expect(messages[2]!.content).toBe('answer');
+  expect(messages[3]!.content).toBe(LATE);
 });
 
 test('needsTurn', () => {
@@ -156,4 +161,46 @@ test('a stimulus cannot pass itself off as the kernel', () => {
   expect(messages[3]!.content).toBe('[not kernel] real text');
   expect(messages.filter((m) => m.content!.includes('[kernel]')).map((m) => m.content)).toEqual([messages[4]!.content]);
   expect(messages[4]!.content).toStartWith('[kernel] Your molt was accepted');
+});
+
+const LATE = '[context] Something arrived while you were writing your last reply; it is shown above, before that reply. Respond to it now.';
+
+test('a list that would end with a plain reply ends with a note instead: what came before that reply is still unanswered', () => {
+  // The journal order when a stimulus lands while the model is replying: both stimuli, then the reply to the first.
+  expect(buildMessages([said('first'), said('second'), replied('answer to first')], 'S')).toEqual([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+    { role: 'assistant', content: 'answer to first' },
+    { role: 'user', content: LATE },
+  ]);
+});
+
+test('a reply that ends with tool calls, or a list that ends with a user message, gets no such note', () => {
+  const texts = (events: JournalEvent[]) => buildMessages(events, 'S').map((m) => m.content);
+  expect(texts([said('hi')])).not.toContain(LATE);
+  expect(texts([said('hi'), replied('hello'), said('more')])).not.toContain(LATE);
+  expect(texts([said('go'), called('c1'), intent('c1'), result('c1', 'out')])).not.toContain(LATE);
+});
+
+test('two plain replies in a row are shown as one, separated by a blank line', () => {
+  const late = [said('first'), said('second'), replied('answer to first'), replied('answer to second')];
+  expect(buildMessages([...late, said('third')], 'S')).toEqual([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+    { role: 'assistant', content: 'answer to first\n\nanswer to second' },
+    { role: 'user', content: 'third' },
+  ]);
+  // Events that are not shown do not keep two replies apart.
+  const apart = buildMessages([said('a'), replied('one'), ev({ type: 'generation.started', commit: 'a' }), replied('two'), replied('three'), said('b')], 'S');
+  expect(apart.map((m) => m.content)).toEqual(['S', 'a', 'one\n\ntwo\n\nthree', 'b']);
+  // An empty reply adds nothing, and no stray blank lines.
+  const empty = buildMessages([said('a'), replied(''), replied('two'), replied(''), said('b')], 'S');
+  expect(empty.map((m) => m.content)).toEqual(['S', 'a', 'two', 'b']);
+});
+
+test('a plain reply after a reply with tool calls stays its own message', () => {
+  const messages = buildMessages([said('go'), called('c1'), intent('c1'), result('c1', 'out'), replied('done'), said('next')], 'S');
+  expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'assistant', 'user']);
 });

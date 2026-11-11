@@ -108,6 +108,9 @@ test('a stimulus that arrives while the last reply is on its way gets another ro
   expect(seen).toHaveLength(2);
   expect(seen[0]!.some((m) => m.content === 'one more thing')).toBe(false);
   expect(seen[1]!.some((m) => m.role === 'user' && m.content === 'one more thing')).toBe(true);
+  // The late stimulus sits before the first answer in the journal, so the request must not end on that answer.
+  expect(seen[1]!.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
+  expect(seen[1]!.at(-1)!.content).toContain('Something arrived while you were writing your last reply');
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'stimulus', 'assistant', 'assistant']);
 });
 
@@ -115,8 +118,10 @@ test('a kernel note that arrives while the last reply is on its way gets another
   const during = async (body: Parameters<typeof appendEvent>[2]) => {
     const s = setup([]);
     let calls = 0;
-    const provider: Provider = async () => {
+    const provider: Provider = async (messages) => {
       calls += 1;
+      // Whatever the round, the request ends with something to answer, never with the agent's own finished reply.
+      expect(messages.at(-1)!.role).toBe('user');
       if (calls === 1) appendEvent(s.journal, 'g1', body);
       return { text: 'answer', toolCalls: [] };
     };
