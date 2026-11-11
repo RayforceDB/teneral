@@ -5,7 +5,7 @@ import { needsTurn } from './context';
 import { runTurn } from './loop';
 import { ProviderError, openAiProvider } from './provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
-import { clock, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
 import { TOOLS, type ToolContext } from './tools';
 
@@ -50,7 +50,8 @@ const sensors: Sensor[] = [
   terminal(console, () => { quitting = true; wake?.(); }),
   // The owner's lines from `./box talk`, which may come and go while this process lives.
   owner(ownerDir),
-  clock(heartbeatMinutes * 60_000),
+  // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
+  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
 ];
 

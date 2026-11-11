@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from '../kernel/envelope';
+import type { JournalEvent } from '../kernel/journal';
 
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
@@ -30,15 +31,41 @@ export function terminal(lines: AsyncIterable<string>, onQuit: () => void): Sens
 /** The longest delay a timer holds; a longer one fires at once. About 24 days. */
 const TIMER_MAX_MS = 2 ** 31 - 1;
 
-/** A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off. */
-export function clock(intervalMs: number): Sensor {
+/**
+ * Whether a tick may be given now. Not before the soul holds a file: until then the agent is in the
+ * middle of being born and is waiting for its owner, not for time of its own. And not while the
+ * newest stimulus is a tick it has not finished answering: a night without the provider leaves one
+ * tick to answer, not one for every interval.
+ */
+export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
+  if (!existsSync(soulDir) || !readdirSync(soulDir).some((name) => name.endsWith('.md'))) return false;
+  const newest = events.findLastIndex((e) => e.type === 'stimulus');
+  const e = events[newest];
+  if (e?.type !== 'stimulus' || e.source !== 'clock') return true;
+  // A reply with tool calls is work in progress; one without is the answer.
+  return events.slice(newest + 1).some((later) => later.type === 'assistant' && !(later.toolCalls?.length > 0));
+}
+
+/**
+ * A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off.
+ * `mayTick` is asked before each one; body/main.ts passes `clockMayTick` over the journal and the soul.
+ */
+export function clock(intervalMs: number, mayTick: () => boolean = () => true): Sensor {
   return (emit) => {
     // Not `<= 0`: NaN, from a mistyped setting, must also mean off. A timer given NaN fires without pause.
     if (!(intervalMs > 0)) return () => {};
     const timer = setInterval(() => {
+      // This runs in a timer, where anything thrown ends the process. No answer means no tick.
+      try {
+        if (!mayTick()) return;
+      } catch {
+        return;
+      }
       emit({
         source: 'clock',
-        text: `It is ${new Date().toISOString()}. No one is waiting for a reply. If something on your backlog is worth doing now, do it; if not, say so in one line.`,
+        text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
+          'If you are waiting for an answer from them, keep waiting and say so in one line; do not start something instead. ' +
+          'Otherwise, if something on your backlog is worth doing now, do it; if not, say so in one line.',
       });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);

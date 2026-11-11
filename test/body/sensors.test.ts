@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
+import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
+import { appendEvent, readEvents } from '../../kernel/journal';
 import { deliver, ENVELOPE_VERSION } from '../../kernel/envelope';
 import { tell } from '../../kernel/owner';
 
@@ -43,7 +44,9 @@ test('clock emits on its interval until stopped', async () => {
   const count = got.length;
   expect(count).toBeGreaterThanOrEqual(2);
   expect(got[0]!.source).toBe('clock');
-  expect(got[0]!.text).toContain('No one is waiting');
+  expect(got[0]!.text).toMatch(/^Clock tick at \d{4}-/);
+  expect(got[0]!.text).not.toMatch(/no ?one is waiting/i);
+  expect(got[0]!.text).toContain('keep waiting');
   await new Promise((r) => setTimeout(r, 30));
   expect(got.length).toBe(count);
 });
@@ -229,4 +232,67 @@ test('an owner poll that cannot list its directory, or an emit that throws, does
   } finally {
     console.error = realError;
   }
+});
+
+/** A journal and a soul directory in a temp place, and a clock wired to them the way body/main.ts wires it. */
+function life() {
+  const dir = mkdtempSync(join(tmpdir(), 'teneral-clock-'));
+  const journal = join(dir, 'journal.jsonl');
+  const soul = join(dir, 'soul');
+  const got: Stimulus[] = [];
+  const start = () => clock(10, () => clockMayTick(readEvents(journal), soul))((s) => {
+    got.push(s);
+    appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text });
+  });
+  const born = () => { mkdirSync(soul, { recursive: true }); writeFileSync(join(soul, 'SOUL.md'), 'I am Wren.'); };
+  const reply = (toolCalls: { id: string; name: string; args: unknown }[] = []) => appendEvent(journal, 'g', { type: 'assistant', text: 'ok', toolCalls });
+  return { journal, soul, got, start, born, reply };
+}
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test('the clock is silent until the soul holds a file: before that the agent is being born and waits for its owner', async () => {
+  const l = life();
+  const stop = l.start();
+  await wait(50);
+  expect(l.got).toEqual([]);
+  // A directory with only the owner's peers list is still no soul.
+  mkdirSync(l.soul, { recursive: true });
+  writeFileSync(join(l.soul, 'peers.json'), '{}');
+  await wait(50);
+  expect(l.got).toEqual([]);
+  l.born();
+  await wait(50);
+  stop();
+  expect(l.got.length).toBe(1);
+});
+
+test('ticks do not pile up: while the newest stimulus is a tick with no finished reply after it, there is no other', async () => {
+  const l = life();
+  l.born();
+  const stop = l.start();
+  await wait(80);
+  expect(l.got.length).toBe(1);
+  // Working on it is not having answered it.
+  l.reply([{ id: 'c1', name: 'bash', args: {} }]);
+  appendEvent(l.journal, 'g', { type: 'tool.result', callId: 'c1', ok: true, output: '' });
+  await wait(50);
+  expect(l.got.length).toBe(1);
+  l.reply();
+  await wait(50);
+  expect(l.got.length).toBe(2);
+  // Something else arriving after the tick ends the hold too: the tick is no longer the newest.
+  appendEvent(l.journal, 'g', { type: 'stimulus', source: 'terminal', text: 'hello' });
+  await wait(50);
+  stop();
+  expect(l.got.length).toBe(3);
+});
+
+test('a check that throws means no tick, and never stops the clock', async () => {
+  const got: Stimulus[] = [];
+  let checks = 0;
+  const stop = clock(10, () => { checks += 1; if (checks < 3) throw new Error('journal is unreadable'); return true; })((s) => got.push(s));
+  await wait(80);
+  stop();
+  expect(checks).toBeGreaterThanOrEqual(3);
+  expect(got.length).toBeGreaterThanOrEqual(1);
 });
