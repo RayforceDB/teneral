@@ -24,7 +24,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
    - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused;
    - `body/` may hold only regular files, and no more than 200,000 bytes of them;
    - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
-   - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
+   - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. The stand-in speaks both wire protocols, and the candidate is run as the provider you configured, with a dummy key: never with your key or your sign-in. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
 4. If a check fails, the same generation starts again and is told which check and what it printed. If all pass, the kernel switches to the new commit and starts it.
 5. A new generation has 60 seconds to report that it is ready, and 10 minutes to produce its first reply: the note about its promotion is waiting for it, so a working one answers. If it exits abnormally before it is ready, or is not ready in time, or is alive but silent after those 10 minutes, or later crashes three times in a row without producing a reply, or needs more than ten restarts, the kernel returns to the generation before it and tells the agent why, with the end of what the failed generation wrote to stderr. There is one step back, not a history: if that generation fails too, or there is none because this is the first, the kernel stops.
 
@@ -63,14 +63,37 @@ Messages are not signed. The agent is told to treat them as untrusted and not to
 
 Requires Docker and git.
 
-    cp .env.example .env    # fill in an OpenAI-compatible endpoint, key and model
-    ./box run bun install
-    ./box up                # start the agent in the background
+    ./box up                # start the agent in the background; the first time, it sets up a model provider first
     ./box talk              # attach this terminal to it
     ./box down              # stop it
     ./box back              # send it back to the generation before
+    ./box setup             # choose another model provider, or sign in again
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
+
+The first `./box up` finds no `.env` and runs the setup: you choose a model provider, give it what it needs, and two test requests are made, one that must be answered in words and one that must come back as a tool call. Only when both work is `.env` written, and the agent starts. It also installs the project's two development dependencies once, which the checks on a molt need. From a script, with no terminal to ask at, `./box up` says what is missing and exits with status 1.
+
+### Model providers
+
+The setup offers what `kernel/providers.ts` lists:
+
+1. **ChatGPT plan (Continue with ChatGPT).** The agent's requests use your ChatGPT Plus or Pro plan, through the sign-in OpenAI documents for open-source apps that run locally ([Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)). No API key is involved.
+2. **OpenAI API key.** Pay as you go, at `https://api.openai.com/v1`, over the Responses API.
+3. **Another OpenAI-compatible endpoint.** Any chat-completions endpoint: you type its base URL, a key and a model that supports tool calls. This is what the project did before there was a choice, and what a `.env` without `TENERAL_PROVIDER` still means.
+
+What the ChatGPT sign-in does:
+
+- The setup prints an address at `auth.openai.com`. You open it in your own browser, sign in there and approve the app, which OpenAI shows under the name `teneral`; you never type a password into teneral. The address is for you alone.
+- OpenAI sends your browser back to `http://127.0.0.1:1455/auth/callback`, where the setup is listening. For that, and only for the time of the sign-in, `./box setup` publishes port 1455 on this machine's loopback address. No other command opens a port. If 1455 is taken, `TENERAL_CALLBACK_PORT=<port> ./box setup` uses another.
+- The tokens OpenAI issues are stored in `.teneral/auth/chatgpt.json`, readable only by your user. An access token lasts an hour and is renewed by itself; the sign-in as a whole lasts 30 days from its last renewal. `.env` holds no key for this provider.
+- **The agent's own shell can read that file.** It runs as your user in a directory it can see all of. The agent is told the credentials are yours and to leave them alone, and its code keeps the token out of its environment, its journal and its workspace; nothing stops a command it runs from reading the file. The same has always been true of an API key in `.env`.
+- What the agent uses counts against your plan. On Plus, the five-hour limit is one total shared with everything else that uses your plan. Review it, limit this app's share or disconnect it at [ChatGPT Settings, Usage](https://chatgpt.com/settings/usage). `./box talk` reminds you with one line that the plan is in use. When a limit is reached the agent waits and tries again (after 10 s, 1 min, 5 min, then every 15 min); `./box logs` shows the reason with that link, while `./box talk` shows nothing until a request passes again.
+- When the sign-in has ended (30 days without a renewal, or you disconnected the app), `./box logs` says `sign in again with ./box setup`. Running it again reuses the registration and asks OpenAI only to confirm the account.
+- On a machine with no browser, run the setup in a checkout on a machine that has one, and copy its `.teneral/auth/chatgpt.json` to the same place here over a secure channel; or forward the port for the time of the setup (`ssh -L 1455:127.0.0.1:1455 <machine>`) and open the address locally.
+
+To change provider or sign in again, run `./box setup`. It asks before replacing an existing `.env`, keeps the settings in it that are not about the provider, and writes nothing unless the test requests work. A running agent keeps its old configuration until `./box down` and `./box up`. Model replies come whole, not streamed to your terminal, with either protocol.
+
+**Not verified against the real service.** The ChatGPT sign-in was built from OpenAI's documentation and tested end to end against a stand-in that is as strict as that documentation reads; no account was available to try the real one. If an assumption is wrong, the setup's test requests are where it shows, before anything is written: a failed sign-in or test prints OpenAI's status and message. The open points: whether a first registration is accepted from any open-source app without prior arrangement; whether tool calls made in one request are accepted back in the next without the model's reasoning items, which are not kept (see `BACKLOG.md`); whether tools grouped in one namespace come back under their plain names; and which models your plan lists.
 
 `./box up` starts the agent in a container of its own and returns. The agent does not depend on the terminal that started it: close the window and the clock still wakes it and its inbox is still read. Run again while it is up, `./box up` says so and changes nothing.
 
@@ -96,15 +119,16 @@ Settings, in `.env`:
 
 | Variable | Meaning |
 |---|---|
-| `TENERAL_BASE_URL` | An OpenAI-compatible chat-completions endpoint, such as `https://host/v1`. Required. |
-| `TENERAL_API_KEY` | The key for it. Required. |
+| `TENERAL_PROVIDER` | Which provider: `chatgpt`, `openai` or `compatible`. Written by `./box setup`. Unset, or anything else: `compatible`. |
+| `TENERAL_BASE_URL` | The endpoint, such as `https://host/v1`. Required, except for `chatgpt`, whose address is stored with the sign-in. |
+| `TENERAL_API_KEY` | The key for it. Required, except for `chatgpt`, which must not have one. |
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
 
-Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
+`./box setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
 
-To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`.
+To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`. A ChatGPT sign-in lives in `.teneral/auth/` and goes with it; keep that directory to stay signed in.
 
 ### How your lines reach it
 
@@ -116,7 +140,7 @@ Nothing is signed. Whoever can write to `.teneral/owner/` speaks as the owner, a
 
 The agent runs shell commands. `./box` builds a small image (Bun, git, a few standard tools) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped. Anything it writes outside this directory is gone when the container is removed. Run it that way.
 
-What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. It sets no limit on memory or on the number of processes, so a runaway command inside the container can exhaust the machine's memory or process table; `BOX_DOCKER_ARGS="--memory 4g --pids-limit 512"` puts limits back if you want them. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key, it could send elsewhere.
+What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. It sets no limit on memory or on the number of processes, so a runaway command inside the container can exhaust the machine's memory or process table; `BOX_DOCKER_ARGS="--memory 4g --pids-limit 512"` puts limits back if you want them. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key or the tokens of a ChatGPT sign-in, it could send elsewhere.
 
 `./box run <command>` runs that command in a fresh container of the same kind instead of the agent: `./box run bun test`, `./box run bash`. It can run beside the agent. The agent's own container is named `teneral-` and the name of this directory, so a second agent for the same directory, or for another directory of the same name, is refused. `BOX_DOCKER_ARGS` in the environment adds options to `docker run`, for a host that needs them or for limits you want; a normal run needs none.
 
@@ -124,7 +148,7 @@ Worktrees record absolute paths, and inside the container this directory is `/te
 
 A peer's inbox in `soul/peers.json` has to be a path the agent can see, and in the container that means inside this directory. Dropping files into `inbox/` from outside works as it is.
 
-To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is; `bun kernel/back.ts`, with the agent stopped, is what `./box back` is. There the agent's shell has everything your account has.
+To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install`, `bun kernel/setup.ts` for the setup, then `bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is; `bun kernel/back.ts`, with the agent stopped, is what `./box back` is. There the agent's shell has everything your account has.
 
 ## What it does not do yet
 
