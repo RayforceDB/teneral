@@ -2,6 +2,7 @@ import {
   closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { identity } from './envelope';
 import { git, linkModules, runGates, sh, type GateResult } from './gates';
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
@@ -45,6 +46,10 @@ export interface Paths {
   state: string;
   /** Holds the pid of the supervisor running this install. */
   lock: string;
+  /** Where other agents and programs drop messages for this one. */
+  inbox: string;
+  /** The owner's list of peers: name to inbox directory. */
+  peers: string;
 }
 
 export function paths(root: string): Paths {
@@ -55,6 +60,8 @@ export function paths(root: string): Paths {
     journal: join(root, 'memory', 'journal.jsonl'),
     state: join(root, '.teneral', 'state.json'),
     lock: join(root, '.teneral', 'lock'),
+    inbox: join(root, 'inbox'),
+    peers: join(root, 'soul', 'peers.json'),
   };
 }
 
@@ -311,7 +318,11 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
 
       const running = Bun.spawn(cmd, {
         cwd: p.live,
-        env: { ...process.env, TENERAL_GEN: gen, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate },
+        env: {
+          ...process.env,
+          TENERAL_GEN: gen, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate,
+          TENERAL_ID: identity(join(p.root, '.teneral')), TENERAL_INBOX: p.inbox, TENERAL_PEERS: p.peers,
+        },
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
       const timers: { ready?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout> } = {};
