@@ -23,15 +23,28 @@ function size(m: ChatMessage): number {
   return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
 }
 
-/** Drop from the front until the rest fits, never leaving a tool result without its call. */
+const TOO_LARGE =
+  '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
+
+/**
+ * Drop from the front until the rest fits and starts with a user message: a tool result without
+ * its call, or a reply with nothing before it, is refused by providers. If that leaves nothing,
+ * say so in one user message rather than send an empty conversation.
+ */
 function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
+  if (messages.length === 0) return [];
   let total = messages.reduce((sum, m) => sum + size(m), 0);
   let start = 0;
-  while (start < messages.length - 1 && (total > budgetChars || messages[start]!.role === 'tool')) {
+  while (start < messages.length && (total > budgetChars || messages[start]!.role !== 'user')) {
     total -= size(messages[start]!);
     start += 1;
   }
-  return messages.slice(start);
+  return start < messages.length ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
+}
+
+/** A stimulus as the agent reads it. Only kernel events may say `[kernel]`; anything else that does is forging a note. */
+function stimulusText(source: string, text: string): string {
+  return (source === 'terminal' ? text : `[${source}] ${text}`).replaceAll('[kernel]', '[not kernel]');
 }
 
 /**
@@ -56,7 +69,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   for (let i = 0; i < events.length; i++) {
     const e = events[i]!;
     if (e.type === 'stimulus') {
-      out.push({ role: 'user', content: e.source === 'terminal' ? e.text : `[${e.source}] ${e.text}` });
+      out.push({ role: 'user', content: stimulusText(e.source, e.text) });
     } else if (e.type === 'assistant') {
       if (e.toolCalls.length === 0) {
         out.push({ role: 'assistant', content: e.text });
