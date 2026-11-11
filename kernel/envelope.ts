@@ -24,6 +24,8 @@ export interface Envelope {
 }
 
 const ID = /^[A-Za-z0-9-]+$/;
+/** Names are shown to the model inside a label, so they are short and cannot hold a bracket, a space or a line break. */
+const NAME = /^[A-Za-z0-9._:-]{1,64}$/;
 
 export function parseEnvelope(raw: string): Envelope {
   let data: unknown;
@@ -36,9 +38,13 @@ export function parseEnvelope(raw: string): Envelope {
   const e = data as Record<string, unknown>;
   if (e.v !== ENVELOPE_VERSION) throw new Error(`unsupported version: ${String(e.v)}`);
   if (typeof e.id !== 'string' || !ID.test(e.id)) throw new Error('id must be letters, digits and dashes');
-  for (const key of ['from', 'to', 'ts']) {
-    if (typeof e[key] !== 'string' || e[key] === '') throw new Error(`missing ${key}`);
+  for (const key of ['from', 'to']) {
+    const name = e[key];
+    if (typeof name !== 'string' || !NAME.test(name)) {
+      throw new Error(`${key} must be 1 to 64 characters out of letters, digits and . _ : -`);
+    }
   }
+  if (typeof e.ts !== 'string' || e.ts === '') throw new Error('missing ts');
   if (typeof e.text !== 'string') throw new Error('missing text');
   if (e.text.length > MAX_TEXT) throw new Error(`text is longer than ${MAX_TEXT} characters`);
   if (e.replyTo !== null && (typeof e.replyTo !== 'string' || !ID.test(e.replyTo))) throw new Error('replyTo must be an id or null');
@@ -106,12 +112,23 @@ export function findSeen(inbox: string, id: string): Envelope | null {
   return null;
 }
 
-/** This individual's id: made on first use, kept in the directory it is given (`.teneral/`), never in git. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * This individual's id: made on first use, kept in the directory it is given (`.teneral/`), never in git.
+ * A file that does not hold an id (empty after a torn write, or damaged) is replaced rather than believed.
+ */
 export function identity(dataDir: string): string {
   const path = join(dataDir, 'id');
-  if (existsSync(path)) return readFileSync(path, 'utf8').trim();
+  if (existsSync(path)) {
+    const kept = readFileSync(path, 'utf8').trim();
+    if (UUID.test(kept)) return kept;
+  }
   mkdirSync(dataDir, { recursive: true });
   const id = randomUUID();
-  writeFileSync(path, `${id}\n`);
+  // Written aside and renamed, so the file is never seen half-written.
+  const tmp = join(dataDir, `.id-${process.pid}.tmp`);
+  writeFileSync(tmp, `${id}\n`);
+  renameSync(tmp, path);
   return id;
 }

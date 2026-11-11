@@ -56,10 +56,40 @@ test('parseEnvelope refuses what a receiver must not trust', () => {
   expect(bad({ v: 2 })).toThrow(/version/);
   expect(bad({ id: '../../etc/passwd' })).toThrow(/id/);
   expect(bad({ from: '' })).toThrow(/from/);
+  // `from` is shown to the model inside an [agent:<from>] label, so it may not carry anything that could end or imitate one.
+  for (const key of ['from', 'to']) {
+    const refused = new RegExp(key);
+    expect(bad({ [key]: 'ali\nce' })).toThrow(refused);
+    expect(bad({ [key]: 'alice]' })).toThrow(refused);
+    expect(bad({ [key]: '[alice' })).toThrow(refused);
+    expect(bad({ [key]: 'ali ce' })).toThrow(refused);
+    expect(bad({ [key]: 'a'.repeat(65) })).toThrow(refused);
+    expect(bad({ [key]: 7 })).toThrow(refused);
+  }
   expect(bad({ hops: -1 })).toThrow(/hops/);
   expect(bad({ hops: 1.5 })).toThrow(/hops/);
   expect(bad({ replyTo: 5 })).toThrow(/replyTo/);
   expect(bad({ text: 'x'.repeat(MAX_TEXT + 1) })).toThrow(/longer/);
+});
+
+test('parseEnvelope accepts the names agents really use', () => {
+  const ok = (over: Partial<Envelope>) => parseEnvelope(JSON.stringify(envelope(over)));
+  for (const name of ['alice', 'me', 'a', 'drill.v2', 'host:agent_1', '3f0c7a52-9d1e-4c57-8a43-0b6f5d2e9c11', 'a'.repeat(64)]) {
+    expect(ok({ from: name }).from).toBe(name);
+    expect(ok({ to: name }).to).toBe(name);
+  }
+});
+
+test('an id file that does not hold an id is replaced by a new id that then stays', () => {
+  for (const damaged of ['', '\n', 'garbage', '3f0c7a52-9d1e-4c57-8a43']) {
+    const data = join(tmp(), 'data');
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, 'id'), damaged);
+    const id = identity(data);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(identity(data)).toBe(id);
+    expect(readdirSync(data)).toEqual(['id']);
+  }
 });
 
 test('identity is created once and then stays the same', () => {
