@@ -71,7 +71,7 @@ Requires Docker and git.
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
 
-The first `./box up` finds no `.env` and runs the setup: you choose a model provider, give it what it needs, and two test requests are made, one that must be answered in words and one that must come back as a tool call. Only when both work is `.env` written, and the agent starts. It also installs the project's two development dependencies once, which the checks on a molt need. From a script, with no terminal to ask at, `./box up` says what is missing and exits with status 1.
+The first `./box up` finds no `.env` and runs the setup: you choose a model provider, give it what it needs, and two test requests are made, one that must be answered in words and one that must come back as a tool call. Only when both work is `.env` written, and the agent starts. At a terminal the setup is a few full-screen pages: you choose with the arrow keys or a number, a key is typed unseen, the two tests show their progress, and the last page says what was written and where. `./box setup --plain` asks the same questions as lines of text. It also installs the project's two development dependencies once, which the checks on a molt need. From a script, with no terminal to ask at, `./box up` says what is missing and exits with status 1.
 
 ### Model providers
 
@@ -83,7 +83,7 @@ The setup offers what `kernel/providers.ts` lists:
 
 What the ChatGPT sign-in does:
 
-- The setup prints an address at `auth.openai.com`. You open it in your own browser, sign in there and approve the app, which OpenAI shows under the name `teneral`; you never type a password into teneral. The address is for you alone.
+- The setup shows an address at `auth.openai.com`, as one line that your terminal wraps, so that selecting it copies it whole; where the terminal supports links it can also be clicked. You open it in your own browser, sign in there and approve the app, which OpenAI shows under the name `teneral`; you never type a password into teneral. The address is for you alone. The setup waits until your browser comes back; Esc gives up.
 - OpenAI sends your browser back to `http://127.0.0.1:1455/auth/callback`, where the setup is listening. For that, and only for the time of the sign-in, `./box setup` publishes port 1455 on this machine's loopback address. No other command opens a port. If 1455 is taken, `TENERAL_CALLBACK_PORT=<port> ./box setup` uses another.
 - The tokens OpenAI issues are stored in `.teneral/auth/chatgpt.json`, readable only by your user. An access token lasts an hour and is renewed by itself; the sign-in as a whole lasts 30 days from its last renewal. `.env` holds no key for this provider.
 - **The agent's own shell can read that file.** It runs as your user in a directory it can see all of. The agent is told the credentials are yours and to leave them alone, and its code keeps the token out of its environment, its journal and its workspace; nothing stops a command it runs from reading the file. The same has always been true of an API key in `.env`.
@@ -97,9 +97,32 @@ To change provider or sign in again, run `./box setup`. It asks before replacing
 
 `./box up` starts the agent in a container of its own and returns. The agent does not depend on the terminal that started it: close the window and the clock still wakes it and its inbox is still read. Run again while it is up, `./box up` says so and changes nothing.
 
-`./box talk` attaches a terminal. It shows the last few exchanges, then every line you enter goes to the agent as its owner's words, and what the agent does is shown as it happens: its replies in full, one short line for each tool call, what the kernel did to a molt (promoted, rejected and why, rolled back), and one line for anything else that woke it, such as the clock or a message from another agent. `/quit`, Ctrl-D or Ctrl-C leaves; the agent goes on. Any number of terminals can be attached at once. Each sees the same replies and, marked with `> `, what was typed in the others.
+`./box talk` attaches a terminal, as a full screen with three parts:
 
-`./box talk` also takes its lines from a pipe, for scripts:
+- **A header line**: the name `teneral`, the individual's own name once its `soul/SOUL.md` gives one (a line `name: ...`, else its first-level heading), the generation it is in as an ordinal and a short commit, the model, and one word for where it stands. That word is `waking` (its first start, before its first words), `thinking`, `running <tool>`, `molting` (it asked for a molt and the kernel has not answered), `starting` (the kernel is there and no body runs: between two runs), `resting`, `not running`, or `waiting for you`: its last finished reply ended with a question mark and nothing has arrived since.
+- **The conversation**, newest at the bottom, starting with the recent history. Your lines are marked `›`; the agent's replies are shown with their markdown laid out (headings, emphasis, lists, quotes, code blocks cut at the edge rather than wrapped, links with their address dimmed); each tool call is one dim line that is completed with `ok` or `failed` and how long it took; what the kernel did to a molt is a full-width notice (promoted, with both commits; rejected, with the gate and the end of its output; rolled back, with the reason and the end of what the generation last printed; sent back by you); the clock, a message from another agent and the birth letter are one quiet line each. While a turn is in progress the last line shows what is going on and for how long. Everything the agent, a tool or another agent wrote is stripped of control characters and escape sequences before it is shown, and always starts two columns in: the first two columns are the screen's own.
+- **A line to type on**, with a hint line under it.
+
+| Key | What it does |
+| --- | --- |
+| Enter | send what you typed to the agent, as its owner |
+| Alt+Enter, Ctrl-J | a new line; a pasted text keeps its line breaks. The input grows to five rows |
+| Left, Right, Home, End, Ctrl-A, Ctrl-E | move in the line; with Ctrl or Alt, Left and Right jump by words |
+| Backspace, Delete, Ctrl-U, Ctrl-K, Ctrl-W | delete a character, to the start of the line, to its end, the word before |
+| Up, Down | the line above or below in a text of several lines; at the first or last line, what you sent before |
+| PageUp, PageDown, Shift+Up, Shift+Down, mouse wheel | scroll the conversation; new lines do not move what you are reading |
+| End, Esc, or typing | back to the newest |
+| Tab, `/tools` | show or hide a few rows of what each tool call returned |
+| `/generations` | the generations it has lived in, as `./box back --list` gives them |
+| `/mouse` | give the mouse back to the terminal, or take the wheel again. While the wheel is read, hold Shift to select text |
+| `/help` | the keys and commands |
+| `/quit`, Ctrl-D on an empty line, Ctrl-C | leave. The agent goes on |
+
+Nothing in this screen stops the agent or changes it; `./box down` and `./box back` do that. When the terminal goes away without a word (a closed window, a dropped connection), the screen notices within about half a minute and ends by itself. Any number of terminals can be attached at once. Each sees the same replies, and what was typed in the others marked as such. The screen keeps a bounded part of the conversation, whatever the size of the journal, and says where the rest is. The colours and the few glyphs are in one place, `kernel/tui/theme.ts`; `NO_COLOR` is honoured, and a locale that is not UTF-8 gets ASCII marks.
+
+`./box talk --plain` is the same conversation as plain text, without the screen: the last few exchanges, then replies in full, one short line for each tool call (`  [bash] command: ...`), the kernel's notes as `[kernel] ...`, and what was typed in other terminals marked with `> `. That is also what you get whenever the input or the output is not a terminal.
+
+`./box talk` also takes its lines from a pipe, for scripts, and this is unchanged by the screen:
 
     echo "What are you working on?" | ./box talk
 
@@ -132,7 +155,7 @@ To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, 
 
 ### How your lines reach it
 
-`./box talk` runs a small client, `kernel/talk.ts`, inside the agent's container. Each line you enter becomes a file in `.teneral/owner/`, which the agent reads within a quarter of a second and takes exactly as a line typed at its own terminal. What you see is read back from the journal. There is no connection between the client and the agent to break, which is why you can leave and come back, and why a line entered just before a molt or a crash is not lost: the file stays until it is in the journal.
+`./box talk` runs a small client, `kernel/talk.ts`, inside the agent's container (its full screen is in `kernel/tui/`). Each line you enter becomes a file in `.teneral/owner/`, which the agent reads within a quarter of a second and takes exactly as a line typed at its own terminal. What you see is read back from the journal. There is no connection between the client and the agent to break, which is why you can leave and come back, and why a line entered just before a molt or a crash is not lost: the file stays until it is in the journal.
 
 Nothing is signed. Whoever can write to `.teneral/owner/` speaks as the owner, and that includes the agent's own shell. `inbox/` is the other door, for everyone else: what arrives there is shown to the agent as coming from another agent and is not to be obeyed.
 
