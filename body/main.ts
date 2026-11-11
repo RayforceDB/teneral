@@ -4,6 +4,7 @@ import { appendEvent, readEvents } from '../kernel/journal';
 import { needsTurn } from './context';
 import { runTurn } from './loop';
 import { openAiProvider } from './provider';
+import { describeDelay, retryDelayMs } from './retry';
 import { clock, inbox, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
 import { TOOLS, type ToolContext } from './tools';
@@ -22,6 +23,9 @@ const journal = env('TENERAL_JOURNAL');
 const workspace = env('TENERAL_WORKSPACE');
 const provider = openAiProvider({ baseUrl: env('TENERAL_BASE_URL'), apiKey: env('TENERAL_API_KEY'), model: env('TENERAL_MODEL') });
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
+// Characters per request. Not a positive number, or not set: the default in body/context.ts.
+const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
+const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const prompt = readFileSync(join(import.meta.dir, 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
@@ -43,18 +47,31 @@ const sensors: Sensor[] = [
   inbox(inboxDir),
 ];
 
-/** One turn. False when it failed, so the caller waits for the next stimulus instead of spinning. */
-async function turn(): Promise<boolean> {
+/** One turn. Returns what went wrong, or null when it ran to its end. */
+async function turn(): Promise<string | null> {
+  // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
+  console.error('[thinking]');
   try {
-    // The soul is read again each turn: the agent may have just rewritten it.
-    const system = composeSystem(prompt, soulDir);
-    const outcome = await runTurn({ journal, gen, provider, tools: TOOLS, system, ctx, onText: (t) => console.log(`\n${t}\n`) });
+    const outcome = await runTurn({
+      journal, gen, provider, tools: TOOLS, ctx, budgetChars,
+      // Composed again every round: the agent may have just rewritten its soul.
+      system: () => composeSystem(prompt, soulDir),
+      onText: (t) => console.log(`\n${t}\n`),
+      onTool: (name) => console.error(`[tool] ${name}`),
+    });
     if (outcome === 'molt') process.exit(75);
-    return true;
+    return null;
   } catch (err) {
-    console.error(`[turn failed] ${err instanceof Error ? err.message : String(err)}`);
-    return false;
+    return err instanceof Error ? err.message : String(err);
   }
+}
+
+/** Sleeps until a sensor emits or the agent is told to quit, or for `ms` when given. */
+function idle(ms?: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = ms === undefined ? undefined : setTimeout(resolve, ms);
+    wake = () => { clearTimeout(timer); resolve(); };
+  }).then(() => { wake = null; });
 }
 
 // Everything above loaded and parsed: this generation can start.
@@ -64,15 +81,25 @@ const firstWords = birth(readEvents(journal), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
 
+// Failed turns in a row. Nothing is journaled for a failure: the turn stays owed and is tried again.
+let failures = 0;
 for (;;) {
   // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
-    if (!(await turn())) break;
+    const error = await turn();
+    if (error === null) {
+      failures = 0;
+      continue;
+    }
+    failures += 1;
+    const delay = retryDelayMs(failures);
+    console.error(`[turn failed] ${error}`);
+    console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or at once when something arrives`);
+    await idle(delay);
   }
   if (quitting) break;
   process.stdout.write('> ');
-  await new Promise<void>((resolve) => { wake = resolve; });
-  wake = null;
+  await idle();
 }
 
 for (const stop of stops) stop();

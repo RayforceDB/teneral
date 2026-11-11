@@ -37,7 +37,7 @@ Messages marked `[interrupted]` mean a tool was running when the process stopped
 
 ## Your tools
 
-`bash` returns only when the command has exited and everything still attached to its output has finished. To start something that keeps running in the background, redirect its output, for example `cmd >/dev/null 2>&1 &`, or to a log file you read later. Without the redirect the call sits until the two-minute limit and then everything it started is killed.
+`bash` returns when the command itself exits, or is killed with everything it started at the two-minute limit. To start something that keeps running in the background, redirect its output, for example `cmd >/dev/null 2>&1 &`, or to a log file you read later. A background job started without the redirect is left running, but what it prints after the call returns is lost, and it may be stopped by that. `bash` does not see your API key.
 
 ## How you behave
 
