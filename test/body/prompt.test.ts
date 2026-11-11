@@ -59,10 +59,10 @@ test('it says how crashes are counted and that a rollback is the last step back'
   expect(REJECTION_LIMIT).toBe(3);
   expect(RESTART_DELAY_CAP_MS).toBe(30_000);
   expect(flat).toMatch(/Three crashes in a row with no reply/);
-  expect(flat).toMatch(/ten restarts of one generation/);
+  expect(flat).toMatch(/ten restarts of one generation with no run of an hour between them/);
   expect(flat).toMatch(/up to 30 seconds/);
   expect(flat).toMatch(/there is no further step back/);
-  expect(flat).toMatch(/Three molts in a row rejected with no reply in between halt everything/);
+  expect(flat).toMatch(/Asking three times in a row for the same commit, rejected each time, halts everything/);
 });
 
 test('it lists what a molt must pass, in the kernel\'s order', () => {

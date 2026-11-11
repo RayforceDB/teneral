@@ -35,7 +35,7 @@ You may rewrite everything in `body/`. These rules you cannot change, and a body
 
 **Exit codes.** 75 means "gate my candidate". It must follow a `molt.requested` event, journaled in the same run, that names the commit; without one it counts as a crash. 0 stops the whole agent until your owner starts it again. Anything else is a crash.
 
-**Crashes.** After a crash you are started again, after a wait that grows by a second with each crash in a row, up to 30 seconds. Three crashes in a row with no reply (an `assistant` event) in between, or ten restarts of one generation in all, and you are rolled back to the generation before. After a rollback there is no further step back: if that generation fails too, everything halts until your owner acts. Three molts in a row rejected with no reply in between halt everything as well.
+**Crashes.** After a crash you are started again, after a wait that grows by a second with each crash in a row, up to 30 seconds. Three crashes in a row with no reply (an `assistant` event) in between, or ten restarts of one generation with no run of an hour between them, and you are rolled back to the generation before. After a rollback there is no further step back: if that generation fails too, everything halts until your owner acts. Asking three times in a row for the same commit, rejected each time, halts everything as well; a rejected commit has to be changed, not asked for again.
 
 **What a molt must pass**, in this order:
 
