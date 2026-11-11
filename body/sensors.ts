@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { archive, collect, type Arrival } from '../kernel/envelope';
 
 export interface Stimulus {
@@ -9,7 +11,7 @@ export interface Stimulus {
 /** Start sensing; call `emit` for each stimulus; return a function that stops it. */
 export type Sensor = (emit: (s: Stimulus) => void) => () => void;
 
-/** Lines typed by the person at the terminal. `/quit` ends the agent; the end of input does not. */
+/** Lines typed by the person at the terminal the agent was started in, when there is one. `/quit` ends the agent; the end of input does not. */
 export function terminal(lines: AsyncIterable<string>, onQuit: () => void): Sensor {
   return (emit) => {
     let stopped = false;
@@ -79,6 +81,46 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
       } catch (err) {
         // Said once per kind of failure, not every poll.
         if (say(err) !== listing) console.error(`[inbox] could not read ${dir}: ${say(err)}`);
+        listing = say(err);
+      }
+    };
+    poll();
+    const timer = setInterval(poll, intervalMs);
+    return () => clearInterval(timer);
+  };
+}
+
+/**
+ * Lines the owner typed somewhere else: `./box talk` leaves each as a plain-text file in `dir`
+ * (see kernel/owner.ts). They are the owner's words exactly as typed lines are, so the source is
+ * 'terminal'. A name starting with a dot is a line still being written.
+ */
+export function owner(dir: string, intervalMs = 250): Sensor {
+  return (emit) => {
+    const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+    // Files that failed in this process. Without this, a line that was journaled but cannot be removed would be said on every poll.
+    const failed = new Set<string>();
+    let listing = '';
+    // This runs in a timer, where anything thrown ends the process.
+    const poll = () => {
+      try {
+        if (!existsSync(dir)) return;
+        for (const file of readdirSync(dir).filter((name) => !name.startsWith('.')).sort()) {
+          if (failed.has(file)) continue;
+          try {
+            const text = readFileSync(join(dir, file), 'utf8').trim();
+            // Journal first, remove second: a crash in between repeats the line rather than losing it.
+            if (text !== '') emit({ source: 'terminal', text });
+            rmSync(join(dir, file));
+          } catch (err) {
+            failed.add(file);
+            console.error(`[owner] could not handle ${file}; leaving it until the next start: ${say(err)}`);
+          }
+        }
+        listing = '';
+      } catch (err) {
+        // Said once per kind of failure, not every poll.
+        if (say(err) !== listing) console.error(`[owner] could not read ${dir}: ${say(err)}`);
         listing = say(err);
       }
     };

@@ -9,3 +9,9 @@ test('the prompt says how to start something in the background, since a job that
   expect(prompt).toMatch(/background/);
   expect(prompt).toMatch(/two-minute limit/);
 });
+
+test('the prompt says that the owner comes and goes, and reads replies, not tool output', () => {
+  expect(prompt).toMatch(/attaches a terminal to talk to you and detaches again/);
+  expect(prompt).toMatch(/whether or not anyone is still watching/);
+  expect(prompt).toMatch(/must be in your reply text/);
+});

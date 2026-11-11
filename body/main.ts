@@ -5,7 +5,7 @@ import { needsTurn } from './context';
 import { runTurn } from './loop';
 import { openAiProvider } from './provider';
 import { describeDelay, retryDelayMs } from './retry';
-import { clock, inbox, terminal, type Sensor, type Stimulus } from './sensors';
+import { clock, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
 import { TOOLS, type ToolContext } from './tools';
 
@@ -30,6 +30,7 @@ const prompt = readFileSync(join(import.meta.dir, 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
+const ownerDir = env('TENERAL_OWNER');
 const ctx: ToolContext = { workspace, journal, gen, moltCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
 
 let quitting = false;
@@ -45,7 +46,10 @@ function emit(s: Stimulus): void {
 }
 
 const sensors: Sensor[] = [
+  // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
+  // The owner's lines from `./box talk`, which may come and go while this process lives.
+  owner(ownerDir),
   clock(heartbeatMinutes * 60_000),
   inbox(inboxDir),
 ];
@@ -107,7 +111,8 @@ for (;;) {
     await idle(delay);
   }
   if (quitting) break;
-  process.stdout.write('> ');
+  // A prompt only where someone can type at it; in the background it would be noise in the log.
+  if (process.stdin.isTTY) process.stdout.write('> ');
   await idle();
 }
 

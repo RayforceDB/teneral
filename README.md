@@ -29,7 +29,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 
 Around that: only a generation that became ready may molt, so the one kept for rollback is always one that started. A restart after a crash or a rejected molt waits a second longer for each one in a row. Three molts in a row that the checks reject, with no reply in between, stop the supervisor and leave it to you. A lock file keeps a second supervisor from running the same checkout, and a body left behind by a supervisor that was killed is stopped before a new one starts.
 
-The agent is woken by sensors, not only by you typing: the terminal is one, a clock is another (every 30 minutes unless you change it), its inbox is a third, and it can build more.
+The agent is woken by sensors, not only by you typing: your lines are one, a clock is another (every 30 minutes unless you change it), its inbox is a third, and it can build more. It runs in the background, so the clock and the inbox reach it whether or not a terminal is open.
 
 ## Birth
 
@@ -56,12 +56,30 @@ Messages are not signed. The agent is told to treat them as untrusted and not to
 Requires Docker and git.
 
     cp .env.example .env    # fill in an OpenAI-compatible endpoint, key and model
-    ./box bun install
-    ./box
+    ./box run bun install
+    ./box up                # start the agent in the background
+    ./box talk              # attach this terminal to it
+    ./box down              # stop it
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
 
-Type to talk. `/quit` stops the agent; typed while it is working, it takes effect when the turn ends. Ctrl-C stops it without waiting.
+`./box up` starts the agent in a container of its own and returns. The agent does not depend on the terminal that started it: close the window and the clock still wakes it and its inbox is still read. Run again while it is up, `./box up` says so and changes nothing.
+
+`./box talk` attaches a terminal. It shows the last few exchanges, then every line you enter goes to the agent as its owner's words, and what the agent does is shown as it happens: its replies in full, one short line for each tool call, what the kernel did to a molt (promoted, rejected and why, rolled back), and one line for anything else that woke it, such as the clock or a message from another agent. `/quit`, Ctrl-D or Ctrl-C leaves; the agent goes on. Any number of terminals can be attached at once. Each sees the same replies and, marked with `> `, what was typed in the others.
+
+`./box talk` also takes its lines from a pipe, for scripts:
+
+    echo "What are you working on?" | ./box talk
+
+Then it shows no history. It sends one line at a time: a line goes out when the agent is at rest, and the next line, or the exit, waits until the agent has finished its reply to that one. The exit status is 0 after the reply to the last line. If nothing is journaled for 300 seconds while a line waits, it gives up with status 1; `./box talk --wait 60` changes that time. With no lines at all (`./box talk </dev/null`) it prints the last few exchanges and exits.
+
+`./box down` stops the agent: the kernel is asked to stop, stops the agent and exits, and the container is removed. Nothing is lost by it. The journal, the soul and the code are in this directory, and `./box up` goes on from there.
+
+`./box logs` follows what the container prints: the kernel's `[teneral]` lines, `[thinking]` and `[tool]` as the agent works, and its replies.
+
+`./box fg` runs the agent in the foreground of this terminal instead, for debugging. There you type straight to it; `/quit` stops the agent (typed while it is working, it takes effect when the turn ends), Ctrl-C stops it without waiting, and so does closing the terminal.
+
+**It does not come back by itself.** After a reboot, or when Docker itself is restarted, the agent is down until you run `./box up`. This is on purpose. When the kernel gives up, because a generation cannot be kept running and there is nothing to roll back to, or the checks keep rejecting what the agent asks for, it exits and waits for you; Docker's restart policies cannot tell that from a crash and would start it again, some of them without end. So there is no restart policy. When the kernel has stopped by itself, `./box talk` says so and gives its exit status, `./box logs` shows what it last printed, and the next `./box up` shows that once more before it starts again.
 
 Settings, in `.env`:
 
@@ -73,23 +91,29 @@ Settings, in `.env`:
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. |
 
-Write values without quotes and without a comment after them: Docker passes the whole line on as written.
+Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
 
-To start over as a new individual, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`.
+To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`.
+
+### How your lines reach it
+
+`./box talk` runs a small client, `kernel/talk.ts`, inside the agent's container. Each line you enter becomes a file in `.teneral/owner/`, which the agent reads within a quarter of a second and takes exactly as a line typed at its own terminal. What you see is read back from the journal. There is no connection between the client and the agent to break, which is why you can leave and come back, and why a line entered just before a molt or a crash is not lost: the file stays until it is in the journal.
+
+Nothing is signed. Whoever can write to `.teneral/owner/` speaks as the owner, and that includes the agent's own shell. `inbox/` is the other door, for everyone else: what arrives there is shown to the agent as coming from another agent and is not to be obeyed.
 
 ### Why a container
 
-The agent runs shell commands. `./box` builds a small image (Bun, git, a few standard tools) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped, at most 512 processes and 4 GB of memory. Anything it writes outside this directory is gone when the container exits. Run it that way.
+The agent runs shell commands. `./box` builds a small image (Bun, git, a few standard tools) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped, at most 512 processes and 4 GB of memory. Anything it writes outside this directory is gone when the container is removed. Run it that way.
 
 What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key, it could send elsewhere.
 
-`./box <command>` runs that command in the same container instead of the agent: `./box bun test`, `./box bash`. Ctrl-C, `/quit` and `docker stop` all end the agent and remove the container.
+`./box run <command>` runs that command in a fresh container of the same kind instead of the agent: `./box run bun test`, `./box run bash`. It can run beside the agent. The agent's own container is named `teneral-` and the name of this directory, so a second agent for the same directory is refused. `BOX_DOCKER_ARGS` in the environment adds options to `docker run`, for a host that needs them; a normal run needs none.
 
-An individual lives where it was born. Worktrees record absolute paths, and inside the container this directory is `/teneral`, so an agent first started with `./box` must always be started with `./box`. For the same reason, do not run `git worktree prune` here from outside the container while that individual exists: git would not find `/teneral` and would forget its worktrees.
+An individual lives where it was born. Worktrees record absolute paths, and inside the container this directory is `/teneral`, so an agent first started with `./box` must always be started with `./box`. For the same reason, do not run `git worktree prune` here from outside the container while that individual exists: git would not find `/teneral` and would forget its worktrees. (`git gc` does the same to worktrees it has not found for three months; the kernel switches that off in this repository's git config, with `gc.worktreePruneExpire never`.)
 
 A peer's inbox in `soul/peers.json` has to be a path the agent can see, and in the container that means inside this directory. Dropping files into `inbox/` from outside works as it is.
 
-To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. There the agent's shell has everything your account has.
+To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is. There the agent's shell has everything your account has.
 
 ## What it does not do yet
 

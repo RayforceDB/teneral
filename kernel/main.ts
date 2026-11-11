@@ -5,7 +5,7 @@ import { supervise } from './supervisor';
 const missing = ['TENERAL_BASE_URL', 'TENERAL_API_KEY', 'TENERAL_MODEL'].filter((name) => !process.env[name]);
 if (missing.length > 0) {
   console.error(`Not configured: ${missing.join(', ')}.`);
-  console.error('Copy .env.example to .env, fill these in, and run `bun start` again.');
+  console.error('Copy .env.example to .env, fill these in, and start it again.');
   process.exit(1);
 }
 

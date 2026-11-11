@@ -58,6 +58,8 @@ export interface Paths {
   peers: string;
   /** The individual's soul files. Never in git. */
   soul: string;
+  /** Where the owner's typed lines are left for the body, one file each. See kernel/owner.ts. */
+  owner: string;
 }
 
 export function paths(root: string): Paths {
@@ -72,6 +74,7 @@ export function paths(root: string): Paths {
     inbox: join(root, 'inbox'),
     peers: join(root, 'soul', 'peers.json'),
     soul: join(root, 'soul'),
+    owner: join(root, '.teneral', 'owner'),
   };
 }
 
@@ -127,6 +130,10 @@ export function init(root: string): State {
   const known = existsSync(p.state) ? readState(p) : null;
   const head = known?.current ?? git(root, 'rev-parse', 'HEAD');
   mkdirSync(join(root, '.teneral'), { recursive: true });
+  // `git gc` forgets worktrees whose directories it cannot find, after three months by default.
+  // An individual raised in a container has its worktrees at paths that exist only in there
+  // (/teneral/...), so a gc run on the host, by hand or by git itself, would count them as gone.
+  git(root, 'config', '--local', 'gc.worktreePruneExpire', 'never');
   // Forget worktrees whose directories are gone; git refuses to add those again otherwise.
   git(root, 'worktree', 'prune');
   if (!isWorktree(p.live)) git(root, 'worktree', 'add', '--detach', p.live, head);
@@ -346,8 +353,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
   /** Ends the wait before a restart, if one is in progress. */
   let wake: (() => void) | null = null;
   const onSignal = () => { stopping = true; terminate?.(); wake?.(); };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
+  // SIGHUP is what a closing terminal sends. Unhandled, it would cut the supervisor down and leave the body running.
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  for (const signal of signals) process.on(signal, onSignal);
 
   const pause = (ms: number) => new Promise<void>((resolve) => {
     const done = () => { clearTimeout(timer); wake = null; resolve(); };
@@ -412,7 +420,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
           ...process.env,
           TENERAL_GEN: gen, TENERAL_JOURNAL: p.journal, TENERAL_WORKSPACE: p.candidate,
           TENERAL_ID: identity(join(p.root, '.teneral')), TENERAL_INBOX: p.inbox, TENERAL_PEERS: p.peers,
-          TENERAL_SOUL: p.soul,
+          TENERAL_SOUL: p.soul, TENERAL_OWNER: p.owner,
         },
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
@@ -515,8 +523,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       log(`promoted ${request.commit}`);
     }
   } finally {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
+    for (const signal of signals) process.off(signal, onSignal);
     dropLock(p.lock);
   }
 }

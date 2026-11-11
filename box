@@ -1,36 +1,166 @@
 #!/usr/bin/env bash
 # Run teneral inside its container. The repo is the only thing it can see.
-#   ./box            the agent
-#   ./box <command>  that command instead, e.g. ./box bun test
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [ ! -f .env ]; then
-  echo "No .env here. Copy .env.example to .env and fill it in." >&2
-  exit 1
-fi
+usage() {
+  cat <<'EOF'
+usage: ./box <command>
 
-docker build --quiet --tag teneral \
-  --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >/dev/null
+  up              start the agent in the background; it outlives this terminal
+  talk            attach this terminal to it: type to speak, /quit to leave. The agent goes on
+  down            stop the agent
+  logs            follow what the kernel and the agent print
+  run <command>   run a command in a fresh container instead of the agent: ./box run bun test
+  fg              run the agent in the foreground of this terminal, for debugging
+EOF
+}
 
-# No -t when stdin is not a terminal, so the script also works from a service.
-# (The ${x[@]+...} form is for bash before 4.4, where an empty array counts as unset.)
+# The agent's container is named after this directory: a second agent for it is then refused,
+# while `run` commands, which get no name, can run beside it.
+name="teneral-$(basename "$PWD")"
+
+# What that container is doing: running, exited, ... or nothing when there is none.
+state() { docker container inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true; }
+exit_code() { docker container inspect --format '{{.State.ExitCode}}' "$name" 2>/dev/null || true; }
+alive() {
+  case "$(state)" in
+    running | paused | restarting) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+say_not_running() {
+  if [ -n "$(state)" ]; then
+    echo "Not running: it stopped by itself, with status $(exit_code). ./box logs shows its last lines, ./box up starts it again." >&2
+  else
+    echo "Not running. ./box up starts it." >&2
+  fi
+}
+
+# A container that stopped by itself (the agent quit, or the kernel gave up and needs you) is
+# kept so that its output can still be read. It goes when the next one starts.
+clear_stopped() {
+  [ -n "$(state)" ] || return 0
+  echo "The last run stopped by itself, with status $(exit_code). Its last lines:"
+  docker logs --tail 10 "$name" 2>&1 | sed 's/^/  | /'
+  docker rm "$name" >/dev/null
+}
+
+# The (${x[@]+...}) form below is for bash before 4.4, where an empty array counts as unset.
 tty=()
-if [ -t 0 ]; then tty=(--tty); fi
+extra=()
+prepare() {
+  if [ ! -f .env ]; then
+    echo "No .env here. Copy .env.example to .env and fill it in." >&2
+    exit 1
+  fi
+  docker build --quiet --tag teneral \
+    --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >/dev/null
+  # No -t when stdin is not a terminal, so this also works from a script or a service.
+  if [ -t 0 ]; then tty=(--tty); fi
+  # More options for `docker run`, split on spaces. Nothing here needs any; it is for an unusual
+  # host, or a test that has to reach a model server on the machine itself.
+  if [ -n "${BOX_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$BOX_DOCKER_ARGS"; fi
+}
 
-# Only the agent itself gets the name: a second one for this directory is then refused,
-# while a one-off command can still run beside it.
-name=()
-if [ "$#" -eq 0 ]; then name=(--name "teneral-$(basename "$PWD")"); fi
+# --init puts a small init at pid 1: it passes signals on to the kernel and reaps what the
+# agent's shell leaves behind.
+cage=(--init
+  --env-file .env
+  --volume "$PWD":/teneral
+  --cap-drop ALL
+  --security-opt no-new-privileges
+  --pids-limit 512
+  --memory 4g)
 
-# --init puts a small init at pid 1: it passes Ctrl-C and `docker stop` on to the kernel
-# and reaps what the agent's shell leaves behind.
-exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} --init \
-  ${name[@]+"${name[@]}"} \
-  --env-file .env \
-  --volume "$PWD":/teneral \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --pids-limit 512 \
-  --memory 4g \
-  teneral "$@"
+command="${1:-}"
+[ "$#" -eq 0 ] || shift
+
+case "$command" in
+  up)
+    if alive; then
+      echo "Already running, as $name."
+      exit 0
+    fi
+    prepare
+    clear_stopped
+    # No restart policy. Docker's policies cannot tell a kernel that gave up and needs its owner
+    # from a crash: `on-failure` and `unless-stopped` would both start it again, the second
+    # without end. So after a reboot the agent is down until `./box up`.
+    docker run --detach --name "$name" --restart no \
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral >/dev/null
+    sleep 1
+    if ! alive; then
+      echo "It stopped right away, with status $(exit_code):" >&2
+      docker logs --tail 20 "$name" 2>&1 | sed 's/^/  | /' >&2
+      exit 1
+    fi
+    echo "Up, as $name. ./box talk attaches to it, ./box logs follows its output, ./box down stops it."
+    ;;
+
+  fg)
+    if alive; then
+      echo "Already running in the background, as $name. ./box talk attaches to it; ./box down stops it." >&2
+      exit 1
+    fi
+    prepare
+    clear_stopped
+    exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} --name "$name" \
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral
+    ;;
+
+  run)
+    if [ "$#" -eq 0 ]; then
+      echo "run what? For example: ./box run bun test" >&2
+      exit 2
+    fi
+    prepare
+    exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} \
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral "$@"
+    ;;
+
+  talk)
+    if ! alive; then
+      say_not_running
+      exit 1
+    fi
+    if [ -t 0 ]; then tty=(--tty); fi
+    # The client runs inside the container, beside the agent, so the host needs no Bun.
+    exec docker exec --interactive ${tty[@]+"${tty[@]}"} "$name" bun kernel/talk.ts "$@"
+    ;;
+
+  logs)
+    if alive; then
+      exec docker logs --follow --tail 100 "$name"
+    fi
+    if [ -n "$(state)" ]; then docker logs --tail 100 "$name" || true; fi
+    say_not_running
+    exit 1
+    ;;
+
+  down)
+    if [ -z "$(state)" ]; then
+      echo "Not running."
+      exit 0
+    fi
+    if alive; then
+      # The kernel gets SIGTERM, stops the agent and exits 0. It has 20 seconds before it is killed.
+      docker stop -t 20 "$name" >/dev/null
+      echo "Stopped, with status $(exit_code)."
+    else
+      echo "It had already stopped by itself, with status $(exit_code)."
+    fi
+    docker rm "$name" >/dev/null
+    ;;
+
+  '' | help | -h | --help)
+    usage
+    ;;
+
+  *)
+    echo "./box: no such command: $command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

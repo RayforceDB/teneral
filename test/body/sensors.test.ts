@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, inbox, terminal, type Stimulus } from '../../body/sensors';
+import { clock, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
 import { deliver, ENVELOPE_VERSION } from '../../kernel/envelope';
+import { tell } from '../../kernel/owner';
 
 async function* lines(...items: string[]) {
   for (const item of items) yield item;
@@ -136,6 +137,95 @@ test('a poll that cannot even list the inbox, or an emit that throws, does not t
     let emits = 0;
     expect(() => inbox(dir, 10)(() => { emits += 1; throw new Error('journal is full'); })()).not.toThrow();
     expect(emits).toBe(1);
+  } finally {
+    console.error = realError;
+  }
+});
+
+// --- the owner's lines, left as files by kernel/talk.ts ---
+
+const ownerDir = () => join(mkdtempSync(join(tmpdir(), 'teneral-owner-')), 'owner');
+
+test('owner turns each file into a terminal stimulus, in name order, and removes it', async () => {
+  const dir = ownerDir();
+  tell(dir, 'first');
+  tell(dir, 'second');
+  const got: Stimulus[] = [];
+  const stop = owner(dir, 10)((s) => got.push(s));
+  tell(dir, '  third, with space around it \n');
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(got).toEqual([
+    { source: 'terminal', text: 'first' },
+    { source: 'terminal', text: 'second' },
+    { source: 'terminal', text: 'third, with space around it' },
+  ]);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test('owner reads plain files by name, whoever wrote them, and waits for a directory that is not there yet', async () => {
+  const dir = ownerDir();
+  const got: Stimulus[] = [];
+  const stop = owner(dir, 10)((s) => got.push(s));
+  await settle();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'b'), 'second');
+  writeFileSync(join(dir, 'a'), 'first');
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(got.map((s) => s.text)).toEqual(['first', 'second']);
+});
+
+test('owner ignores a dot-prefixed file, which is a line still being written, and drops an empty one unsaid', async () => {
+  const dir = ownerDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.0001-half.tmp'), 'not yet');
+  writeFileSync(join(dir, '0002-empty'), ' \n');
+  const got: Stimulus[] = [];
+  owner(dir, 10)((s) => got.push(s))();
+  expect(got).toEqual([]);
+  expect(readdirSync(dir)).toEqual(['.0001-half.tmp']);
+});
+
+test('an owner line that cannot be removed is emitted once, logged once, and never stops the sensor', async () => {
+  const dir = ownerDir();
+  tell(dir, 'stuck');
+  // Nothing can be removed from, or added to, a directory that may not be written.
+  chmodSync(dir, 0o555);
+  const got: Stimulus[] = [];
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const stop = owner(dir, 10)((s) => got.push(s));
+    await new Promise((r) => setTimeout(r, 60));
+    chmodSync(dir, 0o755);
+    tell(dir, 'later');
+    await new Promise((r) => setTimeout(r, 60));
+    stop();
+  } finally {
+    chmodSync(dir, 0o755);
+    console.error = realError;
+  }
+  // The poll went on after the failure, and the stuck line was not said again even once it could be removed.
+  expect(got).toEqual([{ source: 'terminal', text: 'stuck' }, { source: 'terminal', text: 'later' }]);
+  expect(logged.filter((line) => String(line[0]).includes('[owner]'))).toHaveLength(1);
+});
+
+test('an owner poll that cannot list its directory, or an emit that throws, does not throw out of the timer', async () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'teneral-owner-')), 'not-a-directory');
+  writeFileSync(file, '');
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    expect(() => owner(file, 10)(() => {})()).not.toThrow();
+    const dir = ownerDir();
+    tell(dir, 'hello');
+    let emits = 0;
+    expect(() => owner(dir, 10)(() => { emits += 1; throw new Error('journal is full'); })()).not.toThrow();
+    expect(emits).toBe(1);
+    // Not journaled, so not removed: the next start says it again.
+    expect(readdirSync(dir)).toHaveLength(1);
   } finally {
     console.error = realError;
   }

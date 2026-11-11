@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
 import {
@@ -547,4 +547,62 @@ process.exit(readdirSync('..').some((name) => name.startsWith('gate-')) ? 9 : 0)
   expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   const worktrees = git(dir, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '));
   expect(worktrees).toHaveLength(3);
+});
+
+// --- living in the background ---
+
+test('SIGHUP, which a closing terminal sends, stops a running generation like SIGTERM does', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+setInterval(() => {}, 1000);
+` });
+  const p = paths(dir);
+  const running = supervise({ root: dir, ...QUIET });
+  for (let i = 0; i < 400 && !readEvents(p.journal).some((e) => e.type === 'generation.ready'); i++) await Bun.sleep(10);
+  const { pid } = JSON.parse(readFileSync(p.child, 'utf8')) as { pid: number };
+  // supervise has its handler installed while it runs, so the signal does not end the test run.
+  process.kill(process.pid, 'SIGHUP');
+  expect(await running).toBe('stopped');
+  expect(() => process.kill(pid, 0)).toThrow();
+  expect(started(readEvents(p.journal))).toBe(1);
+  expect(existsSync(p.lock)).toBe(false);
+});
+
+test('SIGHUP that arrives while the gates run stops the supervisor before anything else starts', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
+  process.env.TEST_NEXT = commitAll(p.candidate, 'v2');
+  const outcome = await supervise({ root: dir, ...QUIET, gates: () => { process.kill(process.pid, 'SIGHUP'); return PASS; } });
+  expect(outcome).toBe('stopped');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+test('the body is told where its owner leaves lines, beside the kernel\'s other files', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: String(process.env.TENERAL_OWNER) });
+process.exit(0);
+` });
+  const p = paths(dir);
+  expect(p.owner).toBe(join(dir, '.teneral', 'owner'));
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(readEvents(p.journal).find((e) => e.type === 'stimulus')).toMatchObject({ text: p.owner });
+});
+
+test('init tells git never to forget worktrees during gc, once however often it runs', () => {
+  const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  init(dir);
+  expect(git(dir, 'config', '--local', '--get-all', 'gc.worktreePruneExpire')).toBe('never');
+  init(dir);
+  expect(git(dir, 'config', '--local', '--get-all', 'gc.worktreePruneExpire')).toBe('never');
+  // gc then leaves alone a worktree whose directory it cannot see, as on the host of a container,
+  // however long ago it was made. Without the setting, one older than three months is forgotten.
+  const p = paths(dir);
+  rmSync(p.live, { recursive: true });
+  const record = join(dir, '.git', 'worktrees', 'live');
+  const longAgo = new Date(Date.now() - 365 * 24 * 3600 * 1000);
+  for (const name of readdirSync(record)) utimesSync(join(record, name), longAgo, longAgo);
+  git(dir, 'gc', '--quiet');
+  expect(git(dir, 'worktree', 'list', '--porcelain')).toContain(p.live);
 });
