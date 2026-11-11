@@ -116,7 +116,7 @@ for (;;) {
     }
     if (next === 'record' && error instanceof ProviderError) {
       // The one failure that is journaled: as a reply, it ends the owed turn, and it is where the owner will read it.
-      const note = refusalNote(error);
+      const note = refusalNote(error, kind);
       appendEvent(journal, gen, { type: 'assistant', text: note, toolCalls: [] });
       console.log(`\n${note}\n`);
       failures = 0;

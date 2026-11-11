@@ -25,18 +25,21 @@ export function saysTooLong(err: unknown): boolean {
  * Why a turn failed, as far as it decides what to do next:
  * - 'own': not the provider at all. This code threw, which no waiting will mend.
  * - 'refused': the provider will not take this request and would not take it again.
+ * - 'long': the provider says the request is too long. The loop has by then asked again at half the
+ *   budget (body/loop.ts), so the turn failed at both sizes and would fail again unchanged.
  * - 'passing': the same request may be accepted later, or once the owner mends something outside
  *   (the key, the account): no answer, a timeout, a rate limit, a server fault, a bad key.
  */
-export type FailureKind = 'own' | 'refused' | 'passing';
+export type FailureKind = 'own' | 'refused' | 'long' | 'passing';
 
 /** 4xx statuses that are not about what was sent: the key (401, 403), time (408), the rate (429). */
 const NOT_THE_REQUEST = new Set([401, 403, 408, 429]);
 
 export function failureKind(err: unknown): FailureKind {
   if (!(err instanceof ProviderError)) return 'own';
+  if (saysTooLong(err)) return 'long';
   const { status } = err;
-  const refused = status !== null && status >= 400 && status < 500 && !NOT_THE_REQUEST.has(status) && !saysTooLong(err);
+  const refused = status !== null && status >= 400 && status < 500 && !NOT_THE_REQUEST.has(status);
   return refused ? 'refused' : 'passing';
 }
 
@@ -45,18 +48,23 @@ export const PATIENCE = 3;
 
 /**
  * What to do after `inARow` failures of `kind` in a row.
- * - 'record': journal a reply saying the provider refused, so the turn is no longer owed and the owner sees it.
- *   Without that the same request would be sent every 15 minutes for ever.
+ * - 'record': journal a reply saying the provider refused, or that the request stays too long, so the turn is
+ *   no longer owed and the owner sees it. Without that the same request would be sent every 15 minutes for ever.
  * - 'exit': leave with a failure, so the kernel counts a crash and can roll this generation back.
  */
 export function verdict(kind: FailureKind, inARow: number): 'retry' | 'record' | 'exit' {
   if (kind === 'passing' || inARow < PATIENCE) return 'retry';
-  return kind === 'refused' ? 'record' : 'exit';
+  return kind === 'own' ? 'exit' : 'record';
 }
 
 /** The reply journaled in place of the one the provider would not give. */
-export function refusalNote(err: ProviderError): string {
+export function refusalNote(err: ProviderError, kind: FailureKind): string {
   const said = err.body.trim().slice(0, 500).toWellFormed();
+  if (kind === 'long') {
+    return `[not from the model] The provider refused the request as too long in ${PATIENCE} turns in a row, with status ${err.status}: ${said}\n` +
+      'The conversation no longer fits the model, even at half the budget for a request. The messages before this one could not be answered. ' +
+      'Owner, please lower TENERAL_CONTEXT_CHARS and start the agent again.';
+  }
   return `[not from the model] The provider refused the request ${PATIENCE} times in a row with status ${err.status}: ${said}\n` +
     'The messages before this one could not be answered. Owner, please look: something in the journal or in how the request is built is not accepted.';
 }

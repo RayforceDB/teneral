@@ -32,9 +32,9 @@ test('a failure is the body\'s own, a refusal of this request, or something that
   for (const status of [400, 404, 405, 409, 415, 422, 499]) expect(failureKind(refused(status))).toBe('refused');
   // A bad key, a timeout, a rate limit, a server fault, no answer at all: the same request may be accepted later.
   for (const status of [401, 403, 408, 429, 500, 502, 503, 529, 200, null]) expect(failureKind(refused(status))).toBe('passing');
-  // Too long is handled where the request is built, not by giving up on the turn.
-  expect(failureKind(refused(400, 'maximum context length exceeded'))).toBe('passing');
-  expect(failureKind(refused(413, 'too many tokens'))).toBe('passing');
+  // Too long is a kind of its own: the loop has already tried it at half the budget before the turn failed.
+  expect(failureKind(refused(400, 'maximum context length exceeded'))).toBe('long');
+  expect(failureKind(refused(413, 'too many tokens'))).toBe('long');
 });
 
 test('three of a kind in a row: a refusal is put on the record, the body\'s own fault goes to the kernel, the rest is retried', () => {
@@ -43,8 +43,29 @@ test('three of a kind in a row: a refusal is put on the record, the body\'s own 
   expect([1, 2, 3, 50].map((n) => verdict('passing', n))).toEqual(['retry', 'retry', 'retry', 'retry']);
 });
 
+test('a request that stays too long is put on the record after three turns as well, not sent every 15 minutes for ever', () => {
+  expect([1, 2, 3, 4].map((n) => verdict('long', n))).toEqual(['retry', 'retry', 'record', 'record']);
+});
+
+test('the note for a request that stays too long says it does not fit even at half the budget, and which setting to lower', () => {
+  const err = refused(400, `maximum context length is 8192 tokens ${'x'.repeat(2000)}`);
+  const note = refusalNote(err, failureKind(err));
+  expect(note.startsWith('[not from the model]')).toBe(true);
+  expect(note).toContain('400');
+  expect(note).toContain('maximum context length is 8192 tokens');
+  expect(note).toMatch(/no longer fits the model, even at half the budget/);
+  expect(note).toContain('TENERAL_CONTEXT_CHARS');
+  expect(note).toMatch(/lower/);
+  expect(note).toMatch(/could not be answered/);
+  expect(note).toMatch(/owner/i);
+  expect(note.length).toBeLessThan(1000);
+  expect(note.isWellFormed()).toBe(true);
+  // The other refusals keep their own words.
+  expect(refusalNote(refused(422, 'bad'), 'refused')).not.toContain('TENERAL_CONTEXT_CHARS');
+});
+
 test('the note for a refusal names the status, the start of what the provider said, and the owner', () => {
-  const note = refusalNote(refused(422, `tool_calls.0.function.name: invalid ${'x'.repeat(2000)}`));
+  const note = refusalNote(refused(422, `tool_calls.0.function.name: invalid ${'x'.repeat(2000)}`), 'refused');
   expect(note).toContain('422');
   expect(note).toContain('tool_calls.0.function.name: invalid');
   expect(note).toMatch(/could not be answered/);
