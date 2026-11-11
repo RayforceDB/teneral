@@ -110,11 +110,11 @@ To change provider or sign in again, run `./box setup`. It asks before replacing
 | Left, Right, Home, End, Ctrl-A, Ctrl-E | move in the line; with Ctrl or Alt, Left and Right jump by words |
 | Backspace, Delete, Ctrl-U, Ctrl-K, Ctrl-W | delete a character, to the start of the line, to its end, the word before |
 | Up, Down | the line above or below in a text of several lines; at the first or last line, what you sent before |
-| PageUp, PageDown, Shift+Up, Shift+Down, mouse wheel | scroll the conversation; new lines do not move what you are reading |
+| PageUp, PageDown, Shift+Up, Shift+Down | scroll the conversation; new lines do not move what you are reading |
 | End, Esc, or typing | back to the newest |
 | Tab, `/tools` | show or hide a few rows of what each tool call returned |
 | `/generations` | the generations it has lived in, as `./box back --list` gives them |
-| `/mouse` | give the mouse back to the terminal, or take the wheel again. While the wheel is read, hold Shift to select text |
+| `/mouse` | let the mouse wheel scroll the conversation, or give the mouse back. It is off at first, so selecting, copying and pasting work as in any terminal; while it is on, hold Shift to select text |
 | `/help` | the keys and commands |
 | `/quit`, Ctrl-D on an empty line, Ctrl-C | leave. The agent goes on |
 

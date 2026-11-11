@@ -459,6 +459,8 @@ test('/quit, Ctrl-D on an empty line and Ctrl-C each leave the client only: the 
     s.frame();
     expect(s.term.vt.alt).toBe(true);
     expect(s.term.vt.modes.has(2004)).toBe(true);
+    // Take the wheel first, so leaving has a mouse mode to put back as well.
+    s.type('/mouse\r');
     expect(s.term.vt.modes.has(1000)).toBe(true);
     expect(s.term.vt.modes.has(1006)).toBe(true);
     s.type(leave);
@@ -606,17 +608,19 @@ test('/help, /generations and /plain open over the transcript and any key closes
   expect(readdirSync(s.p.owner).map((name) => readFileSync(join(s.p.owner, name), 'utf8'))).toEqual(['/teneral/body is where you live']);
 });
 
-test('/mouse gives the mouse back to the terminal and takes it again', () => {
+test('the mouse is the terminal\'s at first, so text can be selected and copied; /mouse takes the wheel and gives it back', () => {
   const s = stage(80, 20);
   settled(s);
   s.frame();
+  expect(s.term.vt.modes.has(1000)).toBe(false);
+  expect(s.term.vt.modes.has(1006)).toBe(false);
+  s.type('/mouse\r');
   expect(s.term.vt.modes.has(1000)).toBe(true);
+  expect(s.frame()).toContain('The mouse wheel scrolls here again');
   s.type('/mouse\r');
   expect(s.term.vt.modes.has(1000)).toBe(false);
   expect(s.term.vt.modes.has(1006)).toBe(false);
   expect(s.frame()).toContain('The mouse is the terminal\'s again');
-  s.type('/mouse\r');
-  expect(s.term.vt.modes.has(1000)).toBe(true);
 });
 
 // --- the terminal's limits ---

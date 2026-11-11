@@ -27,12 +27,12 @@ const ESCAPE_MS = 40;
 const HELP = [
   'Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W delete to the start of the line, to its end, and the word before the cursor.',
   '',
-  'PageUp and PageDown, Shift+Up and Shift+Down, and the mouse wheel scroll. End, Esc or typing comes back to the newest. While the wheel is read here, hold Shift to select text with the mouse, or give the mouse back with /mouse.',
+  'PageUp and PageDown, and Shift+Up and Shift+Down, scroll. End, Esc or typing comes back to the newest. The mouse is left to your terminal, so selecting, copying and pasting work as usual. /mouse makes the wheel scroll here instead; while it does, hold Shift to select text.',
   '',
   '  /help          this',
   '  /generations   the generations this individual has lived in',
   '  /tools         show or hide what each tool call returned (also Tab)',
-  '  /mouse         give the mouse back to the terminal, or take the wheel again',
+  '  /mouse         let the mouse wheel scroll here, or give the mouse back to the terminal',
   '  /plain         how to get the plain text client',
   '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
   '',
@@ -124,7 +124,8 @@ export class TalkScreen {
   /** The note that nothing has been said yet, for as long as that is so. */
   private silence: Entry | null = null;
   private tools = false;
-  private mouse = true;
+  /** Off by default: while the wheel is read, the terminal cannot select and copy text. */
+  private mouse = false;
   private name: string | null = null;
   private soulStamp = -1;
   private ticks = 0;
