@@ -1,0 +1,24 @@
+ teneral   generation 2 | e5f6a7b | gpt-6.1-sol                        thinking
+
+  - read  path: body/main.ts                                             ok 40ms
+  - read  path: body/loop.ts                                             ok 30ms
+  - read  path: body/tools.ts                                            ok 55ms
+  - bash  command: wc -l body/*.ts && cat BACKLOG.md | head -50          ok 1.9s
+
+  ------------------------
+
+  * one
+  * two
+
+  | quoted
+
+  | code
+
+  ------------------------------------------------
+
+-- promoted  a1b2c3d -> e5f6a7b ------------------------------------------------
+
+  | thinking | 0:01
+--------------------------------------------------------------------------------
+>
+ Enter sends | PgUp/PgDn scroll | /help | Ctrl-C leaves; the agent goes on

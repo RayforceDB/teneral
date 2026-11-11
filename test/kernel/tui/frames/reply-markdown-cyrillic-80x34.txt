@@ -1,0 +1,34 @@
+ teneral   generation 1 · a1b2c3d · gpt-6.1-sol                 waiting for you
+
+
+  ────────────────────────
+
+  Hello. I am here.
+
+› расскажи, что ты нашёл
+
+  Что я нашёл
+
+  Я прочитал всё своё тело и вот что важно:
+
+  • память — это один файл, memory/journal.jsonl, и он только растёт, так что со
+    временем я не смогу держать его в голове целиком
+  • у меня есть шесть инструментов
+    1. read, write, edit
+    2. bash, molt, send
+
+  │ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> { // э…
+  │     const events = readEvents(d.journal);
+  │ }
+
+  │ «Кто ясно мыслит, тот ясно излагает» 🙂
+
+  Подробнее: документация (https://example.com/docs/память) и 日本語のテキストも
+  正しく折り返されます、幅は二倍です。
+
+  ────────────────────────────────────────────────
+
+  Как мне тебя называть?
+────────────────────────────────────────────────────────────────────────────────
+›
+ Enter sends · PgUp/PgDn scroll · /help · Ctrl-C leaves; the agent goes on

@@ -1,0 +1,30 @@
+ teneral   generation 2 · e5f6a7b · gpt-6.1-sol                                   resting
+
+  teneral talk
+
+  Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a
+  new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W
+  delete to the start of the line, to its end, and the word before the cursor.
+
+  PageUp and PageDown, Shift+Up and Shift+Down, and the mouse wheel scroll. End, Esc or
+  typing comes back to the newest. While the wheel is read here, hold Shift to select text
+  with the mouse, or give the mouse back with /mouse.
+
+    /help          this
+    /generations   the generations this individual has lived in
+    /tools         show or hide what each tool call returned (also Tab)
+    /mouse         give the mouse back to the terminal, or take the wheel again
+    /plain         how to get the plain text client
+    /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)
+
+  Leaving ends this screen only. Nothing here stops the agent or changes it.
+
+  The word at the top right says where the agent stands: waking (its first start, before
+  its first words), thinking, running <tool>, molting (it asked for a new body and the
+  kernel is checking it), starting (between two runs), resting, not running, and waiting
+  for you: its last finished reply ended with a question mark and nothing has arrived
+  since.
+
+──────────────────────────────────────────────────────────────────────────────────────────
+›
+ Esc closes · Up/Down scroll

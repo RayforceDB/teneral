@@ -1,0 +1,10 @@
+ teneral   generation 1    running bash
+  Как мне тебя называть?
+
+› посмотри ещё раз
+
+  · bash  command: ls -la body…  running
+
+  ⠴ running bash · 0:03
+›
+ Ctrl-C leaves; the agent goes on

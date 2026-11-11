@@ -1,0 +1,30 @@
+ teneral   generation 1 · a1b2c3d · gpt-6.1-sol                                              waking
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ◦ the birth letter
+
+  · read  path: body/main.ts                                                                 ok 40ms
+  · read  path: body/loop.ts                                                                 ok 30ms
+  · read  path: body/tools.ts                                                                ok 55ms
+  · bash  command: wc -l body/*.ts && cat BACKLOG.md | head -50                              running
+
+  ⠦ waking · running bash · 0:08
+────────────────────────────────────────────────────────────────────────────────────────────────────
+›
+ Enter sends · Alt+Enter new line · PgUp/PgDn scroll · /help · Ctrl-C leaves; the agent goes on

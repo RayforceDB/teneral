@@ -261,6 +261,29 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/** What a lock file says: a pid, and what that process was when it took the lock. NaN for a file that is gone or is not a lock. */
+function lockRecord(lock: string): { pid: number; cmd: string[] | null } {
+  let pid = Number.NaN;
+  let cmd: string[] | null = null;
+  try {
+    const [first = '', second = ''] = readFileSync(lock, 'utf8').split('\n');
+    pid = Number(first.trim());
+    const parsed: unknown = second.trim() === '' ? null : JSON.parse(second);
+    if (Array.isArray(parsed)) cmd = parsed.map(String);
+  } catch { /* gone again, or not a lock */ }
+  return { pid, cmd };
+}
+
+/**
+ * The pid of the live supervisor that holds the lock, or null when nobody does. Only looks: for
+ * the owner's screen, which says whether the agent is running. It has to be asked from where
+ * the supervisor's pid means something, which `./box talk` is: it runs in the same container.
+ */
+export function holder(lock: string): number | null {
+  const { pid, cmd } = lockRecord(lock);
+  return Number.isInteger(pid) && pid > 0 && isProgram(pid, cmd) ? pid : null;
+}
+
 /** Takes the lock and returns null, or returns the pid of the live supervisor that holds it. */
 export function takeLock(lock: string): number | null {
   mkdirSync(dirname(lock), { recursive: true });
@@ -278,14 +301,7 @@ export function takeLock(lock: string): number | null {
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       }
-      let pid = Number.NaN;
-      let cmd: string[] | null = null;
-      try {
-        const [first = '', second = ''] = readFileSync(lock, 'utf8').split('\n');
-        pid = Number(first.trim());
-        const parsed: unknown = second.trim() === '' ? null : JSON.parse(second);
-        if (Array.isArray(parsed)) cmd = parsed.map(String);
-      } catch { /* gone again, or not a lock: try once more */ }
+      const { pid, cmd } = lockRecord(lock);
       const ours = pid === process.pid && heldLocks.has(lock);
       const alive = Number.isInteger(pid) && pid > 0 && isProgram(pid, cmd) && (pid !== process.pid || ours);
       if (alive) return pid;

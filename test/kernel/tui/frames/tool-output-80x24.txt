@@ -1,0 +1,24 @@
+ teneral   generation 1 · a1b2c3d · gpt-6.1-sol                        thinking
+
+
+  · bash  command: ls                                                   ok 250ms
+      file-0.ts
+      file-1.ts
+      file-2.ts
+      file-3.ts
+      file-4.ts
+      file-5.ts
+      … 14 more lines
+  · read  path: missing.ts                                            failed 12s
+      … 7 more lines
+      trace line
+      trace line
+      trace line
+      trace line
+      trace line
+      error: ENOENT: no such file or directory, open 'missing.ts'
+
+  ⠇ thinking · 0:13
+────────────────────────────────────────────────────────────────────────────────
+›
+ Enter sends · PgUp/PgDn scroll · /help · Ctrl-C leaves; the agent goes on

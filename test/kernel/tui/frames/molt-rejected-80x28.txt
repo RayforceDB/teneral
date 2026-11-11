@@ -1,0 +1,28 @@
+ teneral   generation 1 · a1b2c3d · gpt-6.1-sol                        thinking
+
+
+  I will ask for the molt now.
+
+  · molt  motive: remember names                                        ok 200ms
+
+── molt to e5f6a7b rejected at gate "body tests" ───────────────────────────────
+   … 35 earlier rows; the journal has all of it
+   (pass) test number 35 [0.35ms]
+   (pass) test number 36 [0.36ms]
+   (pass) test number 37 [0.37ms]
+   (pass) test number 38 [0.38ms]
+   (pass) test number 39 [0.39ms]
+   test/body/loop.test.ts:
+   (fail) a turn ends when the model stops calling tools [1.20ms]
+     error: expect(received).toBe(expected)
+     Expected: "done"
+     Received: "molt"
+           at <anonymous> (/teneral/.teneral/gate/test/body/loop.test.ts:41:23)
+
+    212 pass
+    1 fail
+
+  ⠇ thinking · 1:01
+────────────────────────────────────────────────────────────────────────────────
+›
+ Enter sends · PgUp/PgDn scroll · /help · Ctrl-C leaves; the agent goes on

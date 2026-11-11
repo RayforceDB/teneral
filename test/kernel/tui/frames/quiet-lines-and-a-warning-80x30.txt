@@ -1,0 +1,30 @@
+ teneral   generation 1 · a1b2c3d · gpt-6.1-sol                         resting
+
+
+
+
+
+
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+  Hello. I am here.
+
+  Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage
+
+› typed in the other window  from another terminal
+
+  I see it.
+
+  ◦ clock  It is 12:00. Nothing has arrived since 11:30.
+  ◦ from alice  (message m1) can you hear me?
+
+! not from the model
+  The provider refused the request 3 times in a row with status 400: context too
+  long
+  What helps: a shorter context.
+────────────────────────────────────────────────────────────────────────────────
+›
+ Enter sends · PgUp/PgDn scroll · /help · Ctrl-C leaves; the agent goes on

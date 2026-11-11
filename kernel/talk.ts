@@ -377,16 +377,28 @@ export async function talk(o: TalkOptions): Promise<number> {
 if (import.meta.main) {
   const args = process.argv.slice(2);
   let waitMs: number | undefined;
-  if (args[0] === '--wait' && Number(args[1]) > 0 && args.length === 2) {
-    waitMs = Number(args[1]) * 1000;
-  } else if (args.length > 0) {
-    console.error('usage: bun kernel/talk.ts [--wait <seconds>]');
-    console.error('  --wait  with piped input: how long the journal may stay silent before giving up (default 300)');
-    process.exit(2);
+  let plainText = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--plain') {
+      plainText = true;
+    } else if (args[i] === '--wait' && Number(args[i + 1]) > 0) {
+      waitMs = Number(args[i + 1]) * 1000;
+      i += 1;
+    } else {
+      console.error('usage: bun kernel/talk.ts [--plain] [--wait <seconds>]');
+      console.error('  --plain  at a terminal: plain text instead of the full screen. Piped input is always plain');
+      console.error('  --wait   with piped input: how long the journal may stay silent before giving up (default 300)');
+      process.exit(2);
+    }
+  }
+  const p = paths(join(import.meta.dir, '..'));
+  // A person at a terminal gets the screen (kernel/tui/). Everything else is as it always was.
+  if (!plainText && process.stdin.isTTY === true && process.stdout.isTTY === true && process.env.TERM !== 'dumb') {
+    const { runTalkScreen } = await import('./tui/talk');
+    process.exit(await runTalkScreen(p, process.env, planNotice(process.env)));
   }
   // Ctrl-C ends this program, quietly. It is not passed on to anything.
   process.on('SIGINT', () => process.exit(0));
-  const p = paths(join(import.meta.dir, '..'));
   const status = await talk({
     journal: p.journal,
     owner: p.owner,
