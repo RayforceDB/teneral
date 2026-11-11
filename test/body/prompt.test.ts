@@ -21,6 +21,8 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 import { BODY_SIZE_LIMIT } from '../../kernel/gates';
 import { CHANGEABLE } from '../../kernel/protected';
 import { CRASH_LIMIT, MOLT_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
+import { ProviderError } from '../../body/provider';
+import { PATIENCE, refusalNote } from '../../body/retry';
 
 const flat = prompt.replace(/\s+/g, ' ');
 
@@ -83,6 +85,22 @@ test('it describes the smoke gate and the bare environment the checks run in', (
   expect(flat).toMatch(/fresh checkout of the commit/);
   expect(flat).toMatch(/only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on, and `TMPDIR` points at a temporary directory made for that run/);
   expect(flat).toMatch(/a file that is not committed fails there/);
+  // The smoke run's own additions, and that the owner's other settings are not there.
+  expect(flat).toMatch(/three for the provider pointing at the stub and `TENERAL_HEARTBEAT_MINUTES` set to 0/);
+  expect(flat).toMatch(/nothing else your owner configured is there/);
+});
+
+test('it says that an interrupted gate run decided nothing and is asked for again', () => {
+  expect(flat).toMatch(/One at gate `interrupted` is the exception/);
+  expect(flat).toMatch(/nothing was decided, and you call `molt` again for the same commit/);
+});
+
+test('it says what a reply marked as not from the model is', () => {
+  expect(flat).toContain('`[not from the model]`');
+  expect(flat).toMatch(/in place of a reply the provider refused three times/);
+  expect(flat).toMatch(/stayed too long even at half the budget/);
+  expect(PATIENCE).toBe(3);
+  expect(refusalNote(new ProviderError('x', 400, 'x'), 'long').startsWith('[not from the model]')).toBe(true);
 });
 
 test('it states the probation after a promotion', () => {
