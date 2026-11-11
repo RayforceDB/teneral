@@ -68,3 +68,44 @@ test('every tool call leaves with an id of its own, whatever the model sent', as
   expect(ids.every((id) => typeof id === 'string' && id !== '')).toBe(true);
   expect(new Set(ids).size).toBe(5);
 });
+
+test('a request that gets no answer in time fails saying it timed out', async () => {
+  let signal: AbortSignal | undefined;
+  const hung = ((_url: string, init?: RequestInit) => {
+    signal = init?.signal ?? undefined;
+    return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal!.reason)));
+  }) as unknown as typeof fetch;
+  const started = Date.now();
+  await expect(openAiProvider({ ...cfg, fetch: hung, timeoutMs: 30 })([], [])).rejects.toThrow(/timed out after 0\.03s/);
+  expect(Date.now() - started).toBeLessThan(2000);
+  expect(signal?.aborted).toBe(true);
+});
+
+test('a body that stops arriving also counts as timed out', async () => {
+  const stalled = (async (_url: string, init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    text: () => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason))),
+  })) as unknown as typeof fetch;
+  await expect(openAiProvider({ ...cfg, fetch: stalled, timeoutMs: 30 })([], [])).rejects.toThrow(/timed out/);
+});
+
+test('an error that is not a timeout is passed on as it is', async () => {
+  const down = (async () => { throw new Error('connection refused'); }) as unknown as typeof fetch;
+  await expect(openAiProvider({ ...cfg, fetch: down })([], [])).rejects.toThrow('connection refused');
+});
+
+test('a 200 that is not JSON throws with the start of the body', async () => {
+  const html = (async () => new Response('<html>Bad gateway</html>', { status: 200 })) as unknown as typeof fetch;
+  await expect(openAiProvider({ ...cfg, fetch: html })([], [])).rejects.toThrow(/not JSON.*<html>Bad gateway/);
+});
+
+test('content given as parts is joined from its text parts', async () => {
+  const provider = openAiProvider({
+    ...cfg,
+    fetch: fakeFetch(200, {
+      choices: [{ message: { content: [{ type: 'text', text: 'hel' }, { type: 'image_url', image_url: { url: 'x' } }, { type: 'text', text: 'lo' }, 'junk', null] } }],
+    }),
+  });
+  expect(await provider([], [])).toEqual({ text: 'hello', toolCalls: [] });
+});

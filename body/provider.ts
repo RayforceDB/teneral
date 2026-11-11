@@ -31,6 +31,22 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   fetch?: typeof fetch;
+  /** How long one request may take, headers and body together. Default: ten minutes. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 600_000;
+
+/** Some endpoints answer with a list of parts instead of a string; the text parts are the reply. */
+type WireContent = string | null | unknown[];
+
+function contentText(content: WireContent | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (typeof part === 'object' && part !== null ? (part as { text?: unknown }).text : undefined))
+    .filter((text): text is string => typeof text === 'string')
+    .join('');
 }
 
 function parseArgs(raw: string): unknown {
@@ -58,23 +74,39 @@ function ownIds(calls: WireToolCall[]): string[] {
 export function openAiProvider(cfg: ProviderConfig): Provider {
   const send = cfg.fetch ?? fetch;
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return async (messages, tools) => {
     const body: Record<string, unknown> = { model: cfg.model, messages };
     if (tools.length > 0) body.tools = tools.map((t) => ({ type: 'function', function: t }));
-    const res = await send(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
+    const signal = AbortSignal.timeout(timeoutMs);
+    let res: Response;
+    let text: string;
+    try {
+      res = await send(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
+        body: JSON.stringify(body),
+        signal,
+      });
+      text = await res.text();
+    } catch (err) {
+      // Without a limit, an endpoint that stops answering would hold the agent forever.
+      if (signal.aborted) throw new Error(`provider timed out after ${timeoutMs / 1000}s`);
+      throw err;
+    }
     if (!res.ok) throw new Error(`provider answered ${res.status}: ${text.slice(0, 2000)}`);
-    const message = (JSON.parse(text) as { choices?: { message?: { content?: string | null; tool_calls?: WireToolCall[] } }[] })
-      .choices?.[0]?.message;
+    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: WireToolCall[] } }[] } | null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error(`provider reply is not JSON: ${text.slice(0, 2000)}`);
+    }
+    const message = parsed?.choices?.[0]?.message;
     if (!message) throw new Error(`provider reply has no message: ${text.slice(0, 2000)}`);
     const calls = message.tool_calls ?? [];
     const ids = ownIds(calls);
     return {
-      text: message.content ?? '',
+      text: contentText(message.content),
       toolCalls: calls.map((c, i) => ({ id: ids[i]!, name: c.function.name, args: parseArgs(c.function.arguments) })),
     };
   };
