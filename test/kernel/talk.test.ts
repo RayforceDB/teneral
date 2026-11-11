@@ -356,3 +356,14 @@ test('attaching to an agent that has never run says so and waits', async () => {
   expect(s.out).toEqual([]);
   expect(s.notes.join('\n')).toContain('journal is empty');
 });
+
+test('a banner is said once, first, to a person who is typing, and never to a script', async () => {
+  const s = setup();
+  expect(await talk({ ...s.base, lines: from('/quit'), interactive: true, banner: 'Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage' })).toBe(0);
+  expect(s.notes[0]).toBe('Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage');
+  expect(s.notes.filter((note) => note.includes('ChatGPT'))).toHaveLength(1);
+  const piped = setup();
+  expect(await talk({ ...piped.base, lines: from('/quit'), interactive: false, banner: 'Using ChatGPT plan.' })).toBe(0);
+  expect(await talk({ ...piped.base, lines: from('/quit'), interactive: true, banner: null })).toBe(0);
+  expect(piped.notes.join('\n')).not.toContain('ChatGPT');
+});

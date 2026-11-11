@@ -3,7 +3,7 @@ import {
   chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { credentialFile } from './providers';
+import { credentialFile, userAgent } from './providers';
 
 // Signing in with a ChatGPT account, so the agent's requests use the owner's ChatGPT plan. This is
 // OpenAI's route for open-source apps that run locally, as documented at
@@ -179,7 +179,7 @@ async function tokenRequest(issuer: string, form: Record<string, string>, send: 
   try {
     res = await send(`${issuer}/api/accounts/oauth/token`, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', 'user-agent': userAgent() },
       body: new URLSearchParams(form).toString(),
       signal: AbortSignal.timeout(30_000),
     });
@@ -388,7 +388,7 @@ export async function signIn(o: SignInOptions): Promise<Credentials> {
   if (typeof tokens.id_token !== 'string') throw new Error('the sign-in server sent no ID token; nothing was stored');
   let keys: JsonWebKey[];
   try {
-    const res = await send(`${issuer}/.well-known/jwks.json`, { signal: AbortSignal.timeout(30_000) });
+    const res = await send(`${issuer}/.well-known/jwks.json`, { headers: { 'user-agent': userAgent() }, signal: AbortSignal.timeout(30_000) });
     keys = (await res.json() as { keys: JsonWebKey[] }).keys;
     if (!Array.isArray(keys)) throw new Error('no keys in it');
   } catch (err) {

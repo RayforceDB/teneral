@@ -126,6 +126,9 @@ test('a first sign-in registers, exchanges the code with PKCE and no secret, and
 
   const exchange = fake.seen.find((r) => r.path === '/api/accounts/oauth/token')!;
   expect(exchange.headers['content-type']).toContain('application/x-www-form-urlencoded');
+  // Every request to the sign-in server says who is asking.
+  for (const r of fake.seen.filter((seen) => seen.path !== '/api/accounts/authorize')) expect(r.headers['user-agent']).toMatch(/^teneral\/\d/);
+  expect(fake.seen.map((r) => r.path)).toEqual(['/api/accounts/authorize', '/api/accounts/oauth/token', '/.well-known/jwks.json']);
   const form = exchange.body as Record<string, string>;
   expect(Object.keys(form).sort()).toEqual(['client_id', 'code', 'code_verifier', 'grant_type', 'redirect_uri', 'resource']);
   expect(form.grant_type).toBe('authorization_code');

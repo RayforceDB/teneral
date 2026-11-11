@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { ProviderError, connect, type Provider } from '../body/provider';
-import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, type ProviderEntry } from './providers';
+import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, userAgent, type ProviderEntry } from './providers';
 import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } from './signin';
 
 // The owner's first-run setup: `./box setup`. It offers the providers in kernel/providers.ts, asks
@@ -93,7 +93,7 @@ export interface ModelChoice {
  */
 export async function listModels(baseUrl: string, bearer: string, send: typeof fetch = fetch): Promise<ModelChoice[]> {
   try {
-    const res = await send(`${baseUrl.replace(/\/+$/, '')}/models`, { headers: { authorization: `Bearer ${bearer}` }, signal: AbortSignal.timeout(20_000) });
+    const res = await send(`${baseUrl.replace(/\/+$/, '')}/models`, { headers: { authorization: `Bearer ${bearer}`, 'user-agent': userAgent() }, signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return [];
     const body = await res.json() as { models?: unknown; data?: unknown };
     if (Array.isArray(body.models)) {

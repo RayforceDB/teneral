@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { ToolCall } from '../kernel/journal';
-import { CHATGPT_USAGE_URL, providerFor } from '../kernel/providers';
+import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
 import { accessToken, apiBase } from '../kernel/signin';
 
 export interface WireToolCall {
@@ -246,19 +244,6 @@ export function readResponsesStream(stream: string): Reply {
   return { text, toolCalls: readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } }))) };
 }
 
-let agent: string | null = null;
-/** Who is asking, truthfully: this program's own name and the version in its package.json. */
-function userAgent(): string {
-  if (agent === null) {
-    let version = '0.0.0';
-    try {
-      version = String((JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')) as { version?: unknown }).version ?? version);
-    } catch { /* no package.json beside the body: the default stands */ }
-    agent = `teneral/${version}`;
-  }
-  return agent;
-}
-
 export function responsesProvider(cfg: ResponsesConfig): Provider {
   const send = cfg.fetch ?? fetch;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -280,6 +265,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       try {
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
+          // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
           headers: { 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
           body: JSON.stringify(body),
           signal,

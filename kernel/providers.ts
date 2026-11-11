@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // The model providers an owner can choose from. One table: the setup offers its entries, the
@@ -100,4 +100,28 @@ export function missingConfig(
   if (entry.auth === 'key') return missing(['TENERAL_BASE_URL', 'TENERAL_API_KEY', 'TENERAL_MODEL']);
   const file = credentialFile(authDir(root), entry.id);
   return [...missing(['TENERAL_MODEL']), ...(exists(file) ? [] : [`the sign-in stored in ${file}`])];
+}
+
+/**
+ * The line the owner is shown while their ChatGPT plan pays for the agent's requests, with where to
+ * manage that; null for a provider that is paid for some other way.
+ */
+export function planNotice(env: Record<string, string | undefined>): string | null {
+  return providerFor(env.TENERAL_PROVIDER).auth === 'chatgpt-signin' ? `Using ChatGPT plan. Manage usage: ${CHATGPT_USAGE_URL}` : null;
+}
+
+let agent: string | null = null;
+/**
+ * Who is asking, on every request teneral makes of a provider or a sign-in server: its own name
+ * and the version in its package.json. Never another program's.
+ */
+export function userAgent(): string {
+  if (agent === null) {
+    let version = '0.0.0';
+    try {
+      version = String((JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')) as { version?: unknown }).version ?? version);
+    } catch { /* no package.json beside the kernel: the default stands */ }
+    agent = `teneral/${version}`;
+  }
+  return agent;
 }

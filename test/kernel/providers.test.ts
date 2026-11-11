@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { DEFAULT_PROVIDER, PROVIDERS, credentialFile, findProvider, missingConfig, providerFor } from '../../kernel/providers';
+import { readFileSync } from 'node:fs';
+import { DEFAULT_PROVIDER, PROVIDERS, credentialFile, findProvider, missingConfig, planNotice, providerFor, userAgent } from '../../kernel/providers';
 
 test('the table offers the three providers, each under an id of its own', () => {
   expect(PROVIDERS.map((p) => p.id)).toEqual(['chatgpt', 'openai', 'compatible']);
@@ -50,4 +51,14 @@ test('a sign-in provider needs its credential file and a model, not a key', () =
   expect(missingConfig(env, '/r', (path) => path === file)).toEqual([]);
   expect(missingConfig(env, '/r', () => false)).toEqual([`the sign-in stored in ${file}`]);
   expect(missingConfig({ TENERAL_PROVIDER: 'chatgpt' }, '/r', () => true)).toEqual(['TENERAL_MODEL']);
+});
+
+test('the user agent is teneral\'s own name and the version in package.json', () => {
+  const { version } = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'package.json'), 'utf8')) as { version: string };
+  expect(userAgent()).toBe(`teneral/${version}`);
+});
+
+test('only a provider that uses the owner\'s ChatGPT plan has a notice saying so, with where to manage usage', () => {
+  expect(planNotice({ TENERAL_PROVIDER: 'chatgpt' })).toBe('Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage');
+  for (const id of [undefined, 'openai', 'compatible', 'unknown']) expect(planNotice({ TENERAL_PROVIDER: id })).toBeNull();
 });

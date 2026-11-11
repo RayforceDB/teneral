@@ -116,7 +116,8 @@ test('OpenAI API key: the key is asked for hidden, a listed model is offered, bo
   expect(mode(join(root, '.env'))).toBe(0o600);
   const made = modelRequests();
   expect(made.map((r) => r.path)).toEqual(['/v1/responses', '/v1/responses']);
-  expect(made[0]!.headers['user-agent']).toMatch(/^teneral\/\d/);
+  // Everything the setup itself asked of the endpoint, the list of models included, says who is asking.
+  for (const r of fake.seen) expect(r.headers['user-agent']).toMatch(/^teneral\/\d/);
   expect((made[1]!.body as { tools: { type: string; name: string }[] }).tools).toEqual([expect.objectContaining({ type: 'function', name: 'ping' })]);
   const said = io.out.join('\n');
   expect(said).toMatch(/a reply: ok, from fake-key-large in \d+\.\d s/);

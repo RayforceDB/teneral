@@ -2,6 +2,7 @@ import { closeSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { journalSize, readEventsFrom, type JournalEvent } from './journal';
 import { tell } from './owner';
+import { planNotice } from './providers';
 import { paths } from './supervisor';
 
 // The owner's terminal: `./box talk` runs this inside the agent's container. What is typed goes to
@@ -229,6 +230,8 @@ export interface TalkOptions {
   note: (text: string) => void;
   /** A person is typing. Otherwise the lines come from a pipe or a file. */
   interactive: boolean;
+  /** Said once, first, to a person who is typing: for instance whose plan the agent's requests use. */
+  banner?: string | null;
   pollMs?: number;
   /** Piped input only: how long the journal may stay silent while a line waits to be sent or answered. Default 5 minutes. */
   waitMs?: number;
@@ -257,6 +260,7 @@ export async function talk(o: TalkOptions): Promise<number> {
   const pollMs = o.pollMs ?? 250;
   const waitMs = o.waitMs ?? 300_000;
 
+  if (o.interactive && o.banner) o.note(o.banner);
   const size = journalSize(o.journal);
   let before: JournalEvent[] = [];
   try {
@@ -391,6 +395,7 @@ if (import.meta.main) {
     // Not console.error, which colours what it prints on a terminal.
     note: (text) => { process.stderr.write(`${text}\n`); },
     interactive: process.stdin.isTTY === true,
+    banner: planNotice(process.env),
     waitMs,
   });
   process.exit(status);
