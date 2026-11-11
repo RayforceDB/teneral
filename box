@@ -11,7 +11,11 @@ usage: ./box <command>
                   Run again to change provider or to sign in again
   up              start the agent in the background; it outlives this terminal.
                   The first time, with no .env yet, it runs the setup first
-  talk            attach this terminal to it: type to speak, /quit to leave. The agent goes on
+  talk            attach this terminal to it: a full screen with the conversation, what the agent
+                  is doing, and a line to type on. Enter sends, PageUp and PageDown scroll,
+                  /help lists the rest; /quit, Ctrl-D or Ctrl-C leaves. The agent goes on.
+                  With its input from a pipe it is plain text, one line in and the reply out:
+                  echo "..." | ./box talk [--wait <seconds>]
   down            stop the agent
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
                   --list shows the generations it has lived in. A running agent is stopped
@@ -19,6 +23,9 @@ usage: ./box <command>
   logs            follow what the kernel and the agent print
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
+
+talk and setup take --plain: plain text at a terminal too, without the full screen. NO_COLOR is
+honoured.
 
 Only setup ever opens a port, and only for the ChatGPT sign-in: 127.0.0.1:1455 on this machine,
 where your browser is sent back to after you sign in. TENERAL_CALLBACK_PORT chooses another.
@@ -56,12 +63,33 @@ clear_stopped() {
   docker rm "$name" >/dev/null
 }
 
+# A file of this script's that must not outlive it.
+tmp=""
+trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
+
 # The (${x[@]+...}) form below is for bash before 4.4, where an empty array counts as unset.
 tty=()
 extra=()
 build() {
+  # Nothing is said when the build works, whatever docker prints while at it: that is kept, and
+  # shown only if the build fails. A build that takes more than a moment gets one line.
+  local pid waited=0
+  tmp="$(mktemp)"
   docker build --quiet --tag teneral \
-    --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >/dev/null
+    --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >"$tmp" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    waited=$((waited + 1))
+    if [ "$waited" -eq 15 ]; then echo "Preparing the container ..." >&2; fi
+  done
+  if ! wait "$pid"; then
+    cat "$tmp" >&2
+    echo "The container image could not be built." >&2
+    exit 1
+  fi
+  rm -f "$tmp"
+  tmp=""
   # No -t when stdin is not a terminal, so this also works from a script or a service.
   if [ -t 0 ]; then tty=(--tty); fi
   # More options for `docker run`, split on spaces. Nothing here needs any; it is for an unusual
@@ -88,25 +116,71 @@ bare=(--init
 # The agent and its commands also get the owner's configuration. The setup, which writes it, does not.
 cage=("${bare[@]}" --env-file .env)
 
+# What a program in the container has to know about this terminal to draw on it: its kind, its
+# colours, whether NO_COLOR is set, and whether its locale is UTF-8. The image has the locale
+# C.UTF-8 and no other, so that is the one named. Resizing needs nothing here: docker passes it on.
+term_env=()
+terminal_env() {
+  term_env=(--env "TERM=${TERM:-dumb}")
+  if [ -n "${COLORTERM:-}" ]; then term_env+=(--env "COLORTERM=$COLORTERM"); fi
+  if [ -n "${NO_COLOR:-}" ]; then term_env+=(--env "NO_COLOR=$NO_COLOR"); fi
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) term_env+=(--env LANG=C.UTF-8) ;;
+    *) term_env+=(--env LANG=C) ;;
+  esac
+}
+
+# Whether talk and setup will draw their full screen: a terminal at both ends, one that takes
+# escape sequences, and no --plain among the arguments. Inside the container both ends always look
+# like a terminal, so when this says no, --plain is passed on.
+screens() {
+  [ -t 0 ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] || return 1
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = --plain ]; then return 1; fi
+  done
+}
+
+# A full-screen program that was cut off (its container stopped, or it was killed) could not put
+# the terminal back: off the alternate screen, cursor shown, no mouse reports, no bracketed paste.
+restore_terminal() { printf '\033[?1006l\033[?1000l\033[?2004l\033[0m\033[?25h\033[?1049l'; }
+
 # The owner's setup (kernel/setup.ts), in a container of its own. It asks questions, so it needs a terminal.
 # No port is published for it, unless the provider chosen signs in through the browser: the setup
 # then ends with status 76, and is run again with the one port that sign-in comes back on, published
 # on this machine's loopback address only. Inside the container the listener has to bind every
 # interface for the published port to reach it; outside, nothing but 127.0.0.1 leads there.
+# With the full screen, the first run leaves its last page up and the second draws over it, so
+# the owner sees one setup, not two.
 setup() {
   if [ ! -t 0 ]; then
     echo "./box setup asks questions and needs a terminal." >&2
     return 1
   fi
   build
-  local port="${TENERAL_CALLBACK_PORT:-1455}" status=0
-  docker run --rm --interactive --tty "${bare[@]}" ${extra[@]+"${extra[@]}"} \
-    teneral bun kernel/setup.ts --no-callback "$@" || status=$?
+  terminal_env
+  local port="${TENERAL_CALLBACK_PORT:-1455}" status=0 full=1 plain=()
+  if ! screens "$@"; then
+    full=0
+    plain=(--plain)
+  fi
+  docker run --rm --interactive --tty "${bare[@]}" "${term_env[@]}" ${extra[@]+"${extra[@]}"} \
+    teneral bun kernel/setup.ts --no-callback ${plain[@]+"${plain[@]}"} "$@" || status=$?
   if [ "$status" -eq 76 ]; then
     status=0
-    docker run --rm --interactive --tty "${bare[@]}" ${extra[@]+"${extra[@]}"} \
+    # What docker itself says, should it fail to start this one (the port is taken, say), would be
+    # lost on the screen the first run left up. It is kept, and shown once the terminal is back.
+    tmp="$(mktemp)"
+    docker run --rm --interactive --tty "${bare[@]}" "${term_env[@]}" ${extra[@]+"${extra[@]}"} \
       --publish "127.0.0.1:$port:$port" --env TENERAL_CALLBACK_HOST=0.0.0.0 --env "TENERAL_CALLBACK_PORT=$port" \
-      teneral bun kernel/setup.ts --resume "$@" || status=$?
+      teneral bun kernel/setup.ts --resume ${plain[@]+"${plain[@]}"} "$@" 2>"$tmp" || status=$?
+    if [ "$full" -eq 1 ] && [ "$status" -ge 125 ]; then restore_terminal; fi
+    cat "$tmp" >&2
+    rm -f "$tmp"
+    tmp=""
+  elif [ "$full" -eq 1 ] && [ "$status" -gt 128 ]; then
+    # Killed in the middle of its screen.
+    restore_terminal
   fi
   return "$status"
 }
@@ -119,8 +193,9 @@ configure() {
     echo "No .env here, so no model provider is configured. Run ./box setup from a terminal, then this again." >&2
     exit 1
   fi
-  echo "No configuration here yet (.env), so the setup comes first."
-  setup || exit "$?"
+  if ! screens; then echo "No configuration here yet (.env), so the setup comes first."; fi
+  # The setup's last page then says that the agent starts next, rather than naming the command for it.
+  setup --then-start || exit "$?"
   if [ ! -f .env ]; then exit 1; fi
 }
 
@@ -206,9 +281,26 @@ case "$command" in
       say_not_running
       exit 1
     fi
-    if [ -t 0 ]; then tty=(--tty); fi
     # The client runs inside the container, beside the agent, so the host needs no Bun.
-    exec docker exec --interactive ${tty[@]+"${tty[@]}"} "$name" bun kernel/talk.ts "$@"
+    # Input from a pipe or a file: plain text, exactly as it always was.
+    if [ ! -t 0 ]; then exec docker exec --interactive "$name" bun kernel/talk.ts "$@"; fi
+    terminal_env
+    if ! screens "$@"; then
+      exec docker exec --interactive --tty "${term_env[@]}" "$name" bun kernel/talk.ts --plain "$@"
+    fi
+    status=0
+    docker exec --interactive --tty "${term_env[@]}" "$name" bun kernel/talk.ts "$@" || status=$?
+    if [ "$status" -gt 128 ]; then
+      # The client was cut off in the middle of its screen: with `./box down`, or when the kernel
+      # gives up, the container goes and takes it along.
+      restore_terminal
+      if alive; then
+        echo "The talk client was cut off, with status $status. The agent goes on; ./box talk attaches again." >&2
+      else
+        echo "The agent stopped, and this conversation with it. ./box up starts it again." >&2
+      fi
+    fi
+    exit "$status"
     ;;
 
   logs)
