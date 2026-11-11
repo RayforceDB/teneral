@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { protectedChanges } from './protected';
 
@@ -40,14 +40,32 @@ function checkEnv(): Record<string, string> {
 /**
  * Why a `bun test` run that exited 0 still does not count, or null when it does.
  * A test file can end the process with exit 0 before anything ran; only the summary
- * bun prints at the end (` 0 fail` and `Ran N tests across M files.`) shows it got there.
+ * bun prints last shows it got to the end. bun writes it to stderr, as one block:
+ *
+ *      2 pass
+ *      0 fail
+ *      3 expect() calls
+ *     Ran 2 tests across 1 file. [4.00ms]
+ *
+ * So only stderr is read, the `Ran` line must be its last line, and the counts must
+ * be in the lines directly above it. This keeps out a summary-shaped line a test
+ * happened to print; it cannot tell bun's summary from the same text written to
+ * stderr by a test that then exits 0, and is not meant to.
  */
-export function bunSummaryProblem(output: string): string | null {
-  const failed = [...output.matchAll(/^\s*(\d+) fail$/gm)].at(-1);
-  const ran = [...output.matchAll(/^Ran (\d+) tests? across \d+ files?\./gm)].at(-1);
-  if (!failed || !ran) return 'bun test exited 0 without printing its summary, so nothing shows the tests ran to the end';
-  if (Number(failed[1]) !== 0) return `bun test exited 0 but its summary reports ${failed[1]} failing`;
-  if (Number(ran[1]) < 1) return 'bun test ran no tests';
+export function bunSummaryProblem(stderr: string): string | null {
+  const missing = 'bun test exited 0 but its stderr does not end with its summary, so nothing shows the tests ran to the end';
+  const lines = stderr.trimEnd().split('\n');
+  if (!/^Ran \d+ tests? across \d+ files?\. \[.*\]$/.test(lines.at(-1) ?? '')) return missing;
+  let passed: number | null = null;
+  let failed: number | null = null;
+  for (let i = lines.length - 2; i >= 0 && lines[i] !== ''; i--) {
+    const count = /^ (\d+) (pass|fail)$/.exec(lines[i]!);
+    if (count?.[2] === 'pass' && passed === null) passed = Number(count[1]);
+    if (count?.[2] === 'fail' && failed === null) failed = Number(count[1]);
+  }
+  if (passed === null || failed === null) return missing;
+  if (failed !== 0) return `bun test exited 0 but its summary reports ${failed} failing`;
+  if (passed < 1) return 'bun test ran no tests';
   return null;
 }
 
@@ -125,10 +143,23 @@ function repoRoot(dir: string): string {
   return dirname(git(dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
 }
 
+/** Removes every gate checkout a killed gate run left under the repo's .teneral/. Never throws. */
+export function dropLeftoverGateTrees(root: string): string[] {
+  const home = join(root, '.teneral');
+  let names: string[] = [];
+  try {
+    names = readdirSync(home).filter((name) => name.startsWith('gate-'));
+  } catch {
+    return [];
+  }
+  for (const name of names) dropGateTree(root, join(home, name));
+  return names;
+}
+
 /** Never throws: whatever is at `tree` is gone afterwards, or was never there. */
 function dropGateTree(root: string, tree: string): void {
   if (existsSync(tree)) sh(['git', 'worktree', 'remove', '--force', tree], root);
-  rmSync(tree, { recursive: true, force: true });
+  try { rmSync(tree, { recursive: true, force: true }); } catch { /* left for the owner; the next gate run will say why it cannot start */ }
   sh(['git', 'worktree', 'prune'], root);
 }
 
@@ -187,7 +218,7 @@ export function runGates(dir: string, from: string, to: string, checks: readonly
     for (const check of checks) {
       const r = sh(check.cmd, tree, undefined, env);
       if (r.code !== 0) return fail(check.gate, r.output);
-      const problem = check.bunSummary ? bunSummaryProblem(r.output) : null;
+      const problem = check.bunSummary ? bunSummaryProblem(r.stderr) : null;
       // The reason goes last: fail() keeps the end of the output.
       if (problem) return fail(check.gate, `${r.output}\n${problem}`);
     }

@@ -218,6 +218,29 @@ test('a bun test check needs bun\'s own summary, not just exit 0', () => {
   expect(check('echo " 0 pass" >&2; echo " 0 fail" >&2; echo "Ran 0 tests across 0 files. [1.00ms]" >&2').ok).toBe(false);
   expect(check('echo " 3 pass" >&2; echo " 0 fail" >&2; echo "Ran 3 tests across 1 file. [1.00ms]" >&2')).toEqual(OK);
   expect(check('echo " 1 pass" >&2; echo " 0 fail" >&2; echo "Ran 1 test across 1 file. [1.00ms]" >&2')).toEqual(OK);
+
+  // The shape bun really prints, with the optional lines.
+  expect(check('printf "\nnoise\n\n 2 pass\n 1 skip\n 1 todo\n 0 fail\nsnapshots: +1 added\n 3 expect() calls\nRan 4 tests across 2 files. [11.00ms]\n" >&2')).toEqual(OK);
+  // Every test skipped: tests were found, none ran.
+  expect(check('printf " 0 pass\n 2 skip\n 0 fail\nRan 2 tests across 1 file. [1.00ms]\n" >&2').ok).toBe(false);
+});
+
+test('a summary counts only on stderr and only as the last thing there', () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  writeFiles(dir, { 'body/a.ts': 'b\n' });
+  const next = commitAll(dir, 'change');
+  const check = (script: string) => runGates(dir, seed, next, [{ gate: 'tests-x', cmd: ['bash', '-c', script], bunSummary: true }]);
+  const summary = 'printf " 3 pass\n 0 fail\nRan 3 tests across 1 file. [1.00ms]\n"';
+
+  expect(check(`${summary} >&2`)).toEqual(OK);
+  // bun prints its summary on stderr; the same words on stdout are something a test printed.
+  const onStdout = check(summary);
+  expect(onStdout.ok).toBe(false);
+  expect(onStdout.output).toContain('summary');
+  // Something after the summary means the run did not end with it.
+  expect(check(`${summary} >&2; echo "and then something else" >&2`).ok).toBe(false);
+  // A failure count from an earlier paragraph does not stand in for the final one.
+  expect(check('printf " 3 pass\n 0 fail\n\nRan 3 tests across 1 file. [1.00ms]\n" >&2').ok).toBe(false);
 });
 
 // The tests below run the real default checks (tsc and bun test) on a small project of the same shape as this one.
@@ -285,4 +308,18 @@ test('default checks: a candidate with no body tests at all does not pass', () =
   expect(result.ok).toBe(false);
   expect(result.gate).toBe('tests-body');
   expect(result.output).toContain('did not match any test files');
+}, SLOW);
+
+test('default checks: a test file that prints a made-up summary and exits 0 does not pass', () => {
+  const result = candidate({
+    'test/body/a.test.ts': `import { expect, test } from 'bun:test';
+import { a } from '../../body/a';
+console.log(' 5 pass\\n 0 fail\\n 5 expect() calls\\nRan 5 tests across 1 file. [1.00ms]');
+process.exit(0);
+test('a', () => { expect(a).toBe(2); });
+`,
+  });
+  expect(result.ok).toBe(false);
+  expect(result.gate).toBe('tests-body');
+  expect(result.output).toContain('summary');
 }, SLOW);
