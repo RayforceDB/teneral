@@ -5,6 +5,7 @@ import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Enve
 import { git } from '../kernel/gates';
 import { appendEvent } from '../kernel/journal';
 import type { ToolSpec } from './provider';
+import { Clipped, clip } from './text';
 
 export interface ToolContext {
   /** The candidate worktree: the only copy of the code the agent edits. */
@@ -28,33 +29,8 @@ export interface Tool {
 
 const OUTPUT_CAP = 20_000;
 
-/**
- * Text that arrives in pieces and may be endless. Keeps the beginning and the end, half the cap
- * each, and only counts what falls between: the end is where a command usually says what went wrong.
- */
-class Clipped {
-  private head = '';
-  private tail = '';
-  private total = 0;
-
-  add(piece: string): void {
-    this.total += piece.length;
-    const room = OUTPUT_CAP / 2 - this.head.length;
-    this.head += piece.slice(0, room);
-    this.tail = (this.tail + piece.slice(room)).slice(-OUTPUT_CAP / 2);
-  }
-
-  text(): string {
-    const dropped = this.total - this.head.length - this.tail.length;
-    if (dropped === 0) return this.head + this.tail;
-    return `${this.head}\n[${dropped} characters dropped here]\n${this.tail}`;
-  }
-}
-
 export function cap(text: string): string {
-  const clipped = new Clipped();
-  clipped.add(text);
-  return clipped.text();
+  return clip(text, OUTPUT_CAP);
 }
 
 function str(args: unknown, key: string): string {
@@ -104,32 +80,57 @@ const edit: Tool = {
     const old = str(args, 'old');
     const replacement = str(args, 'new');
     if (old === '') throw new Error('`old` is empty; give the exact text to replace');
-    const text = readFileSync(path, 'utf8');
-    const count = text.split(old).length - 1;
-    if (count === 0) throw new Error('`old` was not found in the file');
+    const bytes = readFileSync(path);
+    const text = bytes.toString('utf8');
+    // Decoding puts a replacement character where the bytes are not text; writing that back would damage the file.
+    if (!Buffer.from(text, 'utf8').equals(bytes)) throw new Error('the file is not UTF-8 text; edit cannot change it safely');
+    const first = text.indexOf(old);
+    if (first === -1) throw new Error('`old` was not found in the file');
+    // From first + 1, so matches that overlap count too: 'aa' is not unique in 'aaa'.
+    let count = 1;
+    for (let at = text.indexOf(old, first + 1); at !== -1; at = text.indexOf(old, at + 1)) count += 1;
     if (count > 1) throw new Error(`\`old\` occurs ${count} times; give more context so it is unique`);
-    // A function, so `$&` and friends in the new text are written as they are.
-    writeFileSync(path, text.replace(old, () => replacement));
+    writeFileSync(path, text.slice(0, first) + replacement + text.slice(first + old.length));
     return `edited ${str(args, 'path')}`;
   },
 };
 
 const BASH_LIMIT_MS = 120_000;
 
-/** Reads a pipe to its end whatever its size, so the writer never blocks; `into` decides what is kept. */
-async function drain(pipe: ReadableStream<Uint8Array>, into: Clipped): Promise<void> {
+/** How long the pipes may stay open after bash itself is gone. */
+const DRAIN_MS = 500;
+
+/** Reads a pipe whatever its size, so the writer never blocks; `into` decides what is kept. `stop` ends the reading early. */
+function drain(pipe: ReadableStream<Uint8Array>, into: Clipped): { done: Promise<void>; stop: () => void } {
+  const reader = pipe.getReader();
   const decoder = new TextDecoder();
-  for await (const chunk of pipe) into.add(decoder.decode(chunk, { stream: true }));
-  into.add(decoder.decode());
+  const done = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      into.add(decoder.decode(value, { stream: true }));
+    }
+    into.add(decoder.decode());
+  })().catch(() => {});
+  return { done, stop: () => { void reader.cancel().catch(() => {}); } };
+}
+
+/** What a command may see of the agent's environment: all of it but the provider key. */
+export function bashEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  const { TENERAL_API_KEY: _key, ...rest } = env;
+  return rest;
 }
 
 /**
  * Runs without blocking the process, so sensors keep working while a command runs.
- * `detached` makes bash the leader of its own process group; at the limit the whole group is
- * killed, so nothing the command started outlives it holding the pipes.
+ * `detached` makes bash the leader of its own process group; at the limit the whole group is killed.
+ * The call ends when bash does. Something bash started may still hold the pipes open (a background
+ * job, or one that left the group and so escaped the kill): the pipes get DRAIN_MS more, then reading stops.
  */
 export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS): Promise<string> {
-  const p = Bun.spawn(['bash', '-c', command], { cwd, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true });
+  const p = Bun.spawn(['bash', '-c', command], {
+    cwd, env: bashEnv(process.env), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
+  });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -140,22 +141,33 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
     }
   }, timeoutMs);
   // One buffer for both pipes, in the order the output arrived.
-  const output = new Clipped();
+  const output = new Clipped(OUTPUT_CAP);
+  const pipes = [drain(p.stdout, output), drain(p.stderr, output)];
   try {
-    await Promise.all([drain(p.stdout, output), drain(p.stderr, output), p.exited]);
+    await p.exited;
   } finally {
     clearTimeout(timer);
   }
+  let patience: ReturnType<typeof setTimeout> | undefined;
+  const heldOpen = await Promise.race([
+    Promise.all(pipes.map((pipe) => pipe.done)).then(() => false),
+    new Promise<boolean>((resolve) => { patience = setTimeout(() => resolve(true), DRAIN_MS); }),
+  ]);
+  clearTimeout(patience);
+  if (heldOpen) for (const pipe of pipes) pipe.stop();
   const status = timedOut
     ? `timed out after ${timeoutMs / 1000}s and was killed`
     : p.exitCode === null ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
-  return `${status}\n${output.text()}`;
+  const note = heldOpen && !timedOut
+    ? '\n[something this command started is still running and holds its output open; it was left running, and what it prints from now on is not read]'
+    : '';
+  return `${status}\n${output.text()}${note}`;
 }
 
 const bash: Tool = {
   spec: {
     name: 'bash',
-    description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped.',
+    description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped. It does not see your API key.',
     parameters: params({ command: 'The command' }),
   },
   async run(args, ctx) {
@@ -168,11 +180,20 @@ const molt: Tool = {
     name: 'molt',
     description:
       'Commit your workspace and ask the kernel to switch you onto it. The kernel runs the gates when this turn ends; ' +
-      'if they pass you restart on the new code, otherwise you restart on the current code with the reason.',
+      'if they pass you restart on the new code, otherwise you restart on the current code with the reason. ' +
+      'Everything in the workspace is committed, untracked files included, unless .gitignore names it.',
     parameters: params({ motive: 'One line: what changed and how you will know it helped' }),
   },
   async run(args, ctx) {
     const motive = str(args, 'motive');
+    try {
+      git(ctx.workspace, 'merge-base', '--is-ancestor', ctx.gen, 'HEAD');
+    } catch {
+      throw new Error(
+        `the workspace is on a different line of history: its HEAD does not descend from the running generation ${ctx.gen}. ` +
+        `See it with \`git log --oneline --graph HEAD ${ctx.gen}\`. Nothing was committed.`,
+      );
+    }
     if (git(ctx.workspace, 'status', '--porcelain') !== '') {
       git(ctx.workspace, 'add', '-A');
       // The owner's hooks and signing setup are not the agent's to satisfy; the gates judge the commit.
@@ -186,7 +207,9 @@ const molt: Tool = {
     if (commit === ctx.gen) throw new Error('nothing to molt: the workspace matches the running generation');
     appendEvent(ctx.journal, ctx.gen, { type: 'molt.requested', commit, motive });
     ctx.moltCommit = commit;
-    return `Molt requested for ${commit}. The kernel runs the gates when this turn ends.`;
+    // Shown so that a file committed by accident is noticed now, not at the gates.
+    const changed = clip(git(ctx.workspace, 'diff', '--name-status', '--no-renames', ctx.gen, commit), 4000);
+    return `Molt requested for ${commit}. The kernel runs the gates when this turn ends.\nChanged from the running generation:\n${changed}`;
   },
 };
 
@@ -212,7 +235,19 @@ const send: Tool = {
     const rawReply = (args as Record<string, unknown>).replyTo;
     const replyTo = typeof rawReply === 'string' && rawReply !== '' ? rawReply : null;
 
-    const peers = existsSync(ctx.peers) ? (JSON.parse(readFileSync(ctx.peers, 'utf8')) as Record<string, unknown>) : {};
+    let peers: Record<string, unknown> = {};
+    if (existsSync(ctx.peers)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(ctx.peers, 'utf8'));
+      } catch (err) {
+        throw new Error(`the peers file ${ctx.peers} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error(`the peers file ${ctx.peers} must hold one JSON object mapping peer names to inbox directories`);
+      }
+      peers = parsed as Record<string, unknown>;
+    }
     const target = peers[to];
     if (typeof target !== 'string') {
       throw new Error(`unknown peer "${to}". Known peers: ${Object.keys(peers).join(', ') || 'none'}`);

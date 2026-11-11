@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runBash, TOOLS, type ToolContext } from '../../body/tools';
+import { bashEnv, runBash, TOOLS, type ToolContext } from '../../body/tools';
 import { MAX_HOPS, archive, collect, deliver } from '../../kernel/envelope';
 import { git } from '../../kernel/gates';
 import { readEvents } from '../../kernel/journal';
@@ -213,4 +213,134 @@ test('an unknown peer or an unknown message to reply to is refused', async () =>
   withPeer(ctx);
   await expect(tool('send').run({ to: 'carol', text: 'hi' }, ctx)).rejects.toThrow(/unknown peer "carol".*bob/);
   await expect(tool('send').run({ to: 'bob', text: 'hi', replyTo: 'never-seen' }, ctx)).rejects.toThrow(/no received message/);
+});
+
+const ws = () => mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+const isWellFormed = (s: string) => s === s.toWellFormed();
+
+test('the cut never falls inside a character: an emoji at either edge is kept whole or dropped whole', async () => {
+  const ctx = context(ws());
+  for (const lead of ['', 'a']) {
+    // 10,000 is where the head ends and where the tail begins; the lead shifts the pairs across both cuts.
+    await tool('write').run({ path: 'emoji.txt', content: lead + '😀'.repeat(20_000) }, ctx);
+    const out = await tool('read').run({ path: 'emoji.txt' }, ctx);
+    expect(isWellFormed(out)).toBe(true);
+    expect(out).toContain('characters dropped here');
+    expect(out.length).toBeLessThan(21_000);
+  }
+});
+
+test('a background job that keeps the output open does not hold the call: bash exited, so its exit is reported', async () => {
+  const marker = `30.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+  const started = Date.now();
+  const out = await runBash(`sleep ${marker} & echo hi`, ws());
+  try {
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(out.startsWith('exit 0\nhi\n')).toBe(true);
+    expect(out).not.toContain('timed out');
+    expect(out).toContain('still running');
+    // It is left running: only a timeout kills.
+    expect(Bun.spawnSync(['pgrep', '-f', `sleep ${marker}`]).stdout.toString().trim()).not.toBe('');
+  } finally {
+    Bun.spawnSync(['pkill', '-f', `sleep ${marker}`]);
+  }
+});
+
+test('a job that left the process group cannot hold the call either', async () => {
+  const marker = `30.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+  const started = Date.now();
+  const out = await runBash(`setsid sleep ${marker} & echo hi`, ws());
+  Bun.spawnSync(['pkill', '-f', `sleep ${marker}`]);
+  expect(Date.now() - started).toBeLessThan(3000);
+  expect(out.startsWith('exit 0\nhi\n')).toBe(true);
+});
+
+test('a timeout does not wait for a job that escaped the kill and still holds the output', async () => {
+  const marker = `30.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+  const started = Date.now();
+  const out = await runBash(`setsid sleep ${marker} & sleep 20`, ws(), 300);
+  Bun.spawnSync(['pkill', '-f', `sleep ${marker}`]);
+  expect(Date.now() - started).toBeLessThan(3000);
+  expect(out).toContain('timed out');
+});
+
+test('a command with no output, and one that exits before the limit, report the plain exit', async () => {
+  expect(await runBash('true', ws())).toBe('exit 0\n');
+  expect(await runBash('exit 4', ws(), 5000)).toBe('exit 4\n');
+});
+
+test('bytes that are not UTF-8 come back as well-formed text', async () => {
+  const out = await runBash("printf 'a\\377b\\355\\240\\200c'", ws());
+  expect(out.startsWith('exit 0\na')).toBe(true);
+  expect(out.endsWith('c')).toBe(true);
+  expect(isWellFormed(out)).toBe(true);
+});
+
+test('bash does not see the API key; the rest of the environment is passed on', async () => {
+  expect(bashEnv({ HOME: '/h', TENERAL_API_KEY: 'secret', TENERAL_MODEL: 'm' })).toEqual({ HOME: '/h', TENERAL_MODEL: 'm' });
+  const before = process.env.TENERAL_API_KEY;
+  process.env.TENERAL_API_KEY = 'secret-key';
+  process.env.TENERAL_TEST_PASSED_ON = 'yes';
+  try {
+    const out = await runBash('echo "key=${TENERAL_API_KEY:-unset} other=$TENERAL_TEST_PASSED_ON home=$HOME"', ws());
+    expect(out).toBe(`exit 0\nkey=unset other=yes home=${process.env.HOME}\n`);
+  } finally {
+    delete process.env.TENERAL_TEST_PASSED_ON;
+    if (before === undefined) delete process.env.TENERAL_API_KEY; else process.env.TENERAL_API_KEY = before;
+  }
+});
+
+test('edit counts overlapping matches as ambiguous', async () => {
+  const ctx = context(ws());
+  await tool('write').run({ path: 'f.txt', content: 'aaa' }, ctx);
+  await expect(tool('edit').run({ path: 'f.txt', old: 'aa', new: 'b' }, ctx)).rejects.toThrow(/2 times/);
+  expect(readFileSync(join(ctx.workspace, 'f.txt'), 'utf8')).toBe('aaa');
+});
+
+test('edit refuses a file that is not UTF-8 and leaves every byte as it was', async () => {
+  const ctx = context(ws());
+  const bytes = Buffer.from([0x6f, 0x6e, 0x65, 0xff, 0x74, 0x77, 0x6f]);
+  writeFileSync(join(ctx.workspace, 'bin.dat'), bytes);
+  await expect(tool('edit').run({ path: 'bin.dat', old: 'one', new: 'ONE' }, ctx)).rejects.toThrow(/UTF-8/);
+  expect(readFileSync(join(ctx.workspace, 'bin.dat')).equals(bytes)).toBe(true);
+});
+
+test('molt refuses a workspace that does not descend from the running generation, before committing anything', async () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  git(dir, 'checkout', '-q', '--orphan', 'elsewhere');
+  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@localhost', 'commit', '-q', '-m', 'unrelated');
+  const unrelated = git(dir, 'rev-parse', 'HEAD');
+  writeFiles(dir, { 'body/a.ts': 'b\n' });
+  const ctx = context(dir, seed);
+
+  await expect(tool('molt').run({ motive: 'astray' }, ctx)).rejects.toThrow(/different line of history.*git log/s);
+
+  expect(ctx.moltCommit).toBeNull();
+  expect(git(dir, 'rev-parse', 'HEAD')).toBe(unrelated);
+  expect(readEvents(ctx.journal)).toEqual([]);
+});
+
+test('a molt says which files it changes from the running generation', async () => {
+  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n', 'body/gone.ts': 'x\n' });
+  const ctx = context(dir, seed);
+  writeFiles(dir, { 'body/a.ts': 'b\n', 'stray.log': 'oops\n' });
+  git(dir, 'rm', '-q', 'body/gone.ts');
+
+  const out = await tool('molt').run({ motive: 'list' }, ctx);
+
+  expect(out).toContain('M\tbody/a.ts');
+  expect(out).toContain('D\tbody/gone.ts');
+  expect(out).toContain('A\tstray.log');
+});
+
+test('the molt description says untracked files are committed too', () => {
+  expect(tool('molt').spec.description).toMatch(/untracked/);
+});
+
+test('send names the peers file when it is malformed', async () => {
+  const ctx = context(ws());
+  writeFileSync(ctx.peers, '{ not json');
+  await expect(tool('send').run({ to: 'bob', text: 'hi' }, ctx)).rejects.toThrow(ctx.peers);
+  writeFileSync(ctx.peers, '["bob"]');
+  await expect(tool('send').run({ to: 'bob', text: 'hi' }, ctx)).rejects.toThrow(ctx.peers);
 });
