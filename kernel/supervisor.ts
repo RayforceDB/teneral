@@ -14,6 +14,8 @@ import {
 export const MOLT_EXIT = 75;
 /** Crashes in a row, with no reply in between, before a generation is given up on. */
 export const CRASH_LIMIT = 3;
+/** Rejected molts in a row, with no reply in between, before the supervisor stops and leaves it to the owner. */
+export const REJECTION_LIMIT = 3;
 
 export interface Exit {
   code: number;
@@ -298,13 +300,9 @@ export interface Options {
   readyTimeoutMs?: number;
   /** How long a generation told to stop (SIGTERM) has before it is killed outright (SIGKILL). Default 5 s. */
   killGraceMs?: number;
-  /** Wait before a restart: this times the crashes in a row (or the rejected molts) so far, at most RESTART_DELAY_CAP_MS. Default 1 s. */
+  /** Wait before a restart: this times the crashes in a row (or the rejected molts in a row) so far, at most RESTART_DELAY_CAP_MS. Default 1 s. */
   restartDelayMs?: number;
-  /**
-   * Restarts one generation gets in total, after crashes and after rejected molts alike, whether or not it
-   * replied in between. Spent by crashes, the generation is given up on; spent by rejections, the supervisor halts.
-   * Default 10.
-   */
+  /** Restarts after a crash one generation gets in total, whether or not it replied in between, before it is given up on. Default 10. */
   restartBudget?: number;
   log?: (line: string) => void;
 }
@@ -371,9 +369,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
     if (leftover.length > 0) log(`removed gate checkouts left by an earlier run: ${leftover.join(', ')}`);
     /** Crashes in a row with no reply in between. */
     let crashes = 0;
-    /** Restarts of this generation in total, after a crash or after a rejected molt. */
+    /** Restarts of this generation after a crash, in total. */
     let restarts = 0;
-    /** Molts this generation asked for that were rejected. */
+    /** Rejected molts in a row with no reply in between. */
     let rejections = 0;
     const delayAfter = (count: number) => Math.min(restartDelayMs * count, RESTART_DELAY_CAP_MS);
 
@@ -443,7 +441,10 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
 
       const events = since();
       const replied = events.some((e) => e.type === 'assistant');
-      if (replied) crashes = 0;
+      if (replied) {
+        crashes = 0;
+        rejections = 0;
+      }
       const ready = events.some((e) => e.type === 'generation.ready' && e.gen === gen);
       const standing = { hasPrevious: state.previous !== null, crashes };
       let decision = decide({ code, ready }, standing);
@@ -495,16 +496,18 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       }
       if (!result.ok) {
         appendEvent(p.journal, gen, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });
-        log(`molt to ${request.commit} rejected at gate ${result.gate}`);
-        // A rejection costs a restart and a wait like a crash does, so asking again on every start cannot spin
-        // through gate runs. Asking is not a reason to roll back, though: when the budget is gone, stop and say so.
-        if (restarts >= restartBudget) {
-          log(`generation ${gen} keeps requesting molts the gates reject (${rejections + 1} so far) and its restart budget of ${restartBudget} is spent`);
+        // Asking is never a reason to roll back, and a generation that speaks between attempts is iterating:
+        // it waits one unit each time and is never stopped. Only asking again and again without a reply in
+        // between is slowed more each time and, at the limit, left to the owner.
+        rejections += 1;
+        if (rejections >= REJECTION_LIMIT) {
+          log(`molt to ${request.commit} rejected at gate ${result.gate}`);
+          log(`generation ${gen} keeps requesting molts the gates reject without a reply in between (${rejections} in a row); stopping`);
           return 'halted';
         }
-        restarts += 1;
-        rejections += 1;
-        await pause(delayAfter(rejections));
+        const delay = delayAfter(rejections);
+        log(`molt to ${request.commit} rejected at gate ${result.gate}; restarting in ${delay} ms`);
+        await pause(delay);
         continue;
       }
       if (!moveTo({ current: request.commit, previous: gen })) return 'halted';

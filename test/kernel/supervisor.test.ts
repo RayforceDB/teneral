@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
-import { CRASH_LIMIT, init, paths, supervise, type Options } from '../../kernel/supervisor';
+import {
+  CRASH_LIMIT, REJECTION_LIMIT, init, paths, supervise, type Options,
+} from '../../kernel/supervisor';
 import { git, type GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
@@ -385,7 +387,7 @@ test('restarts wait longer each time', async () => {
 
 // --- rejected molts ---
 
-test('a generation that keeps asking for a molt the gates reject is paced, then halted, never rolled back', async () => {
+test('a generation that re-requests a rejected molt on every start without a reply is paced, then halted, never rolled back', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
@@ -404,19 +406,57 @@ process.exit(75);
   const logs: string[] = [];
   const t = Date.now();
   const outcome = await supervise({
-    root: dir, ...QUIET, restartBudget: 3, restartDelayMs: 40, log: (line) => { logs.push(line); },
+    root: dir, ...QUIET, restartDelayMs: 40, log: (line) => { logs.push(line); },
     gates: (_dir, _from, to) => (to === v2 ? PASS : { ok: false, gate: 'tests-body', output: 'boom' }),
   });
   const events = readEvents(p.journal);
   expect(outcome).toBe('halted');
-  expect(logs.join('\n')).toContain('keeps requesting molts the gates reject');
-  // Three rejections spend the budget; the fourth ends it.
-  expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(4);
-  expect(events.filter((e) => e.type === 'generation.started' && e.gen === v2)).toHaveLength(4);
+  expect(logs.join('\n')).toContain('keeps requesting molts the gates reject without a reply in between');
+  // Every rejection is journaled, the one that reaches the limit included.
+  expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(REJECTION_LIMIT);
+  expect(events.filter((e) => e.type === 'generation.started' && e.gen === v2)).toHaveLength(REJECTION_LIMIT);
   expect(events.map((e) => e.type)).not.toContain('generation.rolledback');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: v2, previous: seed });
-  // Waits of 40, 80 and 120 ms follow the first three rejections.
-  expect(Date.now() - t).toBeGreaterThanOrEqual(240);
+  // Waits of 40 and 80 ms follow the first two rejections; the third ends it.
+  expect(REJECTION_LIMIT).toBe(3);
+  expect(Date.now() - t).toBeGreaterThanOrEqual(120);
+});
+
+test('a generation that replies before each rejected molt is iterating, and is never halted or slowed for it', async () => {
+  const rounds = 6;
+  const restartBudget = 2;
+  expect(rounds).toBeGreaterThan(REJECTION_LIMIT);
+  expect(rounds).toBeGreaterThan(restartBudget);
+  // Speaks, asks for a molt that will be rejected, and after `rounds` rejections stops by itself.
+  const r = await seedOnly(`${HEAD}
+const rejected = readEvents(journal).filter((e) => e.type === 'molt.rejected').length;
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'assistant', text: 'trying again', toolCalls: [] });
+if (rejected >= ${rounds}) process.exit(0);
+appendEvent(journal, gen, { type: 'molt.requested', commit: '${'b'.repeat(40)}', motive: 'attempt ' + rejected });
+process.exit(75);
+`, { gates: () => ({ ok: false, gate: 'tests-body', output: 'boom' }), restartBudget, restartDelayMs: 30 });
+  expect(r.outcome).toBe('stopped');
+  expect(r.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
+  expect(started(r.events)).toBe(rounds + 1);
+  // Each wait is one unit: the count of rejections in a row starts again at every reply.
+  const waits = r.logs.filter((line) => line.includes('rejected at gate'));
+  expect(waits).toHaveLength(rounds);
+  for (const line of waits) expect(line).toContain('restarting in 30 ms');
+});
+
+test('asking again and again for the commit already running is limited the same way', async () => {
+  const gated: string[] = [];
+  const r = await seedOnly(`${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'molt.requested', commit: gen, motive: 'nothing changed' });
+process.exit(75);
+`, { gates: (_dir, _from, to) => { gated.push(to); return PASS; } });
+  expect(r.outcome).toBe('halted');
+  expect(gated).toEqual([]);
+  expect(r.logs.join('\n')).toContain('keeps requesting molts the gates reject without a reply in between');
+  expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [e.gate] : []))).toEqual(Array(REJECTION_LIMIT).fill('same'));
+  expect(started(r.events)).toBe(REJECTION_LIMIT);
 });
 
 test('a molt to the commit that is already running is refused without running the gates', async () => {
