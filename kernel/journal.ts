@@ -37,15 +37,21 @@ function endsWithNewline(fd: number): boolean {
 }
 
 export function appendEvent(path: string, gen: string, body: EventBody): JournalEvent {
+  // The envelope comes last so nothing in the body can overwrite it.
   const event = {
-    v: SCHEMA_VERSION, id: randomUUID(), ts: new Date().toISOString(), gen, ...body,
+    ...body, v: SCHEMA_VERSION, id: randomUUID(), ts: new Date().toISOString(), gen,
   } as JournalEvent;
   mkdirSync(dirname(path), { recursive: true });
   const fd = openSync(path, 'a+');
   try {
     // A crash can leave half a line behind; start on a fresh one so only that line is lost.
     const prefix = endsWithNewline(fd) ? '' : '\n';
-    writeSync(fd, `${prefix}${JSON.stringify(event)}\n`);
+    const line = Buffer.from(`${prefix}${JSON.stringify(event)}\n`, 'utf8');
+    // writeSync may write fewer bytes than asked without throwing.
+    let offset = 0;
+    while (offset < line.length) {
+      offset += writeSync(fd, line, offset, line.length - offset);
+    }
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -53,16 +59,27 @@ export function appendEvent(path: string, gen: string, body: EventBody): Journal
   return event;
 }
 
+function isEventShaped(value: unknown): value is JournalEvent {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const e = value as Record<string, unknown>;
+  return typeof e.type === 'string' && typeof e.id === 'string' && typeof e.gen === 'string'
+    && typeof e.ts === 'string' && typeof e.v === 'number';
+}
+
 export function readEvents(path: string): JournalEvent[] {
   if (!existsSync(path)) return [];
   const events: JournalEvent[] = [];
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (line === '') continue;
+    let parsed: unknown;
     try {
-      events.push(JSON.parse(line) as JournalEvent);
+      parsed = JSON.parse(line);
     } catch {
       // A torn line from a crash mid-write. Nothing after it depends on it.
+      continue;
     }
+    // Valid JSON that is not an event (a foreign or damaged line) is skipped the same way.
+    if (isEventShaped(parsed)) events.push(parsed);
   }
   return events;
 }
