@@ -110,6 +110,39 @@ export function planNotice(env: Record<string, string | undefined>): string | nu
   return providerFor(env.TENERAL_PROVIDER).auth === 'chatgpt-signin' ? `Using ChatGPT plan. Manage usage: ${CHATGPT_USAGE_URL}` : null;
 }
 
+/**
+ * Context windows in tokens, as each model's own page states them ("Model details", the line
+ * "context window"): https://developers.openai.com/api/docs/models/<model id>, read 2026-11-12.
+ * Only what a page says is here. The pages warn that a window can differ between snapshots of a
+ * model, so a name is matched whole and a snapshot not listed is not guessed at.
+ */
+const WINDOWS: Readonly<Record<string, number>> = {
+  'gpt-6.1-sol': 1_050_000, 'gpt-6.1-terra': 1_050_000,
+  'gpt-6-astra': 1_050_000, 'gpt-6-sol': 1_050_000, 'gpt-6-luna': 1_050_000, 'gpt-6-cyber': 1_050_000,
+  'gpt-5.6-sol': 1_050_000, 'gpt-5.6-terra': 1_050_000, 'gpt-5.6-luna': 1_050_000, 'gpt-5.6-cyber': 400_000,
+  'gpt-5.5': 1_050_000, 'gpt-5.5-pro': 1_050_000, 'gpt-5.4': 1_050_000, 'gpt-5.4-pro': 1_050_000, 'gpt-5.4-mini': 400_000,
+  'gpt-5.2': 400_000, 'gpt-5.2-pro': 400_000,
+};
+
+/**
+ * Where a ChatGPT plan pays, the window can be smaller than the API's. The page of gpt-6.1-sol says:
+ * "GPT-6.1 Sol uses a default context window of 500K tokens in Codex and ChatGPT Work." It does not
+ * name the sign-in route teneral uses; the smaller number is taken for it, as the one that does not
+ * promise room that may not be there.
+ */
+const PLAN_WINDOWS: Readonly<Record<string, number>> = { 'gpt-6.1-sol': 500_000 };
+
+/**
+ * The model's context window in tokens, or null when it is not known: a model the table does not
+ * hold, or the hand-typed endpoint, where a model's name says nothing certain about who serves it.
+ */
+export function contextWindow(provider: string, model: string): number | null {
+  const entry = findProvider(provider);
+  if (entry === null || entry.baseUrl === null) return null;
+  const known = (table: Readonly<Record<string, number>>): number | null => (Object.hasOwn(table, model) ? table[model]! : null);
+  return (entry.auth === 'chatgpt-signin' ? known(PLAN_WINDOWS) : null) ?? known(WINDOWS);
+}
+
 let agent: string | null = null;
 /**
  * Who is asking, on every request teneral makes of a provider or a sign-in server: its own name

@@ -122,3 +122,27 @@ test('an offset at the end of a torn line reads the events appended after it', (
   const next = appendEvent(path, 'gen-a', { type: 'stimulus', source: 'terminal', text: 'two' });
   expect(readEventsFrom(path, mark)).toEqual([next]);
 });
+
+test('a reply may carry its usage and a summary of the reasoning; one without them reads as it always did', () => {
+  const path = tmpJournal();
+  const old = appendEvent(path, 'gen-a', { type: 'assistant', text: 'before', toolCalls: [] });
+  const full = appendEvent(path, 'gen-b', {
+    type: 'assistant', text: 'after', toolCalls: [], usage: { input: 1200, output: 80, cached: 1000 }, reasoning: 'Thought about it.',
+  });
+  const partial = appendEvent(path, 'gen-b', { type: 'assistant', text: 'no cache', toolCalls: [], usage: { input: 5, output: 1 } });
+  // A line as a generation from before the fields wrote it, byte for byte.
+  appendFileSync(path, '{"type":"assistant","text":"older still","toolCalls":[],"v":1,"id":"x","ts":"2026-01-01T00:00:00.000Z","gen":"gen-0"}\n');
+
+  const events = readEvents(path);
+  expect(events).toHaveLength(4);
+  expect(events[0]).toEqual(old);
+  expect('usage' in events[0]! || 'reasoning' in events[0]!).toBe(false);
+  expect(events[1]).toEqual(full);
+  expect(events[1]).toMatchObject({ usage: { input: 1200, output: 80, cached: 1000 }, reasoning: 'Thought about it.' });
+  expect(events[2]).toEqual(partial);
+  expect(events[3]).toMatchObject({ type: 'assistant', text: 'older still' });
+  // The fields are an addition to version 1, not a new version.
+  expect(SCHEMA_VERSION).toBe(1);
+  expect(events.every((e) => e.v === 1)).toBe(true);
+  expect(readEventsFrom(path, 0)).toEqual(events);
+});

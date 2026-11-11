@@ -13,9 +13,18 @@ export interface ToolCall {
   args: unknown;
 }
 
+/** What a provider said one request cost, in tokens. `cached` is the part of `input` it had kept from an earlier request. */
+export interface Usage {
+  input: number;
+  output: number;
+  cached?: number;
+}
+
 export type EventBody =
   | { type: 'stimulus'; source: string; text: string }
-  | { type: 'assistant'; text: string; toolCalls: ToolCall[] }
+  // `usage` and `reasoning` (a summary of the model's reasoning, for the owner to read) came later
+  // and are optional: every journal written before them, and any reply without them, reads as before.
+  | { type: 'assistant'; text: string; toolCalls: ToolCall[]; usage?: Usage; reasoning?: string }
   | { type: 'tool.intent'; callId: string; name: string; args: unknown }
   | { type: 'tool.result'; callId: string; ok: boolean; output: string }
   | { type: 'molt.requested'; commit: string; motive: string }

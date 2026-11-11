@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_PROVIDER, PROVIDERS, credentialFile, findProvider, missingConfig, planNotice, providerFor, userAgent } from '../../kernel/providers';
+import { DEFAULT_PROVIDER, PROVIDERS, contextWindow, credentialFile, findProvider, missingConfig, planNotice, providerFor, userAgent } from '../../kernel/providers';
 
 test('the table offers the three providers, each under an id of its own', () => {
   expect(PROVIDERS.map((p) => p.id)).toEqual(['chatgpt', 'openai', 'compatible']);
@@ -61,4 +61,21 @@ test('the user agent is teneral\'s own name and the version in package.json', ()
 test('only a provider that uses the owner\'s ChatGPT plan has a notice saying so, with where to manage usage', () => {
   expect(planNotice({ TENERAL_PROVIDER: 'chatgpt' })).toBe('Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage');
   for (const id of [undefined, 'openai', 'compatible', 'unknown']) expect(planNotice({ TENERAL_PROVIDER: id })).toBeNull();
+});
+
+test('the context window of a model is the documented one, and null where nothing is documented', () => {
+  expect(contextWindow('openai', 'gpt-6.1-sol')).toBe(1_050_000);
+  expect(contextWindow('openai', 'gpt-5.2')).toBe(400_000);
+  // Paid for by a ChatGPT plan, the model the setup offers has the smaller window its page gives for plan use.
+  expect(contextWindow('chatgpt', 'gpt-6.1-sol')).toBe(500_000);
+  expect(contextWindow('chatgpt', 'gpt-6-astra')).toBe(1_050_000);
+  // Every model the table offers at setup has a window.
+  for (const p of PROVIDERS) for (const model of p.models) expect(contextWindow(p.id, model)).toBeGreaterThan(0);
+  // Not guessed: an unknown model, a snapshot not listed, a hand-typed endpoint, an unknown provider, a name from Object's own.
+  expect(contextWindow('openai', 'some-model')).toBeNull();
+  expect(contextWindow('openai', 'gpt-6.1-sol-2026-10-01')).toBeNull();
+  expect(contextWindow('compatible', 'gpt-6.1-sol')).toBeNull();
+  expect(contextWindow('nobody', 'gpt-6.1-sol')).toBeNull();
+  expect(contextWindow('', '')).toBeNull();
+  expect(contextWindow('openai', 'constructor')).toBeNull();
 });
