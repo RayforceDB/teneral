@@ -1,4 +1,4 @@
-import { archive, collect } from '../kernel/envelope';
+import { archive, collect, type Arrival } from '../kernel/envelope';
 
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
@@ -46,18 +46,40 @@ export function clock(intervalMs: number): Sensor {
 /** Messages other agents and programs dropped into this agent's inbox directory. */
 export function inbox(dir: string, intervalMs = 2000): Sensor {
   return (emit) => {
+    const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+    // Files that failed in this process. Without this, one that was journaled but cannot be moved would be emitted on every poll.
+    const failed = new Set<string>();
+    let listing = '';
+    const take = (arrival: Arrival): void => {
+      const e = arrival.envelope;
+      if (e === null) {
+        console.error(`[inbox] set aside ${arrival.file}: ${arrival.reason}`);
+        archive(dir, arrival.file, 'rejected');
+        return;
+      }
+      const reply = e.replyTo === null ? '' : `, in reply to ${e.replyTo}`;
+      // Journal first, archive second: a crash in between repeats the message rather than losing it.
+      emit({ source: `agent:${e.from}`, text: `(message ${e.id}${reply}) ${e.text}` });
+      archive(dir, arrival.file, 'seen');
+    };
+    // This runs in a timer, where anything thrown ends the process: a file that vanished between
+    // listing and moving, or one that may not be moved, must cost one line of log and nothing more.
     const poll = () => {
-      for (const arrival of collect(dir)) {
-        const e = arrival.envelope;
-        if (e === null) {
-          console.error(`[inbox] set aside ${arrival.file}: ${arrival.reason}`);
-          archive(dir, arrival.file, 'rejected');
-          continue;
+      try {
+        for (const arrival of collect(dir)) {
+          if (failed.has(arrival.file)) continue;
+          try {
+            take(arrival);
+          } catch (err) {
+            failed.add(arrival.file);
+            console.error(`[inbox] could not handle ${arrival.file}; leaving it until the next start: ${say(err)}`);
+          }
         }
-        const reply = e.replyTo === null ? '' : `, in reply to ${e.replyTo}`;
-        // Journal first, archive second: a crash in between repeats the message rather than losing it.
-        emit({ source: `agent:${e.from}`, text: `(message ${e.id}${reply}) ${e.text}` });
-        archive(dir, arrival.file, 'seen');
+        listing = '';
+      } catch (err) {
+        // Said once per kind of failure, not every poll.
+        if (say(err) !== listing) console.error(`[inbox] could not read ${dir}: ${say(err)}`);
+        listing = say(err);
       }
     };
     poll();

@@ -98,3 +98,45 @@ test('a clock interval longer than a timer can hold does not fire at once', asyn
   stop();
   expect(got).toEqual([]);
 });
+
+test('an arrival that cannot be archived is emitted once, logged, and never stops the sensor', async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
+  mkdirSync(dir, { recursive: true });
+  // `seen` as a file: every archive of a good message fails.
+  writeFileSync(join(dir, 'seen'), 'in the way');
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
+  const got: Stimulus[] = [];
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const stop = inbox(dir, 10)((s) => got.push(s));
+    await new Promise((r) => setTimeout(r, 60));
+    writeFileSync(join(dir, '2-bad.json'), 'nope');
+    await new Promise((r) => setTimeout(r, 60));
+    stop();
+  } finally {
+    console.error = realError;
+  }
+  expect(got).toEqual([{ source: 'agent:alice', text: '(message m1) hello' }]);
+  // The poll went on after the failure: the later bad file was still set aside.
+  expect(existsSync(join(dir, 'rejected', '2-bad.json'))).toBe(true);
+  expect(logged.filter((line) => String(line[0]).includes('m1') || String(line[0]).includes('could not')).length).toBe(1);
+});
+
+test('a poll that cannot even list the inbox, or an emit that throws, does not throw out of the timer', async () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'not-a-directory');
+  writeFileSync(file, '');
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    expect(() => inbox(file, 10)(() => {})()).not.toThrow();
+    const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
+    deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
+    let emits = 0;
+    expect(() => inbox(dir, 10)(() => { emits += 1; throw new Error('journal is full'); })()).not.toThrow();
+    expect(emits).toBe(1);
+  } finally {
+    console.error = realError;
+  }
+});
