@@ -18,6 +18,7 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 
 // "What the kernel requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
 // The numbers are checked against the kernel's own constants where it exports them.
+import { OWNER_REASON } from '../../kernel/back';
 import { BODY_SIZE_LIMIT } from '../../kernel/gates';
 import { CHANGEABLE } from '../../kernel/protected';
 import { CRASH_LIMIT, MOLT_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
@@ -136,4 +137,12 @@ test('what the review found false is now said truly', () => {
   expect(flat).toMatch(/not the name you know it by in `peers\.json`/);
   // A clock tick no longer means nobody is waiting.
   expect(flat).not.toMatch(/nobody is waiting/);
+});
+
+test('it says the owner can send it back to an earlier generation, and how that arrives', () => {
+  expect(flat).toContain('`./box back`');
+  expect(flat).toMatch(/send you back to an earlier generation/);
+  // The reason is quoted as the kernel writes it.
+  expect(flat).toContain(`"${OWNER_REASON}"`);
+  expect(flat).toMatch(/rollback note/);
 });

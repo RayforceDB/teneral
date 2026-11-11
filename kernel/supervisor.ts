@@ -88,7 +88,7 @@ const COMMIT = /^[0-9a-f]{40}$/;
 const isCommit = (value: unknown): value is string => typeof value === 'string' && COMMIT.test(value);
 const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-function readState(p: Paths): State {
+export function readState(p: Paths): State {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(p.state, 'utf8'));
@@ -103,7 +103,7 @@ function readState(p: Paths): State {
 }
 
 /** The state reaches the disk before anything is done about it, so a kill at any point can be repaired from it. */
-function saveState(p: Paths, state: State): void {
+export function saveState(p: Paths, state: State): void {
   mkdirSync(dirname(p.state), { recursive: true });
   const tmp = `${p.state}.tmp`;
   const bytes = Buffer.from(`${JSON.stringify(state, null, 2)}\n`, 'utf8');
@@ -258,7 +258,7 @@ function pidAlive(pid: number): boolean {
 }
 
 /** Takes the lock and returns null, or returns the pid of the live supervisor that holds it. */
-function takeLock(lock: string): number | null {
+export function takeLock(lock: string): number | null {
   mkdirSync(dirname(lock), { recursive: true });
   // Written aside and linked into place, so the lock never exists without a pid in it.
   const mine = `${lock}.${process.pid}`;
@@ -293,7 +293,7 @@ function takeLock(lock: string): number | null {
   }
 }
 
-function dropLock(lock: string): void {
+export function dropLock(lock: string): void {
   heldLocks.delete(lock);
   rmSync(lock, { force: true });
 }

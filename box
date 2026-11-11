@@ -10,6 +10,9 @@ usage: ./box <command>
   up              start the agent in the background; it outlives this terminal
   talk            attach this terminal to it: type to speak, /quit to leave. The agent goes on
   down            stop the agent
+  back [<commit>] send the agent back to the generation before, or to the earlier one named;
+                  --list shows the generations it has lived in. A running agent is stopped
+                  for it and started again
   logs            follow what the kernel and the agent print
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
@@ -74,6 +77,33 @@ cage=(--init
   --cap-drop ALL
   --security-opt no-new-privileges)
 
+# Start the agent's container in the background and say whether it stayed up.
+start() {
+  # No restart policy. Docker's policies cannot tell a kernel that gave up and needs its owner
+  # from a crash: `on-failure` and `unless-stopped` would both start it again, the second
+  # without end. So after a reboot the agent is down until `./box up`.
+  docker run --detach --name "$name" --restart no \
+    "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral >/dev/null
+  sleep 1
+  if ! alive; then
+    echo "It stopped right away, with status $(exit_code):" >&2
+    docker logs --tail 20 "$name" 2>&1 | sed 's/^/  | /' >&2
+    return 1
+  fi
+  echo "Up, as $name. ./box talk attaches to it, ./box logs follows its output, ./box down stops it."
+}
+
+# The kernel gets SIGTERM, stops the agent and exits 0. It has 20 seconds before it is killed.
+stop() {
+  docker stop -t 20 "$name" >/dev/null
+  echo "Stopped, with status $(exit_code)."
+}
+
+# One command of the kernel's, in a container of its own beside (or instead of) the agent's.
+once() {
+  docker run --rm "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral "$@"
+}
+
 command="${1:-}"
 [ "$#" -eq 0 ] || shift
 
@@ -85,18 +115,7 @@ case "$command" in
     fi
     prepare
     clear_stopped
-    # No restart policy. Docker's policies cannot tell a kernel that gave up and needs its owner
-    # from a crash: `on-failure` and `unless-stopped` would both start it again, the second
-    # without end. So after a reboot the agent is down until `./box up`.
-    docker run --detach --name "$name" --restart no \
-      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral >/dev/null
-    sleep 1
-    if ! alive; then
-      echo "It stopped right away, with status $(exit_code):" >&2
-      docker logs --tail 20 "$name" 2>&1 | sed 's/^/  | /' >&2
-      exit 1
-    fi
-    echo "Up, as $name. ./box talk attaches to it, ./box logs follows its output, ./box down stops it."
+    start
     ;;
 
   fg)
@@ -145,13 +164,37 @@ case "$command" in
       exit 0
     fi
     if alive; then
-      # The kernel gets SIGTERM, stops the agent and exits 0. It has 20 seconds before it is killed.
-      docker stop -t 20 "$name" >/dev/null
-      echo "Stopped, with status $(exit_code)."
+      stop
     else
       echo "It had already stopped by itself, with status $(exit_code)."
     fi
     docker rm "$name" >/dev/null
+    ;;
+
+  back)
+    prepare
+    # Looking changes nothing, so the agent can stay up for it.
+    case " $* " in
+      *" --list "* | *" --help "* | *" -h "*)
+        once bun kernel/back.ts "$@"
+        exit
+        ;;
+    esac
+    if ! alive; then
+      # Down already: make the change and leave it down.
+      once bun kernel/back.ts "$@"
+      exit
+    fi
+    # The kernel refuses to change generations under a running supervisor. Ask first whether there
+    # is somewhere to go, so that a request that cannot be met does not stop the agent at all.
+    once bun kernel/back.ts --dry-run "$@" >/dev/null
+    stop
+    docker rm "$name" >/dev/null
+    status=0
+    once bun kernel/back.ts "$@" || status=$?
+    # It was up, so it comes up again, on the earlier generation or, had the change failed, as it was.
+    start || status=$?
+    exit "$status"
     ;;
 
   '' | help | -h | --help)

@@ -31,7 +31,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 Around that:
 
 - Only a generation that became ready may molt, so the one kept for rollback is always one that started.
-- The 10 minutes apply until a promoted generation's first reply and never after. An outage of the model does not roll back a generation that has already answered once. Neither does anything else: a generation that answers once and then stays alive without answering again is not caught, and you will only see it as silence in `./box talk`.
+- The 10 minutes apply until a promoted generation's first reply and never after. An outage of the model does not roll back a generation that has already answered once. Neither does anything else: a generation that answers once and then stays alive without answering again is not caught, and you will only see it as silence in `./box talk`. `./box back` is for that.
 - A restart after a crash waits a second longer for each crash in a row. The ten restarts are given back when a run lasted an hour before it failed.
 - A rejected molt is followed by a wait as well. Asking for a different commit each time is ordinary work and is never limited. Asking for the same commit and having it rejected three times in a row stops the supervisor and leaves it to you.
 - Every molt request gets an answer. If the kernel is stopped while the checks run (`./box down`, Ctrl-C in `./box fg`), the running check is killed and the kernel exits within a few seconds; at the next start the agent is told that nothing was decided and to ask again. The same happens when the agent's process dies between asking and exiting.
@@ -68,6 +68,7 @@ Requires Docker and git.
     ./box up                # start the agent in the background
     ./box talk              # attach this terminal to it
     ./box down              # stop it
+    ./box back              # send it back to the generation before
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
 
@@ -82,6 +83,8 @@ Commit your changes before the first start: the kernel creates its worktrees fro
 Then it shows no history. It sends one line at a time: a line goes out when the agent is at rest, and the next line, or the exit, waits until the agent has finished its reply to that one. The exit status is 0 after the reply to the last line. If nothing is journaled for 300 seconds while a line waits, it gives up with status 1; `./box talk --wait 60` changes that time. With no lines at all (`./box talk </dev/null`) it prints the last few exchanges and exits.
 
 `./box down` stops the agent: the kernel is asked to stop, stops the agent and exits, and the container is removed. A terminal attached with `./box talk` ends with it. Nothing is lost by it. The journal, the soul and the code are in this directory, and `./box up` goes on from there.
+
+`./box back` sends the agent back to the generation it was on before the current one, for when a generation that passed every check turns out worse. `./box back <commit>` goes to a specific earlier one, named by its commit or the first seven or more characters of it, and `./box back --list` shows the generations this individual has lived in, oldest first, with when each became ready, how many replies it gave, and which is current. The choice is made from the journal: a generation can be gone back to if it once reported ready and git still has its commit. "Before" follows the order in which generations were promoted, so after the kernel has rolled a failed generation back, `./box back` goes one further back, not forward to the failed one. A running agent is stopped for the change and started again; one that was down stays down. The agent is told as after any rollback, and its workspace is left as it is, with the later code still in it. When there is nothing to go back to, the command says so, changes nothing and exits with status 1.
 
 `./box logs` follows what the container prints: the kernel's `[teneral]` lines, `[thinking]` and `[tool]` as the agent works, and its replies.
 
@@ -121,7 +124,7 @@ Worktrees record absolute paths, and inside the container this directory is `/te
 
 A peer's inbox in `soul/peers.json` has to be a path the agent can see, and in the container that means inside this directory. Dropping files into `inbox/` from outside works as it is.
 
-To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is. There the agent's shell has everything your account has.
+To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install && bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is; `bun kernel/back.ts`, with the agent stopped, is what `./box back` is. There the agent's shell has everything your account has.
 
 ## What it does not do yet
 

@@ -52,6 +52,8 @@ The checks run in a fresh checkout of the commit, not in your workspace, and wit
 
 **Probation.** After a promotion the new generation must reply (journal an `assistant` event) within 10 minutes or it is rolled back.
 
+**Sent back.** Your owner can send you back to an earlier generation by hand, with `./box back`; it reaches you as a rollback note whose reason is "was set aside by your owner", which means nothing crashed and your owner judged the later generation worse.
+
 **How the kernel speaks to you.** Only through three journal events: `molt.rejected`, `generation.promoted` and `generation.rolledback`. `body/context.ts` shows each as a `[kernel]` message and counts it as owing a turn. If you rewrite how they are shown, or whether they owe a turn, you stop hearing the kernel.
 
 **The journal.** Its event types are defined in `kernel/journal.ts`, and a molt cannot add one. Append to it only through the kernel's `appendEvent`.
