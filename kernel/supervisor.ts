@@ -3,7 +3,9 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { identity } from './envelope';
-import { git, linkModules, runGates, sh, type GateResult } from './gates';
+import {
+  dropLeftoverGateTrees, git, linkModules, runGates, sh, type GateResult,
+} from './gates';
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
 } from './journal';
@@ -46,6 +48,8 @@ export interface Paths {
   state: string;
   /** Holds the pid of the supervisor running this install. */
   lock: string;
+  /** Names the body process while one runs, so a later supervisor can stop a body this one left behind. */
+  child: string;
   /** Where other agents and programs drop messages for this one. */
   inbox: string;
   /** The owner's list of peers: name to inbox directory. */
@@ -62,6 +66,7 @@ export function paths(root: string): Paths {
     journal: join(root, 'memory', 'journal.jsonl'),
     state: join(root, '.teneral', 'state.json'),
     lock: join(root, '.teneral', 'lock'),
+    child: join(root, '.teneral', 'child.json'),
     inbox: join(root, 'inbox'),
     peers: join(root, 'soul', 'peers.json'),
     soul: join(root, 'soul'),
@@ -212,6 +217,79 @@ function dropLock(lock: string): void {
   rmSync(lock, { force: true });
 }
 
+/** What is written to `Paths.child` while a body runs. */
+interface ChildRecord {
+  pid: number;
+  gen: string;
+  cmd: string[];
+}
+
+/**
+ * Whether `pid` is still the process the record describes. Where /proc exists, its
+ * command line must be the one that was started; a pid that has since been given to
+ * another program does not match. Elsewhere, being alive is all that can be checked.
+ */
+function isRecordedChild(record: ChildRecord): boolean {
+  if (!pidAlive(record.pid)) return false;
+  let cmdline: string;
+  try {
+    cmdline = readFileSync(`/proc/${record.pid}/cmdline`, 'utf8');
+  } catch {
+    return true;
+  }
+  return cmdline.split('\0').filter(Boolean).join('\0') === record.cmd.join('\0');
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+async function goneWithin(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (pidAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(20);
+  }
+  return true;
+}
+
+/**
+ * A supervisor that was killed outright leaves its body running, still writing to the
+ * journal and reading the terminal. Stop it before starting another. Returns false
+ * only if it could not be stopped.
+ */
+async function stopOrphan(p: Paths, graceMs: number, log: (line: string) => void): Promise<boolean> {
+  if (!existsSync(p.child)) return true;
+  let record: ChildRecord | null = null;
+  try {
+    const parsed = JSON.parse(readFileSync(p.child, 'utf8')) as Partial<ChildRecord> | null;
+    if (parsed && Number.isInteger(parsed.pid) && parsed.pid! > 1 && Array.isArray(parsed.cmd)) {
+      record = { pid: parsed.pid!, gen: String(parsed.gen), cmd: parsed.cmd.map(String) };
+    }
+  } catch { /* an unreadable record names nobody */ }
+  if (record !== null && record.pid !== process.pid && isRecordedChild(record)) {
+    const { pid, gen } = record;
+    log(`a body from an earlier supervisor is still running (pid ${pid}, generation ${gen}); stopping it`);
+    try {
+      process.kill(pid, 'SIGTERM');
+      if (!await goneWithin(pid, graceMs)) {
+        log(`pid ${pid} did not stop within ${graceMs} ms; killing it`);
+        process.kill(pid, 'SIGKILL');
+        if (!await goneWithin(pid, 5_000)) {
+          log(`pid ${pid} could not be killed; not starting another body beside it`);
+          return false;
+        }
+      }
+    } catch (err) {
+      // ESRCH: it went away by itself in the meantime.
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        log(`pid ${pid} could not be signalled (${reasonOf(err)}); not starting another body beside it`);
+        return false;
+      }
+    }
+  }
+  rmSync(p.child, { force: true });
+  return true;
+}
+
 export interface Options {
   root: string;
   agentCmd?: string[];
@@ -220,9 +298,13 @@ export interface Options {
   readyTimeoutMs?: number;
   /** How long a generation told to stop (SIGTERM) has before it is killed outright (SIGKILL). Default 5 s. */
   killGraceMs?: number;
-  /** Wait before a restart: this times the crashes in a row so far, at most RESTART_DELAY_CAP_MS. Default 1 s. */
+  /** Wait before a restart: this times the crashes in a row (or the rejected molts) so far, at most RESTART_DELAY_CAP_MS. Default 1 s. */
   restartDelayMs?: number;
-  /** Restarts one generation gets in total, whether or not it replied in between, before it is given up on. Default 10. */
+  /**
+   * Restarts one generation gets in total, after crashes and after rejected molts alike, whether or not it
+   * replied in between. Spent by crashes, the generation is given up on; spent by rejections, the supervisor halts.
+   * Default 10.
+   */
   restartBudget?: number;
   log?: (line: string) => void;
 }
@@ -276,6 +358,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
   });
 
   try {
+    if (!await stopOrphan(p, killGraceMs, log)) return 'halted';
     let state: State;
     try {
       state = init(opts.root);
@@ -284,10 +367,15 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       log(`cannot start: ${reasonOf(err)}`);
       return 'halted';
     }
+    const leftover = dropLeftoverGateTrees(p.root);
+    if (leftover.length > 0) log(`removed gate checkouts left by an earlier run: ${leftover.join(', ')}`);
     /** Crashes in a row with no reply in between. */
     let crashes = 0;
-    /** Restarts of this generation in total. */
+    /** Restarts of this generation in total, after a crash or after a rejected molt. */
     let restarts = 0;
+    /** Molts this generation asked for that were rejected. */
+    let rejections = 0;
+    const delayAfter = (count: number) => Math.min(restartDelayMs * count, RESTART_DELAY_CAP_MS);
 
     /** Write-ahead: the state first, then the checkout, and only then (by the caller) the journal. */
     const moveTo = (next: State): boolean => {
@@ -301,6 +389,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       state = next;
       crashes = 0;
       restarts = 0;
+      rejections = 0;
       return true;
     };
 
@@ -329,6 +418,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         },
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
+      const record: ChildRecord = { pid: running.pid, gen, cmd };
+      writeFileSync(p.child, JSON.stringify(record));
       const timers: { ready?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout> } = {};
       // Ask first; a generation that does not go within the grace period is killed outright.
       const stop = () => {
@@ -347,6 +438,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       clearTimeout(timers.ready);
       clearTimeout(timers.kill);
       terminate = null;
+      rmSync(p.child, { force: true });
       if (stopping) return 'stopped';
 
       const events = since();
@@ -374,7 +466,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       if (decision === 'restart') {
         crashes += 1;
         restarts += 1;
-        const delay = Math.min(restartDelayMs * crashes, RESTART_DELAY_CAP_MS);
+        const delay = delayAfter(crashes);
         log(`generation ${gen} exited with ${code}; restarting in ${delay} ms (${crashes}/${CRASH_LIMIT})`);
         await pause(delay);
         continue;
@@ -391,13 +483,28 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       }
       // decision === 'gate', and the request exists or the decision would have been replaced above.
       if (!request) throw new Error('unreachable: gate without a molt request');
-      const result = gates(p.candidate, gen, request.commit);
-      // The gates block this thread; let a stop signal that arrived meanwhile be heard before acting on the result.
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-      if (stopping) return 'stopped';
+      let result: GateResult;
+      if (request.commit === gen) {
+        // Nothing to test and nothing to switch to; promoting it would only erase `previous`.
+        result = { ok: false, gate: 'same', output: `${gen} is the generation already running; commit a change in the workspace before asking to molt` };
+      } else {
+        result = gates(p.candidate, gen, request.commit);
+        // The gates block this thread; let a stop signal that arrived meanwhile be heard before acting on the result.
+        await new Promise<void>((resolve) => { setImmediate(resolve); });
+        if (stopping) return 'stopped';
+      }
       if (!result.ok) {
         appendEvent(p.journal, gen, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });
         log(`molt to ${request.commit} rejected at gate ${result.gate}`);
+        // A rejection costs a restart and a wait like a crash does, so asking again on every start cannot spin
+        // through gate runs. Asking is not a reason to roll back, though: when the budget is gone, stop and say so.
+        if (restarts >= restartBudget) {
+          log(`generation ${gen} keeps requesting molts the gates reject (${rejections + 1} so far) and its restart budget of ${restartBudget} is spent`);
+          return 'halted';
+        }
+        restarts += 1;
+        rejections += 1;
+        await pause(delayAfter(rejections));
         continue;
       }
       if (!moveTo({ current: request.commit, previous: gen })) return 'halted';

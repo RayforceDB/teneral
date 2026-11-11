@@ -382,3 +382,129 @@ test('restarts wait longer each time', async () => {
   expect(started(r.events)).toBe(CRASH_LIMIT);
   expect(Date.now() - t).toBeGreaterThanOrEqual(180);
 });
+
+// --- rejected molts ---
+
+test('a generation that keeps asking for a molt the gates reject is paced, then halted, never rolled back', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  // v2 becomes ready and asks for v3 on every start, whatever the kernel answered.
+  writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_V3, motive: 'again' });
+process.exit(75);
+` });
+  const v2 = commitAll(p.candidate, 'v2');
+  writeFiles(p.candidate, { 'body/main.ts': 'process.exit(0);\n' });
+  const v3 = commitAll(p.candidate, 'v3');
+  process.env.TEST_NEXT = v2;
+  process.env.TEST_V3 = v3;
+
+  const logs: string[] = [];
+  const t = Date.now();
+  const outcome = await supervise({
+    root: dir, ...QUIET, restartBudget: 3, restartDelayMs: 40, log: (line) => { logs.push(line); },
+    gates: (_dir, _from, to) => (to === v2 ? PASS : { ok: false, gate: 'tests-body', output: 'boom' }),
+  });
+  const events = readEvents(p.journal);
+  expect(outcome).toBe('halted');
+  expect(logs.join('\n')).toContain('keeps requesting molts the gates reject');
+  // Three rejections spend the budget; the fourth ends it.
+  expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(4);
+  expect(events.filter((e) => e.type === 'generation.started' && e.gen === v2)).toHaveLength(4);
+  expect(events.map((e) => e.type)).not.toContain('generation.rolledback');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: v2, previous: seed });
+  // Waits of 40, 80 and 120 ms follow the first three rejections.
+  expect(Date.now() - t).toBeGreaterThanOrEqual(240);
+});
+
+test('a molt to the commit that is already running is refused without running the gates', async () => {
+  const gated: string[] = [];
+  const r = await seedOnly(`${HEAD}
+const before = readEvents(journal);
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+if (before.some((e) => e.type === 'molt.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'molt.requested', commit: gen, motive: 'nothing changed' });
+process.exit(75);
+`, { gates: (_dir, _from, to) => { gated.push(to); return PASS; } });
+  expect(r.outcome).toBe('stopped');
+  expect(gated).toEqual([]);
+  const rejected = r.events.filter((e) => e.type === 'molt.rejected');
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0]).toMatchObject({ commit: r.seed, gate: 'same' });
+  expect(r.events.map((e) => e.type)).not.toContain('generation.promoted');
+  expect(JSON.parse(readFileSync(paths(r.dir).state, 'utf8'))).toEqual({ current: r.seed, previous: null });
+});
+
+// --- what an earlier supervisor left behind ---
+
+test('a body left running by a supervisor that died is stopped before a new one starts', async () => {
+  // The new body exits 0 only if the old one is gone by the time it starts.
+  const { dir } = makeRepo({ 'body/main.ts': `
+try { process.kill(Number(process.env.TEST_ORPHAN), 0); process.exit(9); } catch { process.exit(0); }
+` });
+  const state = init(dir);
+  const p = paths(dir);
+  const cmd = ['sleep', '300'];
+  const orphan = Bun.spawn(cmd, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  const logs: string[] = [];
+  try {
+    writeFileSync(p.child, JSON.stringify({ pid: orphan.pid, gen: state.current, cmd }));
+    process.env.TEST_ORPHAN = String(orphan.pid);
+    expect(await supervise({ root: dir, ...QUIET, killGraceMs: 200, log: (line) => { logs.push(line); } })).toBe('stopped');
+    expect(logs.join('\n')).toContain(String(orphan.pid));
+    expect(orphan.killed || orphan.exitCode !== null || orphan.signalCode !== null).toBe(true);
+    expect(existsSync(p.child)).toBe(false);
+  } finally {
+    orphan.kill('SIGKILL');
+  }
+});
+
+test('a recorded child whose pid now belongs to some other program is left alone', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const state = init(dir);
+  const p = paths(dir);
+  const other = Bun.spawn(['sleep', '300'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  try {
+    writeFileSync(p.child, JSON.stringify({ pid: other.pid, gen: state.current, cmd: ['bun', 'body/main.ts'] }));
+    expect(await supervise({ root: dir, ...QUIET, killGraceMs: 200 })).toBe('stopped');
+    expect(() => process.kill(other.pid, 0)).not.toThrow();
+    expect(other.exitCode).toBeNull();
+    expect(existsSync(p.child)).toBe(false);
+  } finally {
+    other.kill('SIGKILL');
+  }
+});
+
+test('the record of the running child exists while it runs and is gone when it has exited', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': WAITS_FOR_STIMULUS });
+  const p = paths(dir);
+  const first = supervise({ root: dir, ...QUIET });
+  for (let i = 0; i < 400 && !readEvents(p.journal).some((e) => e.type === 'generation.ready'); i++) await Bun.sleep(10);
+  const record = JSON.parse(readFileSync(p.child, 'utf8')) as { pid: number; gen: string; cmd: string[] };
+  expect(() => process.kill(record.pid, 0)).not.toThrow();
+  expect(record.cmd).toEqual(['bun', 'body/main.ts']);
+  // The check that guards against pid reuse must recognise a real body.
+  if (existsSync(`/proc/${record.pid}/cmdline`)) {
+    expect(readFileSync(`/proc/${record.pid}/cmdline`, 'utf8').split('\0').filter(Boolean)).toEqual(record.cmd);
+  }
+  appendEvent(p.journal, 'test', { type: 'stimulus', source: 'test', text: 'stop' });
+  expect(await first).toBe('stopped');
+  expect(existsSync(p.child)).toBe(false);
+});
+
+test('gate checkouts left by a gate run that was killed are removed before anything starts', async () => {
+  // The body exits 0 only if no gate checkout is left next to its own worktree.
+  const { dir, seed } = makeRepo({ 'body/main.ts': `
+import { readdirSync } from 'node:fs';
+process.exit(readdirSync('..').some((name) => name.startsWith('gate-')) ? 9 : 0);
+` });
+  init(dir);
+  git(dir, 'worktree', 'add', '--detach', join(dir, '.teneral', 'gate-0123456789ab'), seed);
+  mkdirSync(join(dir, '.teneral', 'gate-not-even-a-worktree'));
+
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  const worktrees = git(dir, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '));
+  expect(worktrees).toHaveLength(3);
+});
