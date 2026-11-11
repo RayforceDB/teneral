@@ -34,10 +34,13 @@ const ctx: ToolContext = { workspace, journal, gen, moltCommit: null, id: env('T
 
 let quitting = false;
 let wake: (() => void) | null = null;
+/** Stimuli journaled by this process, so a failed turn can tell that one came in while it ran. */
+let arrived = 0;
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
+  arrived += 1;
   wake?.();
 }
 
@@ -86,6 +89,7 @@ let failures = 0;
 for (;;) {
   // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
+    const before = arrived;
     const error = await turn();
     if (error === null) {
       failures = 0;
@@ -94,6 +98,11 @@ for (;;) {
     failures += 1;
     const delay = retryDelayMs(failures);
     console.error(`[turn failed] ${error}`);
+    if (arrived !== before) {
+      // Nobody was listening for it while the turn ran; it gets its try now, once.
+      console.error(`[retry] ${failures} in a row; something arrived meanwhile, trying again now`);
+      continue;
+    }
     console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or at once when something arrives`);
     await idle(delay);
   }
