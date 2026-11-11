@@ -302,7 +302,7 @@ async function stopOrphan(p: Paths, graceMs: number, log: (line: string) => void
 export interface Options {
   root: string;
   agentCmd?: string[];
-  gates?: (dir: string, from: string, to: string) => GateResult;
+  gates?: (dir: string, from: string, to: string) => GateResult | Promise<GateResult>;
   /** How long a generation has to journal `generation.ready` before it is killed. Default 60 s. */
   readyTimeoutMs?: number;
   /** How long a generation told to stop (SIGTERM) has before it is killed outright (SIGKILL). Default 5 s. */
@@ -497,7 +497,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         // Nothing to test and nothing to switch to; promoting it would only erase `previous`.
         result = { ok: false, gate: 'same', output: `${gen} is the generation already running; commit a change in the workspace before asking to molt` };
       } else {
-        result = gates(p.candidate, gen, request.commit);
+        result = await gates(p.candidate, gen, request.commit);
         // The gates block this thread; let a stop signal that arrived meanwhile be heard before acting on the result.
         await new Promise<void>((resolve) => { setImmediate(resolve); });
         if (stopping) return 'stopped';

@@ -1,5 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
+import { appendEvent, readEvents } from './journal';
 import { protectedChanges } from './protected';
 
 /** Bytes of tracked files under body/. Roughly 50k tokens: small enough to read whole. */
@@ -25,11 +30,39 @@ export const DEFAULT_CHECKS: readonly Check[] = [
   { gate: 'tests-body', cmd: ['bun', 'test', 'test/body'], bunSummary: true },
 ];
 
-/** The only variables a check sees. The supervisor's own environment holds API keys; candidate code under test must not. */
-const CHECK_ENV = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'BUN_INSTALL'];
+/** The command a generation is started with, by the supervisor and by the smoke gate alike. */
+export const BODY_CMD: readonly string[] = ['bun', 'body/main.ts'];
 
-function checkEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
+/** Where a body finds its install. The supervisor and the smoke gate both build the body's environment from this. */
+export interface BodyPlaces {
+  gen: string;
+  journal: string;
+  workspace: string;
+  id: string;
+  inbox: string;
+  peers: string;
+  soul: string;
+  owner: string;
+}
+
+export function bodyEnv(at: BodyPlaces): Record<string, string> {
+  return {
+    TENERAL_GEN: at.gen, TENERAL_JOURNAL: at.journal, TENERAL_WORKSPACE: at.workspace,
+    TENERAL_ID: at.id, TENERAL_INBOX: at.inbox, TENERAL_PEERS: at.peers,
+    TENERAL_SOUL: at.soul, TENERAL_OWNER: at.owner,
+  };
+}
+
+/** The only variables passed on to a check. The supervisor's own environment holds API keys; candidate code under test must not. */
+const CHECK_ENV = ['PATH', 'HOME', 'LANG', 'BUN_INSTALL'];
+
+/**
+ * What a check sees. Its temp directory is `tmp`, inside the gate checkout, so what the tests leave
+ * behind goes with the checkout instead of piling up in the machine's. The ceiling keeps git, run
+ * from a temp directory that is not a repository, from finding the checkout around it and acting on that.
+ */
+function checkEnv(tmp: string): Record<string, string> {
+  const env: Record<string, string> = { TMPDIR: tmp, TMP: tmp, TEMP: tmp, GIT_CEILING_DIRECTORIES: tmp };
   for (const name of CHECK_ENV) {
     const value = process.env[name];
     if (value !== undefined) env[name] = value;
@@ -131,11 +164,23 @@ export function bodySize(dir: string, commit = 'HEAD'): number {
 /** Regular and executable files. Anything else (a symlink, a nested repo) is not plain. */
 const PLAIN_MODES = new Set(['100644', '100755']);
 
-/** Makes the repo's dependencies visible in a worktree without copying them. */
+/**
+ * Makes the repo's dependencies visible in a worktree without copying them. A link that points
+ * somewhere else, as after the install was moved, is replaced; a real directory is left alone.
+ */
 export function linkModules(root: string, dir: string): void {
   const source = join(root, 'node_modules');
   const target = join(dir, 'node_modules');
-  if (existsSync(source) && !existsSync(target)) symlinkSync(source, target);
+  if (!existsSync(source)) return;
+  let stat: ReturnType<typeof lstatSync> | null = null;
+  try { stat = lstatSync(target); } catch { /* nothing there */ }
+  if (stat?.isSymbolicLink()) {
+    if (readlinkSync(target) === source) return;
+    rmSync(target, { force: true });
+  } else if (stat) {
+    return;
+  }
+  symlinkSync(source, target);
 }
 
 /** The main checkout of the repo that `dir` (possibly one of its worktrees) belongs to. */
@@ -158,10 +203,18 @@ export function dropLeftoverGateTrees(root: string): string[] {
 
 /** Never throws: whatever is at `tree` is gone afterwards, or was never there. */
 function dropGateTree(root: string, tree: string): void {
+  // The checks' temp files first: they can hold whole repositories, which git would not remove.
+  for (const inner of [GATE_TMP, GATE_SMOKE]) {
+    try { rmSync(join(tree, inner), { recursive: true, force: true }); } catch { /* the removal below says more */ }
+  }
   if (existsSync(tree)) sh(['git', 'worktree', 'remove', '--force', tree], root);
   try { rmSync(tree, { recursive: true, force: true }); } catch { /* left for the owner; the next gate run will say why it cannot start */ }
   sh(['git', 'worktree', 'prune'], root);
 }
+
+/** Inside a gate checkout: the checks' temp directory, and the throwaway install the smoke run lives in. Both dot-named, so bun's test scan skips them. */
+const GATE_TMP = '.tmp';
+const GATE_SMOKE = '.smoke';
 
 /**
  * A fresh, kernel-owned checkout of exactly `commit`. Checks run here, so nothing
@@ -175,15 +228,264 @@ function makeGateTree(root: string, commit: string): string {
   dropGateTree(root, tree);
   git(root, 'worktree', 'add', '--detach', tree, commit);
   linkModules(root, tree);
+  mkdirSync(join(tree, GATE_TMP), { recursive: true });
   return tree;
+}
+
+/** The last `max` bytes of a stream. */
+class Tail {
+  private chunks: Buffer[] = [];
+  private size = 0;
+
+  constructor(private readonly max: number) {}
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.size += chunk.length;
+    while (this.chunks.length > 1 && this.size - this.chunks[0]!.length >= this.max) {
+      this.size -= this.chunks.shift()!.length;
+    }
+  }
+
+  text(): string {
+    return Buffer.concat(this.chunks).subarray(-this.max).toString('utf8');
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/** Signals the whole process group a command was started in, so what it started goes with it. */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already gone */ }
+  }
+}
+
+interface Running {
+  pid: number;
+  stdout: Tail;
+  stderr: Tail;
+  /** The exit code; 1 when it was ended by a signal. Resolves once its output has been read. */
+  exited: Promise<number>;
+  done: () => boolean;
+  /** SIGTERM, then SIGKILL after `graceMs`. False only if it is still there after that. */
+  stop: (graceMs: number) => Promise<boolean>;
+}
+
+/**
+ * Starts a command without waiting for it, in a process group of its own and with no terminal:
+ * unlike `sh`, this leaves the event loop free, so a stop signal is heard while it runs.
+ */
+function start(cmd: readonly string[], cwd: string, env: Record<string, string>, keepBytes = 4_000_000): Running {
+  const stdout = new Tail(keepBytes);
+  const stderr = new Tail(keepBytes);
+  const child = spawn(cmd[0]!, cmd.slice(1), { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const pid = child.pid ?? 0;
+  child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
+  child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
+  let finished = false;
+  const exited = new Promise<number>((resolve) => {
+    const finish = (code: number) => {
+      if (finished) return;
+      finished = true;
+      resolve(code);
+    };
+    child.on('error', (err) => {
+      stderr.push(Buffer.from(`could not start ${cmd.join(' ')}: ${err.message}\n`));
+      finish(127);
+    });
+    child.on('exit', (code) => {
+      // Whatever it left running in its group goes too; such a leftover may also hold the pipes open,
+      // so the output is not waited for beyond a moment.
+      if (pid > 0) signalGroup(pid, 'SIGKILL');
+      setTimeout(() => finish(code ?? 1), 500);
+    });
+    child.on('close', (code) => finish(code ?? 1));
+  });
+  const stop = async (graceMs: number): Promise<boolean> => {
+    if (finished || pid === 0) return true;
+    signalGroup(pid, 'SIGTERM');
+    await Promise.race([exited, sleep(graceMs)]);
+    if (finished) return true;
+    signalGroup(pid, 'SIGKILL');
+    await Promise.race([exited, sleep(5_000)]);
+    return finished;
+  };
+  return { pid, stdout, stderr, exited, done: () => finished, stop };
+}
+
+/** Resolves when `signal` aborts; never, without one. `forget` drops the listener. */
+function aborted(signal: AbortSignal | undefined): { promise: Promise<void>; forget: () => void } {
+  if (!signal) return { promise: new Promise<void>(() => {}), forget: () => {} };
+  let listener = () => {};
+  const promise = new Promise<void>((resolve) => {
+    listener = () => resolve();
+    if (signal.aborted) resolve();
+    else signal.addEventListener('abort', listener, { once: true });
+  });
+  return { promise, forget: () => signal.removeEventListener('abort', listener) };
+}
+
+interface CheckRun extends ShResult {
+  interrupted: boolean;
+}
+
+async function runCheck(
+  cmd: readonly string[], cwd: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number },
+): Promise<CheckRun> {
+  const running = start(cmd, cwd, env);
+  const abort = aborted(o.signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), o.timeoutMs); });
+  const first = await Promise.race([running.exited, abort.promise.then(() => 'abort' as const), timeout]);
+  clearTimeout(timer);
+  abort.forget();
+  let note = '';
+  if (typeof first !== 'number') {
+    const stopped = await running.stop(o.graceMs);
+    if (first === 'timeout') note = `\n[stopped: it was still running after ${o.timeoutMs} ms${stopped ? '' : ', and could not be killed'}]`;
+  }
+  const code = typeof first === 'number' ? first : 1;
+  const stdout = running.stdout.text();
+  const stderr = running.stderr.text();
+  return { code, stdout, stderr, output: stdout + stderr + note, interrupted: first === 'abort' };
+}
+
+/** What the stub endpoint says, whatever it is asked. Plain text and no tool calls, so a turn ends with it. */
+const STUB_REPLY = 'This is the kernel\'s stand-in for the model during a smoke test. Nothing to do.';
+
+/**
+ * A chat-completions endpoint on a free local port that answers every request with one fixed
+ * assistant message, streamed if the request asks for that. It exists only while a smoke run
+ * needs it: the candidate has to show it can take a turn, not that the real model is reachable.
+ */
+export function startStubProvider(): { url: string; stop: () => void } {
+  const head = { id: 'chatcmpl-smoke', created: 0, model: 'smoke' };
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      let wantsStream = false;
+      try {
+        wantsStream = (await req.json() as { stream?: unknown } | null)?.stream === true;
+      } catch { /* answered the same way whatever was sent */ }
+      if (!wantsStream) {
+        return Response.json({
+          ...head, object: 'chat.completion',
+          choices: [{ index: 0, message: { role: 'assistant', content: STUB_REPLY }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+      }
+      const chunk = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({
+        ...head, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }],
+      })}\n\n`;
+      const body = `${chunk({ role: 'assistant', content: STUB_REPLY }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    },
+  });
+  return { url: `http://127.0.0.1:${server.port}/v1`, stop: () => { void server.stop(true); } };
+}
+
+/** What the smoke run finds waiting for it. It comes as a line typed at the terminal, which every body must answer. */
+const SMOKE_STIMULUS = 'This is the kernel checking that a new generation can start and take a turn. Nothing here is real and nothing needs doing: answer with one short line and no tool calls.';
+
+/**
+ * Starts the candidate as the supervisor would, on a throwaway install inside the gate checkout,
+ * with one message waiting and a stub in place of the model. Passing the tests does not show that
+ * a body starts and can take a turn; this does. Returns null when it did, else what was missing.
+ */
+async function smokeRun(
+  tree: string, commit: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number },
+): Promise<{ problem: string | null; interrupted: boolean }> {
+  const home = join(tree, GATE_SMOKE);
+  const at: BodyPlaces = {
+    gen: commit,
+    journal: join(home, 'memory', 'journal.jsonl'),
+    // A checkout of the commit, as the real workspace is; this one is thrown away.
+    workspace: tree,
+    id: randomUUID(),
+    inbox: join(home, 'inbox'),
+    peers: join(home, 'soul', 'peers.json'),
+    soul: join(home, 'soul'),
+    owner: join(home, 'owner'),
+  };
+  for (const dir of [at.inbox, at.soul, at.owner]) mkdirSync(dir, { recursive: true });
+  appendEvent(at.journal, commit, { type: 'stimulus', source: 'terminal', text: SMOKE_STIMULUS });
+
+  const stub = startStubProvider();
+  const abort = aborted(o.signal);
+  let wasAborted = false;
+  void abort.promise.then(() => { wasAborted = true; });
+  try {
+    const running = start(BODY_CMD, tree, {
+      ...env, ...bodyEnv(at),
+      TENERAL_BASE_URL: stub.url, TENERAL_API_KEY: 'smoke', TENERAL_MODEL: 'smoke', TENERAL_HEARTBEAT_MINUTES: '0',
+    }, 4096);
+    const deadline = Date.now() + o.timeoutMs;
+    let ready = false;
+    let replied = false;
+    const look = () => {
+      const events = readEvents(at.journal);
+      const readyAt = events.findIndex((e) => e.type === 'generation.ready' && e.gen === commit);
+      ready = readyAt !== -1;
+      replied = ready && events.some((e, i) => i > readyAt && e.type === 'assistant');
+    };
+    for (;;) {
+      const over = running.done();
+      look();
+      if (replied || over || wasAborted || Date.now() >= deadline) break;
+      await Promise.race([running.exited, abort.promise, sleep(50)]);
+    }
+    const died = running.done();
+    const code = died ? await running.exited : null;
+    const stopped = await running.stop(o.graceMs);
+    if (wasAborted) return { problem: null, interrupted: true };
+    if (replied && stopped) return { problem: null, interrupted: false };
+
+    const missing = ready ? 'became ready but did not reply: its journal holds no assistant event' : 'did not journal generation.ready';
+    let problem = replied
+      ? 'became ready and replied, but could not be stopped afterwards, even with SIGKILL'
+      : `${missing} ${code === null ? `within ${o.timeoutMs / 1000} s` : `before it exited with ${code}`}`;
+    if (!stopped && !replied) problem += ', and it could not be stopped afterwards';
+    const said = running.stderr.text().trim();
+    return {
+      problem: `The candidate was started the way the kernel starts a generation (${BODY_CMD.join(' ')}), on an empty install with one message `
+        + `waiting and a stand-in for the model. It ${problem}.\n`
+        + (said === '' ? 'It wrote nothing to stderr.' : `Its stderr ended with:\n${said.slice(-3000)}`),
+      interrupted: false,
+    };
+  } finally {
+    abort.forget();
+    stub.stop();
+  }
+}
+
+export interface GateOptions {
+  /** Aborting it stops the running check and ends the gate run with gate `interrupted`. */
+  signal?: AbortSignal;
+  /** How long a check told to stop has before it is killed outright. Default 5 s. */
+  killGraceMs?: number;
+  /** Whether to end with the smoke run. Default: yes for the default checks, no for a list of one's own. */
+  smoke?: boolean;
+  /** How long the smoke run has to become ready and reply. Default 30 s. */
+  smokeTimeoutMs?: number;
+  /** How long one check may run. Default 10 minutes. */
+  checkTimeoutMs?: number;
 }
 
 /**
  * Decide whether commit `to`, checked out in `dir`, may replace generation `from`.
  * Checks run in a temporary checkout of `to`, so they test that commit and nothing else.
  */
-export function runGates(dir: string, from: string, to: string, checks: readonly Check[] = DEFAULT_CHECKS): GateResult {
+export async function runGates(
+  dir: string, from: string, to: string, checks: readonly Check[] = DEFAULT_CHECKS, opts: GateOptions = {},
+): Promise<GateResult> {
   const fail = (gate: string, output: string): GateResult => ({ ok: false, gate, output: output.slice(-4000) });
+  const interrupted = (): GateResult => fail('interrupted', 'the gate run was stopped before it finished; nothing was decided');
+  const smoke = opts.smoke ?? checks === DEFAULT_CHECKS;
+  const graceMs = opts.killGraceMs ?? 5_000;
   let root: string;
   try {
     // These two say early, in the agent's own terms, why its worktree is not what it asked for.
@@ -205,7 +507,8 @@ export function runGates(dir: string, from: string, to: string, checks: readonly
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));
   }
-  if (checks.length === 0) return { ok: true, gate: 'all', output: '' };
+  if (checks.length === 0 && !smoke) return { ok: true, gate: 'all', output: '' };
+  if (opts.signal?.aborted) return interrupted();
 
   let tree: string;
   try {
@@ -214,15 +517,24 @@ export function runGates(dir: string, from: string, to: string, checks: readonly
     return fail('git', err instanceof Error ? err.message : String(err));
   }
   try {
-    const env = checkEnv();
+    const env = checkEnv(join(tree, GATE_TMP));
     for (const check of checks) {
-      const r = sh(check.cmd, tree, undefined, env);
+      const r = await runCheck(check.cmd, tree, env, { signal: opts.signal, graceMs, timeoutMs: opts.checkTimeoutMs ?? 600_000 });
+      if (r.interrupted) return interrupted();
       if (r.code !== 0) return fail(check.gate, r.output);
       const problem = check.bunSummary ? bunSummaryProblem(r.stderr) : null;
       // The reason goes last: fail() keeps the end of the output.
       if (problem) return fail(check.gate, `${r.output}\n${problem}`);
     }
+    if (smoke) {
+      // Last, so a body is only ever started once its types and tests are in order.
+      const r = await smokeRun(tree, to, env, { signal: opts.signal, graceMs, timeoutMs: opts.smokeTimeoutMs ?? 30_000 });
+      if (r.interrupted) return interrupted();
+      if (r.problem !== null) return fail('smoke', r.problem);
+    }
     return { ok: true, gate: 'all', output: '' };
+  } catch (err) {
+    return fail('kernel', `the gate run itself failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     dropGateTree(root, tree);
   }
