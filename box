@@ -11,9 +11,10 @@ usage: ./box <command>
                   Run again to change provider or to sign in again
   up              start the agent in the background; it outlives this terminal.
                   The first time, with no .env yet, it runs the setup first
-  talk            attach this terminal to it: a full screen with the conversation, what the agent
-                  is doing, and a line to type on. Enter sends, PageUp and PageDown scroll,
-                  /help lists the rest; /quit, Ctrl-D or Ctrl-C leaves. The agent goes on.
+  talk            attach this terminal to it: the conversation is printed into the terminal as
+                  any output is, with a box to type in under it. Enter sends, Ctrl+V attaches
+                  the image in the clipboard, /help lists the rest; /quit, Ctrl-D or Ctrl-C
+                  leaves. The agent goes on.
                   With its input from a pipe it is plain text, one line in and the reply out:
                   echo "..." | ./box talk [--wait <seconds>]
   down            stop the agent
@@ -24,8 +25,8 @@ usage: ./box <command>
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
 
-talk and setup take --plain: plain text at a terminal too, without the full screen. NO_COLOR is
-honoured.
+talk and setup take --plain: plain text at a terminal too, without the panel, the input box and
+the setup's screens. NO_COLOR is honoured.
 
 Only setup ever opens a port, and only for the ChatGPT sign-in: 127.0.0.1:1455 on this machine,
 where your browser is sent back to after you sign in. TENERAL_CALLBACK_PORT chooses another.
@@ -63,9 +64,19 @@ clear_stopped() {
   docker rm "$name" >/dev/null
 }
 
-# A file of this script's that must not outlive it.
+# What of this script's must not outlive it: a file, and the helper that `talk` starts with the
+# directory it shares with the client.
 tmp=""
-trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
+clip_pid=""
+clip_dir=""
+cleanup() {
+  [ -z "$tmp" ] || rm -f "$tmp"
+  [ -z "$clip_pid" ] || kill "$clip_pid" 2>/dev/null || true
+  [ -z "$clip_dir" ] || clip_clear "$clip_dir"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
 
 # The (${x[@]+...}) form below is for bash before 4.4, where an empty array counts as unset.
 tty=()
@@ -130,7 +141,203 @@ terminal_env() {
   esac
 }
 
-# Whether talk and setup will draw their full screen: a terminal at both ends, one that takes
+# --- images for the talk client ---
+#
+# The client runs inside the container, where there is no clipboard and no file of this machine.
+# So `talk` starts a helper here, for as long as the client runs. The two share one directory,
+# .teneral/owner/.clip/<id>/ (its name starts with a dot, which the agent's reader of the owner's
+# lines skips), and talk through files in it, because files are what crosses the mount on every
+# kind of Docker: the client leaves `req-N`, holding an action from a fixed set and, for a file,
+# its path; the helper answers with `rep-N`, and with the bytes in `dat-N`. Every file is written
+# aside and renamed. Nothing a request holds is ever run: a path is only read.
+
+clip_limit=10485760
+
+# How this machine's clipboard can be read, or why it cannot.
+clip_tool() {
+  if [ "$(uname -s)" = Darwin ]; then
+    if command -v pngpaste >/dev/null 2>&1; then echo pngpaste; else echo osascript; fi
+  elif [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-paste >/dev/null 2>&1; then
+    echo wl-paste
+  elif [ -n "${DISPLAY:-}" ] && command -v xclip >/dev/null 2>&1; then
+    echo xclip
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    echo "none wayland"
+  elif [ -n "${DISPLAY:-}" ]; then
+    echo "none x11"
+  else
+    echo "none headless"
+  fi
+}
+
+# clip_reply <dir> <n> <first line>: the answer, whole or not at all.
+clip_reply() {
+  printf '%s\n' "$3" >"$1/.rep-$2.tmp" && mv -f "$1/.rep-$2.tmp" "$1/rep-$2"
+}
+
+# Run a clipboard tool, but not for ever: a clipboard whose owner does not answer would hang it.
+clip_run() {
+  if command -v timeout >/dev/null 2>&1; then timeout 5 "$@"; else "$@"; fi
+}
+
+# The first image type a list of offered types holds, PNG before the others.
+clip_pick() {
+  local want
+  for want in image/png image/jpeg image/gif image/webp; do
+    if printf '%s\n' "$1" | grep -qxF "$want"; then
+      echo "$want"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# clip_save <dir> <n> <tool>: the clipboard's image into dat-N, as it is. Nothing is converted.
+clip_save() {
+  local dir="$1" n="$2" tool="$3" out="$1/.dat-$2.tmp" types type size
+  : >"$out"
+  case "$tool" in
+    xclip)
+      types="$(clip_run xclip -selection clipboard -t TARGETS -o 2>/dev/null || true)"
+      if type="$(clip_pick "$types")"; then clip_run xclip -selection clipboard -t "$type" -o >"$out" 2>/dev/null || true; fi
+      ;;
+    wl-paste)
+      types="$(clip_run wl-paste --list-types 2>/dev/null || true)"
+      if type="$(clip_pick "$types")"; then clip_run wl-paste --no-newline --type "$type" >"$out" 2>/dev/null || true; fi
+      ;;
+    pngpaste)
+      pngpaste "$out" >/dev/null 2>&1 || true
+      ;;
+    osascript)
+      # The path goes in as an argument, never into the script's text.
+      osascript -e 'on run argv' \
+        -e 'set png to the clipboard as «class PNGf»' \
+        -e 'set f to open for access (POSIX file (item 1 of argv)) with write permission' \
+        -e 'set eof f to 0' -e 'write png to f' -e 'close access f' -e 'end run' "$out" >/dev/null 2>&1 || true
+      ;;
+    *)
+      rm -f "$out"
+      clip_reply "$dir" "$n" "error no-tool"
+      return 0
+      ;;
+  esac
+  size=0
+  if [ -f "$out" ]; then size="$(wc -c <"$out" | tr -d ' ')"; fi
+  if [ "$size" -eq 0 ]; then
+    rm -f "$out"
+    clip_reply "$dir" "$n" "error no-image"
+  elif [ "$size" -gt "$clip_limit" ]; then
+    rm -f "$out"
+    clip_reply "$dir" "$n" "error too-large $size"
+  else
+    mv -f "$out" "$dir/dat-$n"
+    clip_reply "$dir" "$n" ok
+  fi
+}
+
+# clip_file <dir> <n> <path>: a file of this machine into dat-N, if its first bytes say it is a
+# PNG, JPEG, GIF or WebP image and it is not too large. The file is read, and nothing else.
+clip_file() {
+  local dir="$1" n="$2" path="$3" size magic
+  case "$path" in
+    "~/"*) path="$HOME/${path#"~/"}" ;;
+    /*) ;;
+    *)
+      clip_reply "$dir" "$n" "error not-found"
+      return 0
+      ;;
+  esac
+  if [ ! -e "$path" ]; then
+    clip_reply "$dir" "$n" "error not-found"
+  elif [ ! -f "$path" ] || [ ! -r "$path" ]; then
+    clip_reply "$dir" "$n" "error not-file"
+  else
+    size="$(wc -c <"$path" | tr -d ' ')"
+    magic="$(head -c 12 "$path" | od -An -v -tx1 | tr -d ' \n')"
+    case "$magic" in
+      89504e470d0a1a0a* | ffd8ff* | 474946383761* | 474946383961* | 52494646????????57454250) ;;
+      *)
+        clip_reply "$dir" "$n" "error not-image"
+        return 0
+        ;;
+    esac
+    if [ "$size" -gt "$clip_limit" ]; then
+      clip_reply "$dir" "$n" "error too-large $size"
+    elif cp "$path" "$dir/.dat-$n.tmp" 2>/dev/null && mv -f "$dir/.dat-$n.tmp" "$dir/dat-$n"; then
+      clip_reply "$dir" "$n" ok
+    else
+      rm -f "$dir/.dat-$n.tmp"
+      clip_reply "$dir" "$n" "error not-file"
+    fi
+  fi
+}
+
+# The helper itself: says how the clipboard can be read, then answers requests a few times a
+# second until its directory goes, or the script that started it does.
+clip_helper() {
+  local dir="$1" parent="$2" tool req n action path
+  set +e
+  tool="$(clip_tool)"
+  printf '%s\n' "$tool" >"$dir/.helper.tmp" && mv -f "$dir/.helper.tmp" "$dir/helper"
+  while [ -d "$dir" ] && kill -0 "$parent" 2>/dev/null; do
+    for req in "$dir"/req-*; do
+      [ -f "$req" ] || continue
+      n="${req##*/req-}"
+      action=""
+      path=""
+      { IFS= read -r action; IFS= read -r path; } <"$req"
+      rm -f "$req"
+      case "$n" in
+        '' | *[!0-9]*) continue ;;
+      esac
+      case "$action" in
+        clipboard) clip_save "$dir" "$n" "$tool" ;;
+        file) clip_file "$dir" "$n" "$path" ;;
+        *) clip_reply "$dir" "$n" "error unknown" ;;
+      esac
+    done
+    sleep 0.2
+  done
+}
+
+# Take one client's directory away: the few kinds of file the two ends leave there, by name, and
+# then the directory, which goes only if nothing else is in it. Nothing is removed by walking.
+clip_clear() {
+  local dir="$1" file
+  case "$dir" in
+    */.teneral/owner/.clip/[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  [ -d "$dir" ] || return 0
+  for file in "$dir"/helper "$dir"/req-* "$dir"/rep-* "$dir"/dat-* "$dir"/.*.tmp; do
+    if [ -f "$file" ]; then rm -f "$file"; fi
+  done
+  rmdir "$dir" 2>/dev/null || true
+}
+
+# Start the helper for one client. The directory is named after this script's process, so one
+# left behind by a script that was killed is known by its process being gone, and is cleared.
+clip_env=()
+clip_start() {
+  local base="$PWD/.teneral/owner/.clip" old pid
+  mkdir -p "$base"
+  for old in "$base"/[0-9]*; do
+    [ -d "$old" ] || continue
+    pid="${old##*/}"
+    pid="${pid%%-*}"
+    case "$pid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || clip_clear "$old"
+  done
+  clip_dir="$base/$$-$RANDOM"
+  mkdir "$clip_dir"
+  clip_helper "$clip_dir" "$$" </dev/null >/dev/null 2>&1 &
+  clip_pid=$!
+  clip_env=(--env "TENERAL_CLIP=${clip_dir##*/}" --env "TENERAL_HOST_DIR=$PWD")
+}
+
+# Whether talk and setup will draw on the terminal: a terminal at both ends, one that takes
 # escape sequences, and no --plain among the arguments. Inside the container both ends always look
 # like a terminal, so when this says no, --plain is passed on.
 screens() {
@@ -142,8 +349,11 @@ screens() {
 }
 
 # A full-screen program that was cut off (its container stopped, or it was killed) could not put
-# the terminal back: off the alternate screen, cursor shown, no mouse reports, no bracketed paste.
-restore_terminal() { printf '\033[?1006l\033[?1000l\033[?2004l\033[0m\033[?25h\033[?1049l'; }
+# the terminal back: off the alternate screen, cursor shown, no bracketed paste.
+restore_terminal() { printf '\033[?2004l\033[0m\033[?25h\033[?1049l'; }
+# The talk client never leaves the normal screen. Its cursor always rests on the first row of the
+# few rows it redraws, so erasing from there down takes those rows and leaves the conversation.
+restore_talk() { printf '\r\033[J\033[?2004l\033[0m\033[?25h'; }
 
 # The owner's setup (kernel/setup.ts), in a container of its own. It asks questions, so it needs a terminal.
 # No port is published for it, unless the provider chosen signs in through the browser: the setup
@@ -288,12 +498,13 @@ case "$command" in
     if ! screens "$@"; then
       exec docker exec --interactive --tty "${term_env[@]}" "$name" bun kernel/talk.ts --plain "$@"
     fi
+    clip_start
     status=0
-    docker exec --interactive --tty "${term_env[@]}" "$name" bun kernel/talk.ts "$@" || status=$?
+    docker exec --interactive --tty "${term_env[@]}" "${clip_env[@]}" "$name" bun kernel/talk.ts "$@" || status=$?
     if [ "$status" -gt 128 ]; then
-      # The client was cut off in the middle of its screen: with `./box down`, or when the kernel
+      # The client was cut off in the middle of drawing: with `./box down`, or when the kernel
       # gives up, the container goes and takes it along.
-      restore_terminal
+      restore_talk
       if alive; then
         echo "The talk client was cut off, with status $status. The agent goes on; ./box talk attaches again." >&2
       else
