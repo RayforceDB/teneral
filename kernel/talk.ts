@@ -2,6 +2,7 @@ import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { journalSize, readEventsFrom, type JournalEvent } from './journal';
 import { accept, interrupt, tell } from './owner';
+import { ownerCommand } from './offer';
 import { planNotice } from './providers';
 import { cageNotice, chooseAccept } from './species';
 import { installRoot, paths } from './supervisor';
@@ -249,6 +250,8 @@ export interface TalkOptions {
   pollMs?: number;
   /** Piped input only: how long the journal may stay silent while a line waits to be sent or answered. Default 5 minutes. */
   waitMs?: number;
+  /** A person typing only: lines that are the owner's commands to the kernel (`/offers`, `/approve`), with what to say; null for any other line. */
+  command?: (line: string) => string[] | null;
 }
 
 /**
@@ -339,6 +342,13 @@ export async function talk(o: TalkOptions): Promise<number> {
     }
   };
 
+  /** A line that is a command to the kernel is answered here and never sent as text. */
+  const answered = (text: string): boolean => {
+    const lines = o.command?.(text) ?? null;
+    for (const line of lines ?? []) o.note(line);
+    return lines !== null;
+  };
+
   /** Ends the wait between two looks at the journal, when a line was typed or the input ended. */
   let nudge: () => void = () => {};
   const nap = () => new Promise<void>((resolve) => {
@@ -359,7 +369,7 @@ export async function talk(o: TalkOptions): Promise<number> {
         if (text === '/accept' || text.startsWith('/accept ')) acceptCommit(text.slice(7).trim());
         else if (!o.interactive) queue.push(text);
         else if (text === '/stop') stop();
-        else send(text);
+        else if (!answered(text)) send(text);
         nudge();
       }
     } catch { /* an input that fails has ended */ } finally {
@@ -475,6 +485,7 @@ if (import.meta.main) {
     cage,
     root: p.root,
     waitMs,
+    command: (line) => ownerCommand(p.root, line),
   });
   process.exit(status);
 }
