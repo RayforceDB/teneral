@@ -10,7 +10,7 @@ import { appendEvent, readEvents } from '../../kernel/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', moltCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
   const seen: ChatMessage[][] = [];
   const provider: Provider = async (messages) => {
     seen.push(messages);
@@ -64,13 +64,13 @@ test('an unknown tool is a failed result, not a crash', async () => {
   expect(readEvents(s.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: false, output: 'error: unknown tool: nope' });
 });
 
-test('a molt ends the turn without another model call', async () => {
-  const molter: Tool = {
-    spec: { name: 'molt', description: '', parameters: {} },
-    async run(_args, ctx) { ctx.moltCommit = 'abc'; return 'requested'; },
+test('a mutation ends the turn without another model call', async () => {
+  const mutator: Tool = {
+    spec: { name: 'mutate', description: '', parameters: {} },
+    async run(_args, ctx) { ctx.mutationCommit = 'abc'; return 'requested'; },
   };
-  const s = setup([{ text: 'molting', toolCalls: [{ id: 'c1', name: 'molt', args: {} }] }], [molter]);
-  expect(await runTurn(s.deps)).toBe('molt');
+  const s = setup([{ text: 'mutating', toolCalls: [{ id: 'c1', name: 'mutate', args: {} }] }], [mutator]);
+  expect(await runTurn(s.deps)).toBe('mutation');
   expect(s.seen).toHaveLength(1);
 });
 
@@ -129,27 +129,27 @@ test('a kernel note that arrives while the last reply is on its way gets another
     await runTurn({ ...s.deps, provider });
     return calls;
   };
-  expect(await during({ type: 'molt.rejected', commit: 'b', gate: 'tests', output: '1 fail' })).toBe(2);
+  expect(await during({ type: 'mutation.rejected', commit: 'b', gate: 'tests', output: '1 fail' })).toBe(2);
   expect(await during({ type: 'generation.ready', commit: 'g1' })).toBe(1);
 });
 
-test('after a molt the rest of the reply is not run, and every call still has a result', async () => {
+test('after a mutation the rest of the reply is not run, and every call still has a result', async () => {
   let written = false;
-  const molter: Tool = {
-    spec: { name: 'molt', description: '', parameters: {} },
-    async run(_args, ctx) { ctx.moltCommit = 'abc'; return 'requested'; },
+  const mutator: Tool = {
+    spec: { name: 'mutate', description: '', parameters: {} },
+    async run(_args, ctx) { ctx.mutationCommit = 'abc'; return 'requested'; },
   };
   const writer: Tool = { spec: { name: 'write', description: '', parameters: {} }, async run() { written = true; return 'wrote'; } };
-  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'molt', args: {} }, { id: 'c2', name: 'write', args: {} }] }], [molter, writer]);
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'mutate', args: {} }, { id: 'c2', name: 'write', args: {} }] }], [mutator, writer]);
 
-  expect(await runTurn(s.deps)).toBe('molt');
+  expect(await runTurn(s.deps)).toBe('mutation');
 
   expect(written).toBe(false);
   const events = readEvents(s.journal);
   expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'tool.result']);
   expect(events[3]).toMatchObject({ callId: 'c1', ok: true, output: 'requested' });
   expect(events[4]).toMatchObject({ callId: 'c2', ok: false });
-  expect((events[4] as { output: string }).output).toMatch(/not run.*molt/);
+  expect((events[4] as { output: string }).output).toMatch(/not run.*mutation/);
 });
 
 test('a tool that returns something other than text does not lose its result', async () => {
@@ -172,13 +172,13 @@ test('the system prompt is composed again for every round, so a change made duri
   expect(s.seen.map((messages) => messages[0]!.content)).toEqual(['before', 'after']);
 });
 
-test('each tool is announced as it starts, known or not, but not one skipped after a molt', async () => {
-  const molter: Tool = { spec: { name: 'molt', description: '', parameters: {} }, async run(_a, ctx) { ctx.moltCommit = 'abc'; return 'ok'; } };
-  const calls = [{ id: 'c1', name: 'echo', args: {} }, { id: 'c2', name: 'nope', args: {} }, { id: 'c3', name: 'molt', args: {} }, { id: 'c4', name: 'echo', args: {} }];
-  const s = setup([{ text: '', toolCalls: calls }], [echo, molter]);
+test('each tool is announced as it starts, known or not, but not one skipped after a mutation', async () => {
+  const mutator: Tool = { spec: { name: 'mutate', description: '', parameters: {} }, async run(_a, ctx) { ctx.mutationCommit = 'abc'; return 'ok'; } };
+  const calls = [{ id: 'c1', name: 'echo', args: {} }, { id: 'c2', name: 'nope', args: {} }, { id: 'c3', name: 'mutate', args: {} }, { id: 'c4', name: 'echo', args: {} }];
+  const s = setup([{ text: '', toolCalls: calls }], [echo, mutator]);
   const announced: string[] = [];
   await runTurn({ ...s.deps, onTool: (name) => announced.push(name) });
-  expect(announced).toEqual(['echo', 'nope', 'molt']);
+  expect(announced).toEqual(['echo', 'nope', 'mutate']);
 });
 
 test('what a tool returns or throws is journaled as well-formed text', async () => {
@@ -299,7 +299,7 @@ function withImage(provider: Provider) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), PNG_BYTES);
   appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: `what is this?\n[image: ${path}]` });
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', moltCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
   return { journal, path, deps: { journal, gen: 'g1', provider, tools: [echo], system: () => 'SYS', ctx, sight: { load: imageStore(root) } } };
 }
 
@@ -500,22 +500,22 @@ test('a signal already aborted when the turn begins asks the model nothing', asy
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'turn.interrupted']);
 });
 
-test('a molt requested before the interruption stays requested: the turn ends as a molt, and the calls after it are not run', async () => {
+test('a mutation requested before the interruption stays requested: the turn ends as a mutation, and the calls after it are not run', async () => {
   const controller = new AbortController();
-  const molting: Tool = {
-    spec: { name: 'molt', description: '', parameters: {} },
+  const mutating: Tool = {
+    spec: { name: 'mutate', description: '', parameters: {} },
     async run(_args, ctx) {
-      appendEvent(ctx.journal, ctx.gen, { type: 'molt.requested', commit: 'c'.repeat(40), motive: 'm' });
-      ctx.moltCommit = 'c'.repeat(40);
+      appendEvent(ctx.journal, ctx.gen, { type: 'mutation.requested', commit: 'c'.repeat(40), motive: 'm' });
+      ctx.mutationCommit = 'c'.repeat(40);
       controller.abort();
       return 'requested';
     },
   };
-  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'molt', args: {} }, { id: 'c2', name: 'echo', args: {} }] }], [molting, echo]);
-  expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('molt');
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'mutate', args: {} }, { id: 'c2', name: 'echo', args: {} }] }], [mutating, echo]);
+  expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('mutation');
   const events = readEvents(s.journal);
   expect(events.map((e) => e.type)).not.toContain('turn.interrupted');
-  expect(events.at(-1)).toMatchObject({ type: 'tool.result', callId: 'c2', ok: false, output: 'error: not run, because a molt was requested earlier in this reply' });
+  expect(events.at(-1)).toMatchObject({ type: 'tool.result', callId: 'c2', ok: false, output: 'error: not run, because a mutation was requested earlier in this reply' });
   expect(paired(s.journal)).toBe(true);
 });
 

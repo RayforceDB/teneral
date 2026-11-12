@@ -17,13 +17,13 @@ function tool(name: string) {
 function context(workspace: string, gen = 'gen'): ToolContext {
   const data = mkdtempSync(join(tmpdir(), 'teneral-tools-'));
   return {
-    workspace, journal: join(data, 'journal.jsonl'), gen, moltCommit: null,
+    workspace, journal: join(data, 'journal.jsonl'), gen, mutationCommit: null,
     id: 'me', inbox: join(data, 'inbox'), peers: join(data, 'peers.json'),
   };
 }
 
 test('the seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'look', 'molt', 'read', 'send', 'write']);
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'look', 'mutate', 'read', 'send', 'write']);
 });
 
 test('write creates parent directories and read returns the content', async () => {
@@ -65,29 +65,29 @@ test('long output is cut with a note saying how much is missing', async () => {
   expect(out.endsWith('xxxTAIL')).toBe(true);
 });
 
-test('molt commits the workspace, journals the request and marks the context', async () => {
+test('mutate commits the workspace, journals the request and marks the context', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
   const ctx = context(dir, seed);
   writeFiles(dir, { 'body/a.ts': 'b\n' });
 
-  const out = await tool('molt').run({ motive: 'try b' }, ctx);
+  const out = await tool('mutate').run({ motive: 'try b' }, ctx);
 
   const head = git(dir, 'rev-parse', 'HEAD');
   expect(head).not.toBe(seed);
   expect(git(dir, 'status', '--porcelain')).toBe('');
-  expect(git(dir, 'log', '-1', '--format=%an %s')).toBe('teneral molt: try b');
-  expect(ctx.moltCommit).toBe(head);
+  expect(git(dir, 'log', '-1', '--format=%an %s')).toBe('teneral mutation: try b');
+  expect(ctx.mutationCommit).toBe(head);
   expect(out).toContain(head);
   const events = readEvents(ctx.journal);
   expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({ type: 'molt.requested', commit: head, motive: 'try b', gen: seed });
+  expect(events[0]).toMatchObject({ type: 'mutation.requested', commit: head, motive: 'try b', gen: seed });
 });
 
-test('molt with nothing changed is refused', async () => {
+test('mutate with nothing changed is refused', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
   const ctx = context(dir, seed);
-  await expect(tool('molt').run({ motive: 'nothing' }, ctx)).rejects.toThrow(/nothing to molt/);
-  expect(ctx.moltCommit).toBeNull();
+  await expect(tool('mutate').run({ motive: 'nothing' }, ctx)).rejects.toThrow(/nothing to mutate/);
+  expect(ctx.mutationCommit).toBeNull();
 });
 
 test('edit writes the new text literally, replacement patterns included', async () => {
@@ -160,7 +160,7 @@ test('endless output is bounded, keeps both ends and still reports the exit', as
   expect(out).toMatch(/\[49\d{5} characters dropped here\]/);
 });
 
-test('molt does not depend on the hooks or signing of the repo it runs in', async () => {
+test('mutate does not depend on the hooks or signing of the repo it runs in', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
   writeFiles(dir, { '.git/hooks/pre-commit': '#!/bin/sh\necho hook says no >&2\nexit 1\n' });
   chmodSync(join(dir, '.git/hooks/pre-commit'), 0o755);
@@ -169,10 +169,10 @@ test('molt does not depend on the hooks or signing of the repo it runs in', asyn
   const ctx = context(dir, seed);
   writeFiles(dir, { 'body/a.ts': 'b\n' });
 
-  await tool('molt').run({ motive: 'hooked' }, ctx);
+  await tool('mutate').run({ motive: 'hooked' }, ctx);
 
-  expect(ctx.moltCommit).toBe(git(dir, 'rev-parse', 'HEAD'));
-  expect(ctx.moltCommit).not.toBe(seed);
+  expect(ctx.mutationCommit).toBe(git(dir, 'rev-parse', 'HEAD'));
+  expect(ctx.mutationCommit).not.toBe(seed);
 });
 
 function withPeer(ctx: ToolContext): string {
@@ -305,7 +305,7 @@ test('edit refuses a file that is not UTF-8 and leaves every byte as it was', as
   expect(readFileSync(join(ctx.workspace, 'bin.dat')).equals(bytes)).toBe(true);
 });
 
-test('molt refuses a workspace that does not descend from the running generation, before committing anything', async () => {
+test('mutate refuses a workspace that does not descend from the running generation, before committing anything', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
   git(dir, 'checkout', '-q', '--orphan', 'elsewhere');
   git(dir, '-c', 'user.name=t', '-c', 'user.email=t@localhost', 'commit', '-q', '-m', 'unrelated');
@@ -313,28 +313,28 @@ test('molt refuses a workspace that does not descend from the running generation
   writeFiles(dir, { 'body/a.ts': 'b\n' });
   const ctx = context(dir, seed);
 
-  await expect(tool('molt').run({ motive: 'astray' }, ctx)).rejects.toThrow(/different line of history.*git log/s);
+  await expect(tool('mutate').run({ motive: 'astray' }, ctx)).rejects.toThrow(/different line of history.*git log/s);
 
-  expect(ctx.moltCommit).toBeNull();
+  expect(ctx.mutationCommit).toBeNull();
   expect(git(dir, 'rev-parse', 'HEAD')).toBe(unrelated);
   expect(readEvents(ctx.journal)).toEqual([]);
 });
 
-test('a molt says which files it changes from the running generation', async () => {
+test('a mutation says which files it changes from the running generation', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n', 'body/gone.ts': 'x\n' });
   const ctx = context(dir, seed);
   writeFiles(dir, { 'body/a.ts': 'b\n', 'stray.log': 'oops\n' });
   git(dir, 'rm', '-q', 'body/gone.ts');
 
-  const out = await tool('molt').run({ motive: 'list' }, ctx);
+  const out = await tool('mutate').run({ motive: 'list' }, ctx);
 
   expect(out).toContain('M\tbody/a.ts');
   expect(out).toContain('D\tbody/gone.ts');
   expect(out).toContain('A\tstray.log');
 });
 
-test('the molt description says untracked files are committed too', () => {
-  expect(tool('molt').spec.description).toMatch(/untracked/);
+test('the mutation description says untracked files are committed too', () => {
+  expect(tool('mutate').spec.description).toMatch(/untracked/);
 });
 
 test('send names the peers file when it is malformed', async () => {

@@ -13,8 +13,8 @@ export interface ToolContext {
   workspace: string;
   journal: string;
   gen: string;
-  /** Set by `molt`; the process exits with 75 once the turn ends. */
-  moltCommit: string | null;
+  /** Set by `mutate`; the process exits with 75 once the turn ends. */
+  mutationCommit: string | null;
   /** This individual's id, used as `from` on what it sends. */
   id: string;
   /** This agent's own inbox directory. */
@@ -204,9 +204,9 @@ const bash: Tool = {
   },
 };
 
-const molt: Tool = {
+const mutate: Tool = {
   spec: {
-    name: 'molt',
+    name: 'mutate',
     description:
       'Commit your workspace and ask the kernel to switch you onto it. The kernel runs the gates when this turn ends; ' +
       'if they pass you restart on the new code, otherwise you restart on the current code with the reason. ' +
@@ -229,16 +229,16 @@ const molt: Tool = {
       git(
         ctx.workspace,
         '-c', 'user.name=teneral', '-c', 'user.email=teneral@localhost', '-c', 'commit.gpgsign=false',
-        'commit', '-q', '--no-verify', '-m', `molt: ${motive}`,
+        'commit', '-q', '--no-verify', '-m', `mutation: ${motive}`,
       );
     }
     const commit = git(ctx.workspace, 'rev-parse', 'HEAD');
-    if (commit === ctx.gen) throw new Error('nothing to molt: the workspace matches the running generation');
-    appendEvent(ctx.journal, ctx.gen, { type: 'molt.requested', commit, motive });
-    ctx.moltCommit = commit;
+    if (commit === ctx.gen) throw new Error('nothing to mutate: the workspace matches the running generation');
+    appendEvent(ctx.journal, ctx.gen, { type: 'mutation.requested', commit, motive });
+    ctx.mutationCommit = commit;
     // Shown so that a file committed by accident is noticed now, not at the gates.
     const changed = clip(git(ctx.workspace, 'diff', '--name-status', '--no-renames', ctx.gen, commit), 4000);
-    return `Molt requested for ${commit}. The kernel runs the gates when this turn ends.\nChanged from the running generation:\n${changed}`;
+    return `Mutation requested for ${commit}. The kernel runs the gates when this turn ends.\nChanged from the running generation:\n${changed}`;
   },
 };
 
@@ -298,4 +298,4 @@ const send: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, molt, send];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send];

@@ -43,7 +43,7 @@ const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
-const ctx: ToolContext = { workspace, journal, gen, moltCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
 
 let quitting = false;
 let wake: (() => void) | null = null;
@@ -98,7 +98,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
     });
-    if (outcome === 'molt') process.exit(75);
+    if (outcome === 'mutation') process.exit(75);
     // Not a failure: nothing is counted and nothing is tried again. The loop below finds no turn owed and waits.
     if (outcome === 'interrupted') console.error('[interrupted]');
     return null;

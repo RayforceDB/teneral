@@ -84,13 +84,13 @@ function randomJournal(seed: number): JournalEvent[] {
     } else if (roll < 0.85) {
       events.push({ ...envelope, type: 'tool.result', callId: pick(IDS), ok: next() < 0.8, output: next() < 0.05 ? undefined : withMarkers(pick(TEXTS), 0.4) });
     } else if (roll < 0.9) {
-      events.push({ ...envelope, type: 'molt.rejected', commit: 'c', gate: 'tests', output: withMarkers(pick(TEXTS).repeat(Math.floor(next() * 60)), 0.3) });
+      events.push({ ...envelope, type: 'mutation.rejected', commit: 'c', gate: 'tests', output: withMarkers(pick(TEXTS).repeat(Math.floor(next() * 60)), 0.3) });
     } else if (roll < 0.94) {
       events.push({ ...envelope, type: 'generation.promoted', commit: 'c', previous: 'p' });
     } else if (roll < 0.97) {
       events.push({ ...envelope, type: 'generation.rolledback', commit: 'c', to: 'p', reason: pick(TEXTS) });
     } else {
-      events.push({ ...envelope, type: pick(['generation.started', 'generation.ready', 'molt.requested', 'from.the.future']), commit: 'c' });
+      events.push({ ...envelope, type: pick(['generation.started', 'generation.ready', 'mutation.requested', 'from.the.future']), commit: 'c' });
     }
   }
   return events as JournalEvent[];
@@ -379,7 +379,7 @@ test('the generator covers what it is meant to: calls, results, old shapes', () 
   expect(count((e) => e.type === 'assistant' && Array.isArray(e.toolCalls) && e.toolCalls.length > 1)).toBeGreaterThan(50);
   expect(count((e) => e.type === 'tool.result')).toBeGreaterThan(100);
   expect(count((e) => e.type === 'assistant' && !('text' in e))).toBeGreaterThan(0);
-  expect(count((e) => e.type === 'molt.rejected')).toBeGreaterThan(10);
+  expect(count((e) => e.type === 'mutation.rejected')).toBeGreaterThan(10);
   // Images: the owner's messages that end with markers, the same markers from others, look calls, and requests that carry images.
   const ends = (e: Record<string, unknown>) => typeof e.text === 'string' && /\[image: memory\/images\/[0-9a-f]{64}\.png\]$/.test(e.text);
   expect(count((e) => e.type === 'stimulus' && e.source === 'terminal' && ends(e))).toBeGreaterThan(15);

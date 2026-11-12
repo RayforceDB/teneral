@@ -1,4 +1,4 @@
-import type { JournalEvent } from '../kernel/journal';
+import { isMutationRejection, type JournalEvent } from '../kernel/journal';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from './images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from './text';
@@ -33,11 +33,13 @@ const brief = (value: unknown): string => clip(asText(value), NOTE_CAP);
 
 /** What the kernel did, in words the agent reads; null for events that are not news. */
 export function kernelNote(e: JournalEvent): string | null {
+  // Under either of its names: the journal keeps the rejections of the time when a mutation was called a molt.
+  if (isMutationRejection(e)) {
+    return `[kernel] Your mutation to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
+  }
   switch (e.type) {
-    case 'molt.rejected':
-      return `[kernel] Your molt to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
     case 'generation.promoted':
-      return `[kernel] Your molt was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
+      return `[kernel] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
     case 'generation.rolledback':
       return `[kernel] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
     default:

@@ -59,7 +59,7 @@ test('a stimulus that arrived while a tool ran is placed after the result', () =
 
 test('kernel events become [kernel] messages', () => {
   const messages = buildMessages([
-    ev({ type: 'molt.rejected', commit: 'bbb', gate: 'tests', output: '1 fail' }, 'aaa'),
+    ev({ type: 'mutation.rejected', commit: 'bbb', gate: 'tests', output: '1 fail' }, 'aaa'),
     ev({ type: 'generation.promoted', commit: 'ccc', previous: 'aaa' }, 'ccc'),
     ev({ type: 'generation.rolledback', commit: 'ccc', to: 'aaa', reason: 'exited with 1 before it was ready' }, 'aaa'),
     ev({ type: 'generation.started', commit: 'aaa' }, 'aaa'),
@@ -70,6 +70,25 @@ test('kernel events become [kernel] messages', () => {
   expect(messages[1]!.content).toContain('1 fail');
   expect(messages[2]!.content).toContain('now running generation ccc');
   expect(messages[3]!.content).toContain('rolled back');
+});
+
+test('a rejection journaled under its former name, molt.rejected, is the same [kernel] message and owes a turn the same', () => {
+  const fields = { commit: 'bbb', gate: 'tests', output: '1 fail' };
+  const now = buildMessages([ev({ type: 'mutation.rejected', ...fields }, 'aaa')], 'S');
+  const former = buildMessages([ev({ type: 'molt.rejected', ...fields }, 'aaa')], 'S');
+  expect(former).toEqual(now);
+  expect(former[1]).toEqual({ role: 'user', content: '[kernel] Your mutation to bbb was rejected at gate "tests". You are still running generation aaa.\n1 fail' });
+  expect(needsTurn([replied('done'), ev({ type: 'molt.rejected', ...fields })])).toBe(true);
+  expect(needsTurn([replied('done'), ev({ type: 'mutation.rejected', ...fields })])).toBe(true);
+  // The requests are the body's own and are news under neither name.
+  expect(needsTurn([replied('done'), ev({ type: 'molt.requested', commit: 'bbb', motive: 'm' }), ev({ type: 'mutation.requested', commit: 'bbb', motive: 'm' })])).toBe(false);
+  // Both in one journal, as a lineage's is once its body has changed.
+  const mixed = buildMessages([
+    said('go'), ev({ type: 'molt.rejected', commit: 'b1', gate: 'tests', output: '' }), replied('again'), ev({ type: 'mutation.rejected', commit: 'b2', gate: 'types', output: '' }),
+  ], 'S');
+  expect(mixed.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
+  expect(mixed[2]!.content).toStartWith('[kernel] Your mutation to b1 was rejected at gate "tests"');
+  expect(mixed[4]!.content).toStartWith('[kernel] Your mutation to b2 was rejected at gate "types"');
 });
 
 test('over budget, the oldest messages go and no orphan tool result leads', () => {
@@ -246,7 +265,7 @@ test('events in older shapes are read as empty rather than thrown on', () => {
   const badCalls = raw({ type: 'assistant', text: '', toolCalls: [null, 'x', { id: 'c2' }] });
   const messages = buildMessages([
     said('go'), noCalls, said('more'), noText, raw({ type: 'tool.result', callId: 'c1', ok: true }), junk, badCalls,
-    raw({ type: 'stimulus' }), raw({ type: 'molt.rejected' }),
+    raw({ type: 'stimulus' }), raw({ type: 'mutation.rejected' }),
   ], 'S');
   expect(messages[2]).toEqual({ role: 'assistant', content: 'old reply' });
   expect(messages[4]!.tool_calls).toHaveLength(1);
@@ -280,7 +299,7 @@ test('everything sent is well-formed Unicode, whatever an old journal holds', ()
   const lone = 'a\ud83dz';
   const messages = buildMessages([
     said(lone), ev({ type: 'assistant', text: lone, toolCalls: [{ id: `c${lone}`, name: 'bash', args: { command: lone } }] }),
-    result(`c${lone}`, lone), ev({ type: 'molt.rejected', commit: 'b', gate: 'tests', output: lone }),
+    result(`c${lone}`, lone), ev({ type: 'mutation.rejected', commit: 'b', gate: 'tests', output: lone }),
   ], lone);
   expect(messages).toHaveLength(5);
   for (const m of messages) {
@@ -321,7 +340,7 @@ test('a newest stimulus too large for what is left is cut to fit, head and tail,
 });
 
 test('a kernel note carries at most 4000 characters of gate output, both ends kept', () => {
-  const note = buildMessages([ev({ type: 'molt.rejected', commit: 'b', gate: 'tests', output: `FIRST${'x'.repeat(10_000)}LAST` })], 'S')[1]!.content!;
+  const note = buildMessages([ev({ type: 'mutation.rejected', commit: 'b', gate: 'tests', output: `FIRST${'x'.repeat(10_000)}LAST` })], 'S')[1]!.content!;
   expect(note.length).toBeLessThan(4300);
   expect(note).toContain('FIRSTxx');
   expect(note.endsWith('xxLAST')).toBe(true);
@@ -413,7 +432,7 @@ test('a marker from anyone but the owner is text, and no file is asked for', () 
     ev({ type: 'tool.result', callId: 'c2', ok: true, output: marker(2) }),
     // A look that failed shows nothing either.
     ev({ type: 'tool.result', callId: 'c3', ok: false, output: `error: no\n${marker(3)}` }),
-    ev({ type: 'molt.rejected', commit: 'c', gate: 'tests', output: text }),
+    ev({ type: 'mutation.rejected', commit: 'c', gate: 'tests', output: text }),
     replied(text),
   ], 'S', undefined, sight);
   expect(sight.asked).toEqual([]);

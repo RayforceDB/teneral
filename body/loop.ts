@@ -51,15 +51,15 @@ function arrivedSince(journal: string, shown: number): boolean {
 }
 
 /**
- * Model, tools, model, ... until a reply with no tool calls. 'molt' means: exit with 75 now.
+ * Model, tools, model, ... until a reply with no tool calls. 'mutation' means: exit with 75 now.
  *
  * 'interrupted' means the owner stopped the turn (`signal`). The request to the model is cancelled
  * and its reply, if any was on the way, is lost; a running tool is told to stop. Every call that was
  * journaled still gets a result, and the journal ends with `turn.interrupted`, after which no turn
  * is owed. Two things an interruption does not undo: a reply with no tool calls that had already
- * arrived ends the turn as 'done', and a molt already requested stays requested.
+ * arrived ends the turn as 'done', and a mutation already requested stays requested.
  */
-export async function runTurn(d: TurnDeps): Promise<'done' | 'molt' | 'interrupted'> {
+export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
   const interrupted = (): 'interrupted' => {
     appendEvent(d.journal, d.gen, { type: 'turn.interrupted' });
     return 'interrupted';
@@ -110,11 +110,11 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt' | 'interrupt
     }
 
     for (const call of reply.toolCalls) {
-      if (d.ctx.moltCommit !== null) {
-        // The molt committed the workspace; anything run after it would change what the gates judge.
+      if (d.ctx.mutationCommit !== null) {
+        // The mutation committed the workspace; anything run after it would change what the gates judge.
         // No intent: the call never started. It still gets a result, so every call has an answer.
         appendEvent(d.journal, d.gen, {
-          type: 'tool.result', callId: call.id, ok: false, output: 'error: not run, because a molt was requested earlier in this reply',
+          type: 'tool.result', callId: call.id, ok: false, output: 'error: not run, because a mutation was requested earlier in this reply',
         });
         continue;
       }
@@ -154,8 +154,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt' | 'interrupt
       // Well-formed, too: half of a character pair in the journal would go into every later request.
       appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok, output: output.toWellFormed() });
     }
-    // A molt that was requested before the interruption is the kernel's to judge now; the interruption is dropped.
-    if (d.ctx.moltCommit !== null) return 'molt';
+    // A mutation that was requested before the interruption is the kernel's to judge now; the interruption is dropped.
+    if (d.ctx.mutationCommit !== null) return 'mutation';
     if (d.signal?.aborted) return interrupted();
   }
   // The note below reads as a finished reply. Written over something the model never saw, it would

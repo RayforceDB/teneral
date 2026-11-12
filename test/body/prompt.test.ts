@@ -21,7 +21,7 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 import { OWNER_REASON } from '../../kernel/back';
 import { BODY_SIZE_LIMIT } from '../../kernel/gates';
 import { CHANGEABLE } from '../../kernel/protected';
-import { CRASH_LIMIT, MOLT_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
+import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
 import { ProviderError } from '../../body/provider';
 import { PATIENCE, refusalNote } from '../../body/retry';
 import { buildMessages } from '../../body/context';
@@ -49,15 +49,15 @@ test('it names every variable the kernel gives the body', () => {
   }
 });
 
-test('it says ready must be journaled in time, and that only a ready generation may molt', () => {
+test('it says ready must be journaled in time, and that only a ready generation may mutate', () => {
   expect(flat).toMatch(/Within 60 seconds of starting you must append a `generation\.ready` event with your own generation id/);
   expect(flat).toMatch(/rolled back at once/);
-  expect(flat).toMatch(/Only a ready generation may molt/);
+  expect(flat).toMatch(/Only a ready generation may mutate/);
 });
 
 test('it says what each exit code means', () => {
-  expect(flat).toContain(`${MOLT_EXIT} means`);
-  expect(flat).toMatch(/must follow a `molt\.requested` event/);
+  expect(flat).toContain(`${MUTATION_EXIT} means`);
+  expect(flat).toMatch(/must follow a `mutation\.requested` event/);
   expect(flat).toMatch(/0 stops the whole agent until your owner starts it again/);
   expect(flat).toMatch(/Anything else is a crash/);
 });
@@ -73,7 +73,7 @@ test('it says how crashes are counted and that a rollback is the last step back'
   expect(flat).toMatch(/Asking three times in a row for the same commit, rejected each time, halts everything/);
 });
 
-test('it lists what a molt must pass, in the kernel\'s order', () => {
+test('it lists what a mutation must pass, in the kernel\'s order', () => {
   const order = [
     'nothing uncommitted', 'changes only', 'only plain files', `${BODY_SIZE_LIMIT} bytes`, '`bun x tsc --noEmit`',
     '`bun test test/kernel`', '`bun test test/body`', 'at least one test and no failure', 'the smoke gate',
@@ -98,7 +98,7 @@ test('it describes the smoke gate and the bare environment the checks run in', (
 
 test('it says that an interrupted gate run decided nothing and is asked for again', () => {
   expect(flat).toMatch(/One at gate `interrupted` is the exception/);
-  expect(flat).toMatch(/nothing was decided, and you call `molt` again for the same commit/);
+  expect(flat).toMatch(/nothing was decided, and you call `mutate` again for the same commit/);
 });
 
 test('it says what a reply marked as not from the model is', () => {
@@ -114,12 +114,12 @@ test('it states the probation after a promotion', () => {
 });
 
 test('it says the kernel speaks only through three events, and what rewriting their handling costs', () => {
-  for (const type of ['molt.rejected', 'generation.promoted', 'generation.rolledback']) expect(flat).toContain(`\`${type}\``);
+  for (const type of ['mutation.rejected', 'generation.promoted', 'generation.rolledback']) expect(flat).toContain(`\`${type}\``);
   expect(flat).toMatch(/you stop hearing the kernel/);
 });
 
 test('it says the journal\'s event types are the kernel\'s and how to append', () => {
-  expect(flat).toMatch(/defined in `kernel\/journal\.ts`, and a molt cannot add one/);
+  expect(flat).toMatch(/defined in `kernel\/journal\.ts`, and a mutation cannot add one/);
   expect(flat).toMatch(/only through the kernel's `appendEvent`/);
 });
 
@@ -269,7 +269,7 @@ test('it says how the owner consents, and that a refusal that waits for the owne
   for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
   expect(flat).toMatch(/refused at gate `species` with the species commit named/);
   expect(flat).toMatch(/`\/accept` in their terminal or `\.\/box accept`/);
-  expect(flat).toMatch(/you call `molt` again for the same commit/);
+  expect(flat).toMatch(/you call `mutate` again for the same commit/);
   expect(flat).toMatch(/they are not counted against the commit/);
 });
 
