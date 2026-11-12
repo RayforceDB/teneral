@@ -35,6 +35,14 @@
   new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W
   delete to the start of the line, to its end, and the word before the cursor.
 
+  A line that begins with a slash and a word is a command. Type / and the commands are
+  listed under the box, fewer with each letter: Up and Down (or Ctrl-P and Ctrl-N) choose
+  one, Tab completes it, Enter runs it, or completes it when something has to follow, and
+  Esc closes the list. The name is coloured once it is whole; one that is no command is
+  coloured as a mistake, and Enter neither runs nor sends it. To send the agent a line
+  that begins with a slash, begin it with two: //like this arrives as /like this. A path,
+  such as /home/you/notes.txt, is no command and needs none of that.
+
   The conversation is ordinary output of your terminal: its scrollbar, PageUp and
   PageDown, selection, copy and search all work on it. Only the box you type in and the
   lines around it are redrawn.
@@ -46,23 +54,24 @@
   WebP). They are kept in memory/images/. The agent sees them once its own body knows
   how; until then it sees one line of text naming each file.
 
-    /help          this
-    /image <path>  attach an image file from your machine
-    /stop          interrupt what the agent is doing now (also Esc)
-    /accept [id]   accept the species commit the agent asked you about, or the one named
-    /tools         show or hide what each tool call returned (also Tab)
-    /generations   the generations this individual has lived in
-    /history       print the earlier conversation that was read from the journal
-    /offers        what waits for your approval before it goes out to the species
-    /approve <id>  let exactly that commit go out
-    /plain         how to get the plain text client
-    /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)
+    /help              the keys and commands
+    /image <path>      attach an image file from your machine
+    /stop              interrupt what the agent is doing now (also Esc)
+    /accept [commit]   accept the species commit the agent asked about, or the one named
+    /tools             show or hide what each tool call returned (also Tab)
+    /generations       the generations this individual has lived in
+    /history           print the earlier conversation that was read from the journal
+    /offers            what waits for your approval before it goes out to the species
+    /approve <commit>  let exactly that commit go out
+    /plain             how to get the plain text client
+    /quit              leave (also Ctrl-D on an empty line, and Ctrl-C)
 
   Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model
   is cancelled, a command that is running is killed with everything it started, and the
   agent waits for what you say next. It is told that you interrupted it. When it is doing
   nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by
-  it.
+  it. While commands are listed under the box, Esc closes the list and interrupts
+  nothing; press it again for the agent.
 
   /accept is your word to the kernel, not to the agent. A mutation from the species
   brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel

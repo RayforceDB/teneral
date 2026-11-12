@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
+import { helpRows, takes, type Command } from '../commands';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
 import { ownerCommand } from '../offer';
 import { accept, interrupt, tell } from '../owner';
@@ -16,9 +17,10 @@ import {
 import { KeyParser, type Key } from './keys';
 import { Transcript, UNBORN, isMutationTool, shortSha, stand, stateWord, unfinished, type Alive, type Entry, type Standing } from './model';
 import { Inline, Lifeline, terminal, type Term } from './screen';
+import { complete, entered, offer, type Typed } from './slash';
 import { clean, type Line, type Span } from './text';
 import { SPIN_MS, glyphs, type Glyphs } from './theme';
-import { contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look } from './view';
+import { contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look, type Offered } from './view';
 
 // The talk client: `./box talk` at a terminal. The owner's lines go out through the owner channel
 // (kernel/owner.ts) and everything shown is read back from the journal, exactly as the plain
@@ -48,23 +50,15 @@ const PENDING_SHOWN = 12;
 const HELP = [
   'Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W delete to the start of the line, to its end, and the word before the cursor.',
   '',
+  'A line that begins with a slash and a word is a command. Type / and the commands are listed under the box, fewer with each letter: Up and Down (or Ctrl-P and Ctrl-N) choose one, Tab completes it, Enter runs it, or completes it when something has to follow, and Esc closes the list. The name is coloured once it is whole; one that is no command is coloured as a mistake, and Enter neither runs nor sends it. To send the agent a line that begins with a slash, begin it with two: //like this arrives as /like this. A path, such as /home/you/notes.txt, is no command and needs none of that.',
+  '',
   'The conversation is ordinary output of your terminal: its scrollbar, PageUp and PageDown, selection, copy and search all work on it. Only the box you type in and the lines around it are redrawn.',
   '',
   'Images: Ctrl+V attaches the image in your clipboard; dragging an image file into the terminal, or pasting its path, attaches that file; so does /image <path>. An attached image is a chip in the input box, and Backspace at the start of the line removes the last one. A message carries at most 4 images of at most 10 MB each (PNG, JPEG, GIF, WebP). They are kept in memory/images/. The agent sees them once its own body knows how; until then it sees one line of text naming each file.',
   '',
-  '  /help          this',
-  '  /image <path>  attach an image file from your machine',
-  '  /stop          interrupt what the agent is doing now (also Esc)',
-  '  /accept [id]   accept the species commit the agent asked you about, or the one named',
-  '  /tools         show or hide what each tool call returned (also Tab)',
-  '  /generations   the generations this individual has lived in',
-  '  /history       print the earlier conversation that was read from the journal',
-  '  /offers        what waits for your approval before it goes out to the species',
-  '  /approve <id>  let exactly that commit go out',
-  '  /plain         how to get the plain text client',
-  '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
+  ...helpRows('screen'),
   '',
-  'Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model is cancelled, a command that is running is killed with everything it started, and the agent waits for what you say next. It is told that you interrupted it. When it is doing nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by it.',
+  'Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model is cancelled, a command that is running is killed with everything it started, and the agent waits for what you say next. It is told that you interrupted it. When it is doing nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by it. While commands are listed under the box, Esc closes the list and interrupts nothing; press it again for the agent.',
   '',
   '/accept is your word to the kernel, not to the agent. A mutation from the species brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel lets none through until you have accepted the species commit it stands on, or a later one. The agent asks you; /accept answers for the commit it asked about, /accept <commit> for another. Then tell the agent to ask for its mutation again.',
   '',
@@ -233,6 +227,10 @@ export class TalkScreen {
   /** Keys pressed while a line that may be a file's path is looked up: they are taken once it is known. */
   private held: Key[] | null = null;
   private readonly images = new Map<string, Attachment | null>();
+  /** The text the owner closed the list of commands on with Esc: it stays closed until the text is another. */
+  private dismissed: string | null = null;
+  /** The command chosen in the list with the arrows, and the word it was chosen for: another word starts from the top. */
+  private pick = { name: '', index: 0 };
   /** What the last frame was made from, to tell whether another is due. */
   private painted = '';
   private dirty = true;
@@ -541,12 +539,54 @@ export class TalkScreen {
   }
 
   private key(key: Key): void {
+    this.press(key);
+    // A list closed with Esc stays closed until the owner's own line is another; looking through the history in between changes nothing.
+    if (this.edit.at === null && this.edit.text !== this.dismissed) this.dismissed = null;
+  }
+
+  /**
+   * The commands offered for what is typed, and which of them is chosen: the one the arrows last
+   * moved to, else the one typed out in full, else the first. Null while there is no list: the
+   * text is no command still being named (see `offer`), it is a line brought back from the
+   * history, or the owner closed the list on this very text.
+   */
+  private offered(): { typed: Typed; matches: Command[]; chosen: number } | null {
+    if (this.held !== null || this.edit.at !== null || this.edit.text === this.dismissed) return null;
+    const o = offer(this.edit.text, this.edit.cursor);
+    if (o === null) return null;
+    const chosen = this.pick.name === o.typed.name ? Math.min(this.pick.index, o.matches.length - 1) : Math.max(0, o.matches.findIndex((c) => c.name === o.typed.name));
+    return { ...o, chosen };
+  }
+
+  private press(key: Key): void {
     if (this.closed) return;
     if (key.kind === 'alive') return this.lifeline.heard();
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
     if (ctrl('c')) return this.close(0);
-    if (key.kind === 'key' && key.name === 'escape' && !key.ctrl && !key.alt && !key.shift) return this.interrupt();
+    const list = this.offered();
+    if (key.kind === 'key' && key.name === 'escape' && !key.ctrl && !key.alt && !key.shift) {
+      // Esc belongs to what is nearest the owner's hands: an open list is closed by it, and only with none open does it reach the agent.
+      if (list === null) return this.interrupt();
+      this.dismissed = this.edit.text;
+      return;
+    }
+    if (list !== null && key.kind === 'key' && !key.alt && !key.shift) {
+      // While the list is open these keys are its own; at any other time they are what they were.
+      const step = key.name === 'up' || ctrl('p') ? -1 : key.name === 'down' || ctrl('n') ? 1 : 0;
+      if (step !== 0) {
+        this.pick = { name: list.typed.name, index: (list.chosen + step + list.matches.length) % list.matches.length };
+        return;
+      }
+      const command = list.matches[list.chosen]!;
+      if (key.name === 'tab' || key.name === 'enter') {
+        // Enter on a name typed out in full is that command, as it always was. On part of a name it is the chosen command at once when nothing follows one, and no more than Tab when something does or may: what follows is the owner's to type or to leave out.
+        const whole = list.typed.name === command.name;
+        if (key.name === 'tab' || !whole) this.edit = { ...this.edit, ...complete(this.edit.text, list.typed, command), at: null };
+        if (key.name === 'enter' && (whole || takes(command) === 'none')) this.submit();
+        return;
+      }
+    }
     if (this.held !== null) {
       this.held.push(key);
       return;
@@ -567,26 +607,29 @@ export class TalkScreen {
   private submit(): void {
     const text = this.edit.text.trim();
     if (text === '' && this.edit.chips.length === 0) return;
-    const command = /^(\/[a-z]+)(?:[ \t]+(.*))?$/.exec(text);
-    if (command && (command[2] === undefined || command[1] === '/image' || command[1] === '/accept' || command[1] === '/approve')) {
+    const line = entered(text);
+    if (line.kind === 'command') {
       this.edit = { ...this.edit, text: '', cursor: 0, at: null };
-      return this.command(command[1]!, (command[2] ?? '').trim());
+      return this.command(line.command.name, line.arg);
     }
+    // What has the shape of a command and is none is not sent as if it were words: it stays in the box, to be put right.
+    if (line.kind === 'refused') return this.sayOnce(line.why);
     // A line that is a file's path and nothing else, as a terminal types it when a file is dragged in: an image is attached, anything else is sent as the words it is.
-    const paths = pathsIn(text);
+    const paths = line.text === text ? pathsIn(text) : null;
     if (paths !== null && paths.length === 1 && (this.clip.there || this.readable(paths[0]!))) {
       this.held = [];
       return this.bring(paths[0]!, text, 'enter');
     }
-    this.send(text);
+    this.send(line.text, text);
   }
 
-  private send(text: string): void {
+  /** Send `text` to the agent. `typed` is what the owner typed for it, where that differs: it is what Up brings back. */
+  private send(text: string, typed = text): void {
     try {
       const message = withMarkers(text, this.edit.chips.map((chip) => chip.path));
       tell(this.o.paths.owner, message);
       this.transcript.say(message);
-      this.edit = sent(this.edit, text);
+      this.edit = sent(this.edit, typed);
     } catch (err) {
       this.say(`That line could not be sent: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -699,6 +742,7 @@ export class TalkScreen {
       case '/approve':
         return this.page(name === '/offers' ? 'waiting for your approval' : 'approval', clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n'));
       default:
+        // A command in the table (kernel/commands.ts) that nothing above carries out.
         this.say(`${name} is not a command here, and was not sent. /help lists them.`);
     }
   }
@@ -865,7 +909,15 @@ export class TalkScreen {
       : s.tool !== null && isMutationTool(s.tool.name) && word.startsWith('running ') ? 'asking for a mutation' : word;
     // What Esc would do now, where it would do anything: between two runs, or while the kernel checks a mutation, there is no turn to stop.
     const stoppable = word === 'waking' || word === 'thinking' || word.startsWith('running ');
-    const esc = this.interrupting !== null ? `interrupting ${g.ellipsis}` : stoppable ? 'esc to interrupt' : '';
+    // While the list of commands is open, Esc closes that and interrupts nothing, so the line does not say it would.
+    const offered = this.offered();
+    let list: Offered | null = null;
+    if (offered !== null) {
+      const chosen = offered.matches[offered.chosen]!;
+      const runs = chosen.name === offered.typed.name || takes(chosen) === 'none';
+      list = { matches: offered.matches, chosen: offered.chosen, keys: ['Tab completes', runs ? 'Enter runs' : 'Enter completes', 'Esc closes', 'Up/Down choose'] };
+    }
+    const esc = this.interrupting !== null ? `interrupting ${g.ellipsis}` : stoppable && list === null ? 'esc to interrupt' : '';
     const activity: Line | null = active
       ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
@@ -898,6 +950,7 @@ export class TalkScreen {
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
+      list,
     }));
   }
 

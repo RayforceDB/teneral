@@ -954,7 +954,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
   const help = s.all();
   expectFrame('help-90x60', help);
   expect(help).toMatch(/ {2}── teneral talk ─+\n {2}Enter sends what you typed/);
-  for (const command of ['/quit', '/generations', '/stop', '/tools', '/image <path>', '/history', '/plain', '/help']) expect(help).toContain(`    ${command}`);
+  for (const command of ['/quit', '/generations', '/stop', '/tools', '/image <path>', '/history', '/plain', '/help', '/accept [commit]', '/offers', '/approve <commit>']) expect(help).toContain(`    ${command}`);
   expect(help).not.toContain('/mouse');
   const flowed = help.replace(/\n {2}/g, ' ');
   expect(flowed).toContain('mutating (it proposed a change to its own body and the kernel is checking it)');
@@ -972,7 +972,9 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
   s.type('/nonsense\r');
   expect(s.all()).toContain('/nonsense is not a command here, and was not sent. /help lists them.');
   expect(sentFiles(s)).toEqual([]);
-  s.type('/teneral/body is where you live\r');
+  // It was left in the box to be put right (see slash-screen.test.ts); here it is cleared instead.
+  expect(typed(s)).toEqual(['› /nonsense']);
+  s.type('\x15/teneral/body is where you live\r');
   expect(sentFiles(s)).toEqual(['/teneral/body is where you live']);
   // A page asked for while a tool runs is printed at once, over the call that is still under way.
   s.journal({ type: 'tool.intent', callId: 'c9', name: 'bash', args: { command: 'sleep 99' } }, 5000);
