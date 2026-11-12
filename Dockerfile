@@ -6,9 +6,10 @@ WORKDIR /teneral
 # For organs (kernel/organs.ts), the release archives of native dependencies the agent adopts: curl,
 # tar and gzip to fetch one and look into it, and a C toolchain to build such a dependency from its
 # source when the agent works on a patch for it: clang with its sanitizer runtimes, and make.
+# openssh-client for ssh-keygen alone: the individual's signing key and its signatures (kernel/offerkey.ts).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates procps \
-    curl tar gzip clang libclang-rt-dev libc6-dev make \
+    curl tar gzip clang libclang-rt-dev libc6-dev make openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 # Run as the owner's uid, so files written to the mounted repo stay theirs.

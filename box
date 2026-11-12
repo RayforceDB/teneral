@@ -22,6 +22,10 @@ usage: ./box <command>
                   --list shows the generations it has lived in. A running agent is stopped
                   for it and started again
   logs            follow what the kernel and the agent print
+  offer <command> what the agent offers to the species: `offer list` shows what was checked and
+                  what waits for you, `offer approve <commit>` lets exactly that commit go out,
+                  `offer token` stores the GitHub token publishing needs, `offer key` prints
+                  this individual's public signing key. `offer help` lists the rest
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
 
@@ -521,6 +525,14 @@ case "$command" in
     if [ -n "$(state)" ]; then docker logs --tail 100 "$name" || true; fi
     say_not_running
     exit 1
+    ;;
+
+  offer)
+    # The kernel's own command for offers (kernel/offer.ts), beside the agent. `approve` and
+    # `token` ask at the terminal and refuse without one; the rest only read and print.
+    prepare
+    exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} \
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral bun kernel/offer.ts "$@"
     ;;
 
   down)
