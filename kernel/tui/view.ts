@@ -1,7 +1,9 @@
-import { layout, type Edit } from './editor';
+import { usage, type Command } from '../commands';
+import { placed, type Edit } from './editor';
 import { describe, type Attachment } from './images';
 import { markdown } from './markdown';
 import type { Entry } from './model';
+import { mark, windowStart } from './slash';
 import { clip, detab, fit, lineWidth, width, wrap, type Line, type Span } from './text';
 import type { Glyphs, Style } from './theme';
 
@@ -17,6 +19,8 @@ const TOOL_WIDTH = 100;
 /** Rows of a tool's output shown under it, and of a kernel notice's output. */
 const OUTPUT_ROWS = 6;
 const NOTICE_ROWS = 14;
+/** Commands offered at once under the input box; of more, the ones around the chosen one. */
+const LIST_ROWS = 6;
 
 export interface Look {
   g: Glyphs;
@@ -265,6 +269,17 @@ export interface Live {
   context: string;
   /** Under the footer's left side: what is attached, or what is being waited for. May be empty. */
   hint: string;
+  /** The commands offered for what is being typed, while they are: under the box, where the footer otherwise is. */
+  list?: Offered | null;
+}
+
+export interface Offered {
+  /** At least one, in the order shown. */
+  matches: readonly Command[];
+  /** Which of them the keys act on. */
+  chosen: number;
+  /** What the keys do now, the most needed first. */
+  keys: string[];
 }
 
 /** `left` and `right` at the two ends of a row; when both do not fit, the right gives way. */
@@ -274,24 +289,60 @@ function ends(left: Line, right: Line, max: number): Line {
   return [...left, { text: ' '.repeat(room) }, ...right];
 }
 
-/** One row of the input with the owner's cursor on it: the cell at `col` with its colours swapped. */
-function withCursor(text: string, col: number): Line {
-  let at = 0;
-  let w = 0;
-  const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-  for (const { segment, index } of seg.segment(text)) {
-    if (w >= col) break;
-    at = index + segment.length;
-    w += width(segment);
+/**
+ * One row of the input. With `col`, the owner's cursor is on it: the cell there has its colours
+ * swapped. With `word`, the part of the row from `from` to `to` is a command's name, in `style`.
+ */
+function inputRow(text: string, col: number | null, word: { from: number; to: number; style: Style } | null): Line {
+  let at = -1;
+  let under = '';
+  if (col !== null) {
+    at = 0;
+    let w = 0;
+    const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    for (const { segment, index } of seg.segment(text)) {
+      if (w >= col) break;
+      at = index + segment.length;
+      w += width(segment);
+    }
+    under = seg.segment(text.slice(at))[Symbol.iterator]().next().value?.segment ?? '';
   }
-  const under = seg.segment(text.slice(at))[Symbol.iterator]().next().value?.segment ?? '';
-  return [{ text: text.slice(0, at) }, { text: under === '' ? ' ' : under, style: { inverse: true } }, { text: text.slice(at + under.length) }];
+  const from = word === null ? 0 : Math.max(0, Math.min(text.length, word.from));
+  const to = word === null ? 0 : Math.max(from, Math.min(text.length, word.to));
+  const cuts = [...new Set([0, from, to, ...(col !== null ? [at, at + under.length] : []), text.length])].sort((a, b) => a - b);
+  const row: Line = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const [a, b] = [cuts[i]!, cuts[i + 1]!];
+    const style: Style = { ...(a >= from && b <= to ? word!.style : {}), ...(col !== null && under !== '' && a === at ? { inverse: true } : {}) };
+    row.push(Object.keys(style).length > 0 ? { text: text.slice(a, b), style } : { text: text.slice(a, b) });
+  }
+  if (col !== null && under === '') row.push({ text: ' ', style: { inverse: true } });
+  return row;
+}
+
+/** The commands offered, one to a row: the chosen one marked, each with what may follow it and what it does. At most `rows` of them, the ones around the chosen. */
+function offeredRows(list: Offered, max: number, rows: number, g: Glyphs): Line[] {
+  const wide = Math.max(...list.matches.map((c) => width(usage(c))));
+  const start = windowStart(list.matches.length, list.chosen, rows);
+  return list.matches.slice(start, start + rows).map((c, i): Line => {
+    const on = start + i === list.chosen;
+    return clip([
+      { text: on ? `  ${g.pointer} ` : '    ', style: { fg: 'accent', bold: true } },
+      { text: c.name, style: on ? { fg: 'accent', bold: true } : undefined },
+      { text: c.hint === '' ? '' : ` ${c.hint}`, style: on ? { fg: 'accent' } : DIM },
+      { text: ' '.repeat(wide - width(usage(c)) + 2) },
+      { text: c.about, style: on ? undefined : DIM },
+    ], max, { text: g.ellipsis, style: DIM });
+  });
 }
 
 /**
  * The live region: what is under way, the input box with its attachments, and the footer. It
  * never takes more than half of the screen's rows: a small screen gives up the footer's second
  * row, rows of what is under way, the spacing, and at last the frame of the box.
+ *
+ * While commands are offered they stand under the box, and under them, in place of the footer,
+ * one row saying what the keys do. A small screen shows fewer of them, down to the chosen one.
  *
  * Half, because of what a terminal does when its window is made narrower: most wrap every row
  * that no longer fits in two, the rows of this region with them. As long as the region, so
@@ -305,10 +356,11 @@ export function liveRows(v: Live): Line[] {
   const room = Math.max(3, Math.min(v.rows - 1, Math.floor(v.rows / 2)));
   const inner = Math.max(4, max - 4);
   const chips = chipRows(v.edit.chips.map((image, i) => chip(i + 1, image, image.path, g)), inner, 0);
-  const text = layout(v.edit.text, v.edit.cursor, Math.max(2, inner - 2), Math.max(1, Math.min(8, room - 5 - chips.length)));
+  const text = placed(v.edit.text, v.edit.cursor, Math.max(2, inner - 2), Math.max(1, Math.min(8, room - 5 - chips.length)));
+  const command = mark(v.edit.text);
   const typed = text.rows.map((row, i): Line => [
     { text: i === 0 && text.above === 0 ? `${g.prompt} ` : '  ', style: { fg: 'accent', bold: true } },
-    ...(i === text.row ? withCursor(row, text.col) : [{ text: row }]),
+    ...inputRow(row, i === text.row ? text.col : null, command === null ? null : { ...command, from: command.from - text.starts[i]!, to: command.to - text.starts[i]! }),
   ]);
   const box = panel([...chips, ...typed], max, g, FAINT);
   const bare = panel(typed, max, g, FAINT);
@@ -317,8 +369,17 @@ export function liveRows(v: Live): Line[] {
   let about = v.about.filter((part) => part !== '');
   while (about.length > 1 && width(about.join(sep)) + 1 > max) about = about.slice(0, -1);
   const left: Line = [{ text: ` ${about.join(sep)}`, style: DIM }];
+  const list = v.list ?? null;
+  let listed = list === null ? 0 : Math.min(list.matches.length, LIST_ROWS);
+  /** Under the commands: the keys, as many as fit, and at the right which of how many is chosen, when not all are shown. */
+  const keys = (): Line => {
+    let parts = list!.keys;
+    while (parts.length > 1 && width(parts.join(sep)) + 1 > max) parts = parts.slice(0, -1);
+    return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
+  };
   const footer: Line[] = [ends(left, v.tip === '' ? [] : [{ text: v.tip, style: FAINT }], max)];
-  if (v.hint !== '' || v.context !== '') footer.push(ends([{ text: v.hint === '' ? '' : ` ${v.hint}`, style: BRAND }], v.context === '' ? [] : [{ text: v.context, style: DIM }], max));
+  if (list !== null) footer.length = 0;
+  else if (v.hint !== '' || v.context !== '') footer.push(ends([{ text: v.hint === '' ? '' : ` ${v.hint}`, style: BRAND }], v.context === '' ? [] : [{ text: v.context, style: DIM }], max));
 
   // What a small screen gives up, in this order, until the region fits.
   let pending = v.pending;
@@ -334,14 +395,16 @@ export function liveRows(v: Live): Line[] {
     ...(pending.length > 0 && blank ? [[]] : []),
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
-    ...(first ? footer.slice(0, second ? 2 : 1) : []),
+    ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer.slice(0, second ? 2 : 1) : []),
   ];
   const fits = (): boolean => build().length <= room;
   if (!fits()) second = false;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   if (!fits()) blank = false;
+  while (!fits() && listed > 3) listed -= 1;
   if (!fits()) first = false;
   if (!fits()) activity = null;
+  while (!fits() && listed > 1) listed -= 1;
   if (!fits()) chipped = false;
   if (!fits()) framed = false;
   return build();

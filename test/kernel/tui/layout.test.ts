@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
+import { COMMANDS } from '../../../kernel/commands';
 import { EMPTY, type Edit } from '../../../kernel/tui/editor';
 import type { Attachment } from '../../../kernel/tui/images';
 import { lineWidth, plain, type Line } from '../../../kernel/tui/text';
 import { glyphs } from '../../../kernel/tui/theme';
-import { chip, contextUse, duration, elapsed, entryRows, liveRows, panel, shortDir, status, tokens, welcome, type Live, type Look } from '../../../kernel/tui/view';
+import { chip, contextUse, duration, elapsed, entryRows, liveRows, panel, shortDir, status, tokens, welcome, type Live, type Look, type Offered } from '../../../kernel/tui/view';
 
 // --- what the talk client shows, as rows ---
 
@@ -103,6 +104,118 @@ test('the live region never takes more than half the rows of the screen, and no 
   expect(small.some((row) => row.includes('tool'))).toBe(false);
   // At its smallest it is the box alone, around one row.
   expect(text(liveRows(live(30, 4, busy))).map((row) => row[0])).toEqual(['╭', '│', '╰']);
+});
+
+// --- commands, offered and coloured ---
+
+const KEYS = ['Tab completes', 'Enter runs', 'Esc closes', 'Up/Down choose'];
+const offered = (prefix: string, chosen = 0): Offered => ({ matches: COMMANDS.filter((c) => c.name.startsWith(prefix)), chosen, keys: KEYS });
+const typing = (typed: string, cursor = typed.length): Edit => ({ ...EMPTY, text: typed, cursor });
+
+test('the commands offered stand under the box, the chosen one marked, each with what may follow it and what it does; where the footer was, what the keys do', () => {
+  expect(text(liveRows(live(80, 24, { edit: typing('/h'), list: offered('/h') })))).toEqual([
+    '',
+    `╭${'─'.repeat(77)}╮`,
+    `│ › /h${' '.repeat(72)}│`,
+    `╰${'─'.repeat(77)}╯`,
+    '  ▸ /help     the keys and commands',
+    '    /history  print the earlier conversation that was read from the journal',
+    ' Tab completes · Enter runs · Esc closes · Up/Down choose',
+  ]);
+  // The footer, with its tip, the context and what is attached, is back when nothing is offered.
+  expect(text(liveRows(live(80, 24, { edit: typing('/h'), list: null }))).at(-1)).toBe(`${' '.repeat(55)}context 8% (71.9k/1.05M)`);
+  // What is under way and what the agent is doing stay over the box.
+  const busy = text(liveRows(live(80, 30, { edit: typing('/a'), list: offered('/a', 1), pending: [[{ text: '  ▪ bash  sleep 9' }]], activity: [{ text: '⠹ The agent is running bash' }] })));
+  expect(busy).toEqual([
+    '',
+    '  ▪ bash  sleep 9',
+    '',
+    '⠹ The agent is running bash',
+    `╭${'─'.repeat(77)}╮`,
+    `│ › /a${' '.repeat(72)}│`,
+    `╰${'─'.repeat(77)}╯`,
+    '    /accept [commit]   accept the species commit the agent asked about, or the…',
+    '  ▸ /approve <commit>  let exactly that commit go out',
+    ' Tab completes · Enter runs · Esc closes · Up/Down choose',
+  ]);
+  // The chosen row is the owner's colour and heavy; the others are set back.
+  const rows = liveRows(live(80, 24, { edit: typing('/h'), list: offered('/h', 1) }));
+  expect(rows[4]!.find((span) => span.text === '/help')!.style).toBeUndefined();
+  expect(rows[5]!.find((span) => span.text === '/history')!.style).toEqual({ fg: 'accent', bold: true });
+  expect(plain(rows[5]!).startsWith('  ▸ /history')).toBe(true);
+  // Without UTF-8 the mark is a plain one.
+  expect(text(liveRows(live(80, 24, { g: glyphs(false), edit: typing('/h'), list: offered('/h') })))[4]).toBe('  > /help     the keys and commands');
+});
+
+test('of more commands than six, the six around the chosen one are shown, and the row under them says which of how many it is', () => {
+  const at = (chosen: number, cols = 80, rows = 30): string[] => text(liveRows(live(cols, rows, { edit: typing('/'), list: offered('/', chosen) }))).slice(4);
+  const shown = (rows: string[]): string[] => rows.slice(0, -1).map((row) => /\/[a-z]+/.exec(row)![0]);
+  expect(shown(at(0))).toEqual(['/help', '/image', '/stop', '/accept', '/tools', '/generations']);
+  expect(at(0).at(-1)).toBe(` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 11`);
+  expect(at(0)[0]!.startsWith('  ▸ /help ')).toBe(true);
+  expect(shown(at(5))).toEqual(['/stop', '/accept', '/tools', '/generations', '/history', '/offers']);
+  expect(at(5)[3]!.startsWith('  ▸ /generations ')).toBe(true);
+  expect(shown(at(10))).toEqual(['/generations', '/history', '/offers', '/approve', '/plain', '/quit']);
+  expect(at(10)[5]!.startsWith('  ▸ /quit ')).toBe(true);
+  expect(at(10).at(-1)).toMatch(/ {3,}11 of 11$/);
+  for (let chosen = 0; chosen < COMMANDS.length; chosen++) expect(at(chosen).filter((row) => row.startsWith('  ▸ '))).toEqual([expect.stringContaining(COMMANDS[chosen]!.name)]);
+});
+
+test('with commands offered the live region still takes no more than half the screen and never the last column: fewer are shown, down to the chosen one, at 40, 80 and 120 columns and smaller', () => {
+  const busy: Partial<Live> = {
+    pending: Array.from({ length: 30 }, (_, i): Line => [{ text: `  ▪ tool ${i}` }]),
+    activity: [{ text: '⠹ thinking' }],
+  };
+  for (const [cols, rows] of [[200, 60], [120, 40], [120, 12], [80, 24], [80, 10], [60, 16], [40, 24], [40, 10], [40, 6], [30, 4], [20, 3]] as const) {
+    for (const chosen of [0, 5, 10]) {
+      for (const more of [{}, busy, { edit: { ...typing('/'), chips: [PNG, PNG] } }]) {
+        const out = liveRows(live(cols, rows, { edit: typing('/'), list: offered('/', chosen), ...more }));
+        expect(out.length).toBeLessThanOrEqual(Math.max(3, Math.floor(rows / 2)));
+        for (const row of out) expect(lineWidth(row)).toBeLessThanOrEqual(cols - 1);
+        // The row typed on is there, and so is the chosen command, whatever else gave way.
+        expect(out.some((row) => row.some((span) => span.style?.inverse))).toBe(true);
+        expect(text(out).filter((row) => row.startsWith('  ▸ /'))).toEqual([expect.stringContaining(COMMANDS[chosen]!.name)]);
+      }
+    }
+  }
+  // 24 rows: all six, and the keys. 10 rows: the box, two commands. 6 rows: the row typed on and one command.
+  expect(text(liveRows(live(40, 24, { edit: typing('/'), list: offered('/') })))).toEqual([
+    '',
+    `╭${'─'.repeat(37)}╮`,
+    `│ › /${' '.repeat(33)}│`,
+    `╰${'─'.repeat(37)}╯`,
+    '  ▸ /help              the keys and co…',
+    '    /image <path>      attach an image…',
+    '    /stop              interrupt what …',
+    '    /accept [commit]   accept the spec…',
+    '    /tools             show or hide wh…',
+    '    /generations       the generations…',
+    ' Tab completes · Enter runs     1 of 11',
+  ]);
+  expect(text(liveRows(live(40, 10, { edit: typing('/'), list: offered('/', 4) }))).map((row) => row.slice(0, 12))).toEqual(['╭───────────', '│ › /       ', '╰───────────', '    /accept ', '  ▸ /tools  ']);
+  expect(text(liveRows(live(40, 6, { edit: typing('/'), list: offered('/', 4) })))).toEqual(['› /', '  ▸ /tools             show or hide wh…']);
+});
+
+test('in the box a command\'s name is drawn in the owner\'s colour, a name still being typed set back, a mistake as a warning; what follows it and every other text stay plain', () => {
+  /** The spans of the row typed on that carry a colour, without the prompt mark. */
+  const coloured = (edit: Edit, cols = 80): [string, string][] => liveRows(live(cols, 24, { edit })).filter((row) => plain(row).startsWith('│'))
+    .flatMap((row) => row.slice(3, -2)).filter((span) => span.style?.fg !== undefined).map((span) => [span.text, span.style!.fg!]);
+  expect(coloured(typing('/help'))).toEqual([['/help', 'accent']]);
+  expect(coloured(typing('/image ~/Pictures/plan.png'))).toEqual([['/image', 'accent']]);
+  expect(coloured(typing('/image ~/写真/日本語.png'))).toEqual([['/image', 'accent']]);
+  expect(coloured(typing('  /stop'))).toEqual([['/stop', 'accent']]);
+  expect(coloured(typing('/he'))).toEqual([['/he', 'dim']]);
+  expect(coloured(typing('/hlep'))).toEqual([['/hlep', 'warn']]);
+  expect(coloured(typing('/hlep me out'))).toEqual([['/hlep', 'warn']]);
+  expect(coloured(typing('/stop doing that'))).toEqual([['/stop', 'warn']]);
+  for (const words of ['hello', 'what does /help do?', '/home/owner/file.png', '/teneral/body is where you live', '//help', '/help\nplease', '日本語 /help', '']) expect(coloured(typing(words))).toEqual([]);
+  // The cursor inside the name: that cell is swapped and keeps the name's colour, and the name is still whole.
+  const row = liveRows(live(80, 24, { edit: typing('/help me', 2) })).find((r) => plain(r).startsWith('│'))!;
+  expect(row.slice(3, -2).map((span) => [span.text, span.style ?? null])).toEqual([
+    ['/h', { fg: 'warn' }], ['e', { fg: 'warn', inverse: true }], ['lp', { fg: 'warn' }], [' me', null], [' '.repeat(65), null],
+  ]);
+  // A name too long for a row of a very narrow box is coloured on each row it runs over.
+  expect(coloured(typing('/generations'), 14)).toEqual([['/genera', 'accent'], ['tions', 'accent']]);
 });
 
 test('the welcome panel: the mark, who is being talked to, and the facts as an aligned table in a round frame', () => {
