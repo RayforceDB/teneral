@@ -79,18 +79,26 @@
   .meta { margin: 26px 0 0; font-size: 14px; color: var(--soft); }
   .meta a { color: var(--ink); font-weight: 600; }
 
-  .stack { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-  .stack li { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 13px 18px 14px; }
-  .stack h3 { margin: 0; font-size: 16.5px; letter-spacing: -.01em; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-  .stack h3 code { background: none; padding: 0; font-size: 12.5px; font-weight: 400; color: var(--accent); }
-  .stack p { margin: 3px 0 0; font-size: 14.5px; line-height: 1.5; color: var(--soft); }
-  .stack li.base { background: var(--ink); border-color: var(--ink); color: var(--paper); padding: 18px 18px 19px; margin-top: 4px; }
-  .stack li.base h3 { font-size: 19px; }
-  .stack li.base h3 code, .stack li.base p { color: inherit; opacity: .72; }
-  .stack li.base a { text-decoration: none; }
-  .stack li.base a:hover { color: inherit; text-decoration: underline; }
-  .stack .cap { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--soft); margin: 0 0 4px 4px; border: 0; background: none; padding: 0; }
-
+  .modelwrap { display: block; text-decoration: none; }
+  .model { display: block; width: 100%; height: auto; max-width: 520px; margin: 0 auto; overflow: visible; }
+  .model polygon { stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+  .model .t { fill: var(--card); } .model .l { fill: var(--code); } .model .r { fill: var(--line); }
+  .model .base polygon { stroke: var(--ink); }
+  .model .base .t { fill: var(--ink); } .model .base .l { fill: var(--ink); fill-opacity: .86; } .model .base .r { fill: var(--ink); fill-opacity: .7; }
+  .model .base .rule { stroke: var(--paper); opacity: .28; }
+  .model .rule { stroke: var(--ink); stroke-width: 1; opacity: .22; fill: none; }
+  .model .body polygon { stroke: var(--accent); stroke-dasharray: 5 5; stroke-width: 1.7; }
+  .model .soul polygon { stroke: var(--accent); } .model .soul .t { fill: var(--accent); } .model .soul .l, .model .soul .r { fill: var(--accent); fill-opacity: .6; }
+  .model .axis { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 6; opacity: .35; }
+  .model .lead { stroke: var(--soft); stroke-width: 1; opacity: .6; } .model .dot { fill: var(--ink); }
+  .model text { font-family: inherit; fill: var(--soft); font-size: 15px; }
+  .model text.nm { fill: var(--ink); font-size: 18.5px; font-weight: 650; letter-spacing: -.01em; }
+  .model text.nm.big { font-size: 21px; }
+  .modelwrap:hover text.nm.big { fill: var(--accent); }
+  @keyframes hover { from { transform: translateY(0); } to { transform: translateY(-9px); } }
+  .model .float { animation: hover 3.6s ease-in-out infinite alternate; }
+  .model .float.two { animation-duration: 2.9s; }
+  @media (prefers-reduced-motion: reduce) { .model .float { animation: none; } }
   section { padding: 68px 0; border-top: 1px solid var(--line); }
   .eyebrow { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 12px; }
   h2 { font-size: clamp(25px, 3.2vw, 36px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 18px; font-weight: 650; max-width: 24ch; text-wrap: balance; }
@@ -159,29 +167,7 @@
       <p class="meta">Open source under MIT · TypeScript on Bun · built on <a href="https://rayforcedb.com/">RayforceDB</a></p>
     </div>
 
-    <ul class="stack" aria-label="What an individual is made of, from what changes most to what holds still">
-      <li class="cap">One individual, top to bottom</li>
-      <li>
-        <h3>Soul <code>soul/</code></h3>
-        <p>Its name, its character, who it lives alongside. Written by itself, never shared.</p>
-      </li>
-      <li>
-        <h3>Body <code>body/</code></h3>
-        <p>How it senses, thinks and acts. Its own to rewrite.</p>
-      </li>
-      <li>
-        <h3>Kernel <code>kernel/</code></h3>
-        <p>Judges every new body and restores the last one that stood. No mutation can change it.</p>
-      </li>
-      <li>
-        <h3>Journal <code>memory/journal.jsonl</code></h3>
-        <p>Everything that happened, append-only, each line stamped with the body that wrote it.</p>
-      </li>
-      <li class="base">
-        <h3><a href="#foundation">RayforceDB</a> <code>the foundation</code></h3>
-        <p>The columnar engine under its memory: what it knows, what it recalls, how it measures itself.</p>
-      </li>
-    </ul>
+    <a class="modelwrap" href="#foundation"><svg class="model" viewBox="0 0 520 640" role="img" aria-label="One individual as a stack: RayforceDB as the foundation, then the journal, the kernel, the body, and the soul on top."><path class="axis" d="M158 60V510"/><g class="slab base"><polygon class="l" points="8,500 158,575 158,615 8,540"/><polygon class="r" points="308,500 158,575 158,615 308,540"/><polygon class="t" points="158,425 308,500 158,575 8,500"/><path class="rule" d="M26.8 490.6L176.8 565.6M45.5 481.2L195.5 556.2M64.2 471.9L214.2 546.9M83.0 462.5L233.0 537.5M101.8 453.1L251.8 528.1M120.5 443.8L270.5 518.8M139.2 434.4L289.2 509.4"/></g><g class="slab journal"><polygon class="l" points="30,392 158,456 158,466 30,402"/><polygon class="r" points="286,392 158,456 158,466 286,402"/><polygon class="t" points="158,328 286,392 158,456 30,392"/><path class="rule" d="M44.2 399.1L172.2 335.1M58.4 406.2L186.4 342.2M72.7 413.3L200.7 349.3M86.9 420.4L214.9 356.4M101.1 427.6L229.1 363.6M115.3 434.7L243.3 370.7M129.6 441.8L257.6 377.8M143.8 448.9L271.8 384.9"/></g><g class="slab kernel"><polygon class="l" points="30,290 158,354 158,378 30,314"/><polygon class="r" points="286,290 158,354 158,378 286,314"/><polygon class="t" points="158,226 286,290 158,354 30,290"/></g><g class="float"><g class="slab body"><polygon class="l" points="30,172 158,236 158,260 30,196"/><polygon class="r" points="286,172 158,236 158,260 286,196"/><polygon class="t" points="158,108 286,172 158,236 30,172"/></g></g><g class="float two"><g class="slab soul"><polygon class="l" points="114,56 158,78 158,87 114,65"/><polygon class="r" points="202,56 158,78 158,87 202,65"/><polygon class="t" points="158,34 202,56 158,78 114,56"/></g></g><path class="lead" d="M210 56H322"/><circle class="dot" cx="210" cy="56" r="2.6"/><text class="nm " x="332" y="48">Soul</text><text class="ds" x="332" y="69">Who it is. Written by</text><text class="ds" x="332" y="88">itself, never shared.</text><path class="lead" d="M294 182H322"/><circle class="dot" cx="294" cy="182" r="2.6"/><text class="nm " x="332" y="174">Body</text><text class="ds" x="332" y="195">Senses, thinks, acts.</text><text class="ds" x="332" y="214">Its own to rewrite.</text><path class="lead" d="M294 302H322"/><circle class="dot" cx="294" cy="302" r="2.6"/><text class="nm " x="332" y="294">Kernel</text><text class="ds" x="332" y="315">Judges every new body.</text><text class="ds" x="332" y="334">No mutation changes it.</text><path class="lead" d="M294 397H322"/><circle class="dot" cx="294" cy="397" r="2.6"/><text class="nm " x="332" y="389">Journal</text><text class="ds" x="332" y="410">Everything that</text><text class="ds" x="332" y="429">happened, append-only.</text><path class="lead" d="M316 520H322"/><circle class="dot" cx="316" cy="520" r="2.6"/><text class="nm big" x="332" y="512">RayforceDB</text><text class="ds" x="332" y="533">The foundation: memory,</text><text class="ds" x="332" y="552">recall and measurement.</text></svg></a>
   </div>
 
   <section id="what">
