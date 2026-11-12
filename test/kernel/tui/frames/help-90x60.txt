@@ -49,6 +49,7 @@
     /help          this
     /image <path>  attach an image file from your machine
     /stop          interrupt what the agent is doing now (also Esc)
+    /accept [id]   accept the species commit the agent asked you about, or the one named
     /tools         show or hide what each tool call returned (also Tab)
     /generations   the generations this individual has lived in
     /history       print the earlier conversation that was read from the journal
@@ -60,6 +61,12 @@
   agent waits for what you say next. It is told that you interrupted it. When it is doing
   nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by
   it.
+
+  /accept is your word to the kernel, not to the agent. A mutation from the species
+  brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel
+  lets none through until you have accepted the species commit it stands on, or a later
+  one. The agent asks you; /accept answers for the commit it asked about, /accept
+  <commit> for another. Then tell the agent to ask for its mutation again.
 
   Leaving ends this client only. Nothing else here stops the agent or changes it.
 

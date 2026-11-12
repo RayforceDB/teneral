@@ -326,6 +326,9 @@ export class Transcript {
         // The owner stopped the turn, from this terminal or another.
         this.push({ kind: 'quiet', label: 'interrupted by you', text: '' });
         return;
+      case 'species.accepted':
+        this.push({ kind: 'quiet', label: `species commit ${shortSha(f.commit)} accepted by you`, text: '' });
+        return;
       case 'generation.started':
         // A new process: whatever was running in the last one will never report.
         for (const { entry } of this.tools.values()) Object.assign(entry, { status: 'cut short', rev: entry.rev + 1 });

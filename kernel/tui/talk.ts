@@ -2,8 +2,9 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
-import { interrupt, tell } from '../owner';
+import { accept, interrupt, tell } from '../owner';
 import * as providers from '../providers';
+import { chooseAccept } from '../species';
 import { holder, readState, type Paths } from '../supervisor';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
@@ -53,6 +54,7 @@ const HELP = [
   '  /help          this',
   '  /image <path>  attach an image file from your machine',
   '  /stop          interrupt what the agent is doing now (also Esc)',
+  '  /accept [id]   accept the species commit the agent asked you about, or the one named',
   '  /tools         show or hide what each tool call returned (also Tab)',
   '  /generations   the generations this individual has lived in',
   '  /history       print the earlier conversation that was read from the journal',
@@ -60,6 +62,8 @@ const HELP = [
   '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
   '',
   'Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model is cancelled, a command that is running is killed with everything it started, and the agent waits for what you say next. It is told that you interrupted it. When it is doing nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by it.',
+  '',
+  '/accept is your word to the kernel, not to the agent. A mutation from the species brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel lets none through until you have accepted the species commit it stands on, or a later one. The agent asks you; /accept answers for the commit it asked about, /accept <commit> for another. Then tell the agent to ask for its mutation again.',
   '',
   'Leaving ends this client only. Nothing else here stops the agent or changes it.',
   '',
@@ -181,6 +185,8 @@ export interface TalkScreenOptions {
   env: Record<string, string | undefined>;
   /** Said once, on attaching: for instance whose plan the agent's requests use. */
   banner?: string | null;
+  /** Said with it, when the species has other cage files than this install (kernel/species.ts). */
+  cage?: string | null;
   now?: () => number;
   /** Whether the kernel and the body are there. Default: what the lock and the child record under `.teneral/` say. */
   alive?: () => Alive;
@@ -412,6 +418,7 @@ export class TalkScreen {
       const parts = clean(this.o.banner).split(/(https?:\/\/\S+)/);
       lines.push(status(parts.filter((part) => part !== '').map((text): Span => (/^https?:\/\//.test(text) ? { text, style: { underline: true } } : { text })), [], max, g));
     }
+    if (this.o.cage) lines.push(status([{ text: clean(this.o.cage), style: { fg: 'warn' } }], [], max, g, { fg: 'warn' }));
     const tool = this.clip.tool();
     const images = !this.clip.there ? 'Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./box talk.'
       : tool === null || tool.startsWith('none') ? `Images: drag a file in, or /image <path>. Ctrl+V needs ${tool === 'none wayland' ? 'wl-clipboard' : tool === 'none x11' ? 'xclip' : 'a display'} on your machine.`
@@ -558,7 +565,7 @@ export class TalkScreen {
     const text = this.edit.text.trim();
     if (text === '' && this.edit.chips.length === 0) return;
     const command = /^(\/[a-z]+)(?:[ \t]+(.*))?$/.exec(text);
-    if (command && (command[2] === undefined || command[1] === '/image')) {
+    if (command && (command[2] === undefined || command[1] === '/image' || command[1] === '/accept')) {
       this.edit = { ...this.edit, text: '', cursor: 0, at: null };
       return this.command(command[1]!, (command[2] ?? '').trim());
     }
@@ -638,6 +645,17 @@ export class TalkScreen {
         return this.toggleTools();
       case '/stop':
         return this.interrupt();
+      case '/accept': {
+        // The owner's word to the kernel, as a file of its own kind in the owner's channel (kernel/owner.ts). The agent is not told by it.
+        try {
+          const chosen = chooseAccept(this.o.paths.root, arg);
+          if ('why' in chosen) return this.say(`Not accepted: ${chosen.why}.`);
+          accept(this.o.paths.owner, chosen.commit);
+          return this.say(`Accepted species commit ${shortSha(chosen.commit)}${chosen.subject === '' ? '' : `, "${clean(chosen.subject).slice(0, 80)}"`}, and every one before it. The kernel takes that in when ${this.who} next asks for its mutation: tell it to ask again.`);
+        } catch (err) {
+          return this.say(`That could not be accepted: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       case '/image': {
         if (arg === '') return this.say('/image <path> attaches an image file from your machine: /image ~/Pictures/plan.png');
         const paths = pathsIn(arg) ?? (arg.startsWith('/') || arg.startsWith('~/') ? [arg] : null);
@@ -899,10 +917,10 @@ export class TalkScreen {
  * The talk client at the process's own terminal, until the owner leaves. However it ends (a key,
  * a signal, the terminal closing, an error in this program) the terminal is given back first.
  */
-export async function runTalkScreen(p: Paths, env: Record<string, string | undefined>, banner: string | null): Promise<number> {
+export async function runTalkScreen(p: Paths, env: Record<string, string | undefined>, banner: string | null, cage: string | null = null): Promise<number> {
   const filled = { ...env };
   for (const key of ['TENERAL_MODEL', 'TENERAL_PROVIDER', 'TENERAL_HEARTBEAT_MINUTES'] as const) filled[key] ??= envLine(p.root, key);
-  const app = new TalkScreen({ term: terminal(env), paths: p, env: filled, banner });
+  const app = new TalkScreen({ term: terminal(env), paths: p, env: filled, banner, cage });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => app.close(0));
   const failed = (err: unknown) => {
     app.close(1);

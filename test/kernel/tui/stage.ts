@@ -42,7 +42,7 @@ export interface Stage {
   say: (text: string, at?: number) => void;
 }
 
-export function stage(cols: number, rows: number, o: { caps?: Partial<Caps>; env?: Record<string, string>; banner?: string; open?: boolean; lifelineMs?: number; reflow?: boolean; helper?: string; name?: string } = {}): Stage {
+export function stage(cols: number, rows: number, o: { caps?: Partial<Caps>; env?: Record<string, string>; banner?: string; cage?: string; open?: boolean; lifelineMs?: number; reflow?: boolean; helper?: string; name?: string } = {}): Stage {
   const root = mkdtempSync(join(tmpdir(), 'teneral-screen-'));
   const p = paths(root);
   mkdirSync(dirname(p.journal), { recursive: true });
@@ -64,7 +64,7 @@ export function stage(cols: number, rows: number, o: { caps?: Partial<Caps>; env
   let serial = 0;
   mkdirSync(join(root, '.teneral'), { recursive: true });
   writeFileSync(join(root, '.teneral', 'id'), '5e1f0a9c-1111-4222-8333-444455556666\n');
-  const app = new TalkScreen({ term, paths: p, env: { TENERAL_MODEL: 'gpt-6.1-sol', TENERAL_HOST_DIR: '/home/owner/work/teneral', ...(o.helper !== undefined ? { TENERAL_CLIP: 'stage' } : {}), ...o.env }, banner: o.banner ?? null, now: () => T0 + clock.at, alive: () => alive, lifelineMs: o.lifelineMs });
+  const app = new TalkScreen({ term, paths: p, env: { TENERAL_MODEL: 'gpt-6.1-sol', TENERAL_HOST_DIR: '/home/owner/work/teneral', ...(o.helper !== undefined ? { TENERAL_CLIP: 'stage' } : {}), ...o.env }, banner: o.banner ?? null, cage: o.cage ?? null, now: () => T0 + clock.at, alive: () => alive, lifelineMs: o.lifelineMs });
   // The client attaches when the story first looks at it, so that what a test journals before that is the history it finds.
   let opened = o.open === false;
   const attach = () => {

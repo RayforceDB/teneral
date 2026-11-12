@@ -1,15 +1,17 @@
 import { closeSync, openSync, readSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname } from 'node:path';
 import { journalSize, readEventsFrom, type JournalEvent } from './journal';
-import { interrupt, tell } from './owner';
+import { accept, interrupt, tell } from './owner';
 import { planNotice } from './providers';
-import { paths } from './supervisor';
+import { cageNotice, chooseAccept } from './species';
+import { installRoot, paths } from './supervisor';
 
 // The owner's terminal: `./box talk` runs this inside the agent's container. What is typed goes to
 // the agent as files in the owner directory (kernel/owner.ts); what the agent says is read back
 // from the journal. Nothing here talks to the agent's process, so any number of these can run at
 // once, and ending one ends nothing else. `/stop` asks the agent, over the same channel, to stop
-// the turn it is in; that is all this program can do to it.
+// the turn it is in; that is all this program can do to it. `/accept` is not said to the agent at
+// all: it leaves the owner's acceptance of a species commit for the kernel (kernel/species.ts).
 //
 // It is in kernel/ because it is the owner's tool, not part of the agent: it has to keep working
 // whatever the body does to itself. For the same reason nothing here trusts the shape of what the
@@ -80,6 +82,8 @@ export function render(e: JournalEvent): string | null {
       return `[kernel] rolled back ${short(f.commit)} to ${short(f.to)}: ${oneLine(asText(f.reason), 300)}`;
     case 'turn.interrupted':
       return '[interrupted by the owner]';
+    case 'species.accepted':
+      return `[kernel] species commit ${short(f.commit)} accepted by the owner (${f.route === 'talk' ? '/accept' : './box accept'})`;
     default:
       return null;
   }
@@ -238,6 +242,10 @@ export interface TalkOptions {
   interactive: boolean;
   /** Said once, first, to a person who is typing: for instance whose plan the agent's requests use. */
   banner?: string | null;
+  /** Said after it, when the species has other cage files than this install (kernel/species.ts). */
+  cage?: string | null;
+  /** The install, for `/accept`, which looks up the commit it is given. Without it that command says it cannot. */
+  root?: string;
   pollMs?: number;
   /** Piped input only: how long the journal may stay silent while a line waits to be sent or answered. Default 5 minutes. */
   waitMs?: number;
@@ -270,6 +278,7 @@ export async function talk(o: TalkOptions): Promise<number> {
   const waitMs = o.waitMs ?? 300_000;
 
   if (o.interactive && o.banner) o.note(o.banner);
+  if (o.interactive && o.cage) o.note(o.cage);
   const size = journalSize(o.journal);
   let before: JournalEvent[] = [];
   try {
@@ -314,6 +323,22 @@ export async function talk(o: TalkOptions): Promise<number> {
     }
   };
 
+  /**
+   * `/accept [commit]`: the owner accepts a species commit, the one named or the one the gate last
+   * asked about. It goes to the kernel as a file of its own kind (kernel/owner.ts), never to the agent.
+   */
+  const acceptCommit = (wanted: string): void => {
+    try {
+      if (o.root === undefined) return o.note('(this client was not told where its install is, so it cannot accept a species commit)');
+      const chosen = chooseAccept(o.root, wanted);
+      if ('why' in chosen) return o.note(`(not accepted: ${chosen.why})`);
+      accept(o.owner, chosen.commit);
+      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to molt: tell it to ask again)`);
+    } catch (err) {
+      o.note(`could not accept that: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   /** Ends the wait between two looks at the journal, when a line was typed or the input ended. */
   let nudge: () => void = () => {};
   const nap = () => new Promise<void>((resolve) => {
@@ -330,7 +355,9 @@ export async function talk(o: TalkOptions): Promise<number> {
         const text = raw.trim();
         if (text === '') continue;
         if (text === '/quit') { quit = true; return; }
-        if (!o.interactive) queue.push(text);
+        // Never a line for the agent, typed or piped: it is the owner's word to the kernel, and is taken at once.
+        if (text === '/accept' || text.startsWith('/accept ')) acceptCommit(text.slice(7).trim());
+        else if (!o.interactive) queue.push(text);
         else if (text === '/stop') stop();
         else send(text);
         nudge();
@@ -343,7 +370,7 @@ export async function talk(o: TalkOptions): Promise<number> {
 
   if (o.interactive) {
     history();
-    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
+    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /accept accepts the species commit it asked you about. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
     if (turn.busy) o.note('(the agent is in the middle of a turn)');
   }
 
@@ -426,11 +453,13 @@ if (import.meta.main) {
       process.exit(2);
     }
   }
-  const p = paths(join(import.meta.dir, '..'));
+  const p = paths(installRoot(import.meta.dir));
+  // This client is the generation's own, like the rest of its kernel; the cage it runs in is the install's.
+  const cage = cageNotice(p.root, dirname(import.meta.dir));
   // A person at a terminal gets the client with its panel and input box (kernel/tui/). Everything else is as it always was.
   if (!plainText && process.stdin.isTTY === true && process.stdout.isTTY === true && process.env.TERM !== 'dumb') {
     const { runTalkScreen } = await import('./tui/talk');
-    process.exit(await runTalkScreen(p, process.env, planNotice(process.env)));
+    process.exit(await runTalkScreen(p, process.env, planNotice(process.env), cage));
   }
   // Ctrl-C ends this program, quietly. It is not passed on to anything.
   process.on('SIGINT', () => process.exit(0));
@@ -443,6 +472,8 @@ if (import.meta.main) {
     note: (text) => { process.stderr.write(`${text}\n`); },
     interactive: process.stdin.isTTY === true,
     banner: planNotice(process.env),
+    cage,
+    root: p.root,
     waitMs,
   });
   process.exit(status);

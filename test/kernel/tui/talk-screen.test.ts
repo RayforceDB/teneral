@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OWNER_REASON } from '../../../kernel/back';
+import { git } from '../../../kernel/gates';
 import type { EventBody } from '../../../kernel/journal';
 import { readEvents } from '../../../kernel/journal';
 import { IMAGE_MAX_BYTES } from '../../../kernel/tui/images';
 import { ENTRY_LIMIT } from '../../../kernel/tui/model';
 import { ago, lineage } from '../../../kernel/tui/talk';
+import { commitAll, writeFiles } from '../helpers';
 import { gif, jpeg, png } from './pictures';
 import { A, B, C, expectFrame, stage, type Stage } from './stage';
 import { sequences } from './vt';
@@ -1345,4 +1347,40 @@ test('an interruption made at another terminal, or found in the history on attac
   s.clock.at = 3000;
   expect(s.all().match(/◦ interrupted by you/g)).toHaveLength(2);
   expect(channel(s)).toEqual([]);
+});
+
+// --- the species: /accept, the acceptance in the conversation, and what is said about the cage ---
+
+test('/accept leaves the owner\'s acceptance for the kernel, as a file of its own kind, and no line for the agent; once the kernel has taken it, a quiet line stands in the conversation', () => {
+  const s = stage(100, 40, { name: 'Mica' });
+  settled(s);
+  git(s.p.root, 'init', '-q', '-b', 'main');
+  writeFiles(s.p.root, { '.gitignore': '.teneral\nmemory\nsoul\n', 'kernel/k.ts': 'export const k = 1;\n' });
+  const commit = commitAll(s.p.root, 'the second kernel');
+  const hidden = () => readdirSync(s.p.owner).filter((name) => name.endsWith('.accept'));
+  s.type('/accept\r');
+  expect(flowed(s)).toContain('Not accepted: nothing is waiting for your acceptance');
+  s.type('/accept nonsense\r');
+  expect(flowed(s)).toContain('Not accepted: "nonsense" names no commit of this repository');
+  expect(existsSync(s.p.owner) ? hidden() : []).toEqual([]);
+  // The gate asked about a commit; /accept answers for that one.
+  writeFileSync(join(s.p.root, '.teneral', 'species.json'), JSON.stringify({ asked: commit }));
+  s.type('/accept\r');
+  expect(hidden()).toHaveLength(1);
+  expect(hidden()[0]!.startsWith('.')).toBe(true);
+  expect(readFileSync(join(s.p.owner, hidden()[0]!), 'utf8')).toBe(commit);
+  expect(channel(s)).toEqual([]);
+  expect(sentFiles(s)).toEqual([]);
+  expect(flowed(s)).toContain(`Accepted species commit ${commit.slice(0, 7)}, "the second kernel", and every one before it. The kernel takes that in when Mica next asks for its mutation: tell it to ask again.`);
+  // The kernel's record of it, whichever way it was given.
+  s.journal({ type: 'species.accepted', commit, route: 'talk' }, 2000);
+  expect(s.all()).toContain(`species commit ${commit.slice(0, 7)} accepted by you`);
+});
+
+test('when the species has other cage files than the install, the owner is told under the welcome panel', () => {
+  const cage = 'The species has other versions of box, Dockerfile than this install. They are yours and were not changed: look at them with git diff, and take them with git pull in this directory, then ./box down and ./box up.';
+  const s = stage(100, 40, { name: 'Mica', cage });
+  settled(s);
+  expect(flowed(s)).toContain('The species has other versions of box, Dockerfile than this install.');
+  expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('The species has other versions');
 });

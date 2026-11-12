@@ -1,11 +1,14 @@
 import { expect, test } from 'bun:test';
 import {
-  appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
-import { INTERRUPT_SUFFIX } from '../../kernel/owner';
+import { ACCEPT_SUFFIX, INTERRUPT_SUFFIX } from '../../kernel/owner';
+import { git } from '../../kernel/gates';
+import { readConsent } from '../../kernel/species';
+import { makeRepo } from './helpers';
 import {
   AT_REST, Follower, recent, render, talk, track, type Turn,
 } from '../../kernel/talk';
@@ -509,4 +512,78 @@ test('piped /stop with the agent at rest sends nothing, says so, and the lines a
   expect(s.notes).toEqual(['(the agent is not in the middle of a turn: nothing to interrupt)']);
   expect(s.out.join('')).toBe('  [echo] text: hello\nyou said: hello\n\n');
   expect(readEvents(s.journal).map((e) => e.type)).not.toContain('turn.interrupted');
+});
+
+// --- the species: /accept, what is said about the cage, and events a client does not know ---
+
+test('an acceptance prints as one kernel line that says how it was given, and moves no turn', () => {
+  expect(render(ev({ type: 'species.accepted', commit: B, route: 'talk' }))).toBe('[kernel] species commit bbbbbbbbbbbb accepted by the owner (/accept)');
+  expect(render(ev({ type: 'species.accepted', commit: B, route: 'box' }))).toBe('[kernel] species commit bbbbbbbbbbbb accepted by the owner (./box accept)');
+  expect(track(AT_REST, ev({ type: 'species.accepted', commit: B, route: 'box' }))).toEqual(AT_REST);
+  expect([said('go', 0), calling(10), ev({ type: 'species.accepted', commit: B, route: 'box' }, 20)].reduce(track, AT_REST))
+    .toEqual([said('go', 0), calling(10)].reduce(track, AT_REST));
+});
+
+test('an event of a kind this client has never heard of, as a later kernel may journal, is passed over by everything that reads the journal here', () => {
+  const later = [
+    { ...ev(said('x')), type: 'species.offered', commit: B },
+    { ...ev(said('x')), type: 'kernel.notice', text: 'something new\u001b[31m' },
+    { ...ev(said('x')), type: 'generation.promoted.v2' },
+  ] as unknown as JournalEvent[];
+  for (const e of later) {
+    expect(render(e)).toBeNull();
+    expect(track(AT_REST, e)).toEqual(AT_REST);
+    expect(track({ busy: true, late: 1, burst: null }, e)).toEqual({ busy: true, late: 1, burst: null });
+  }
+  expect(recent([said('one'), ...later, reply('to one')])).toEqual(['> one', 'to one\n']);
+});
+
+test('/accept goes to the kernel as a file of its own kind, never to the agent as a line: typed or piped, with a commit or for the one asked about', async () => {
+  const { dir: root, seed } = makeRepo({ 'body/a.ts': 'a\n' });
+  const s = setup();
+  const files = () => (existsSync(s.owner) ? readdirSync(s.owner).sort() : []);
+  // Nothing was asked, and nothing that is no commit is accepted.
+  expect(await talk({ ...s.base, root, lines: from('/accept', '/accept main', '/accept 1234567', '/quit'), interactive: true })).toBe(0);
+  expect(files()).toEqual([]);
+  expect(s.notes.filter((note) => note.startsWith('(not accepted: '))).toHaveLength(3);
+  expect(s.notes.join('\n')).toContain('nothing is waiting for your acceptance');
+  // A commit named, by a prefix.
+  expect(await talk({ ...s.base, root, lines: from(` /accept ${seed.slice(0, 9)} `, '/quit'), interactive: true })).toBe(0);
+  expect(files()).toHaveLength(1);
+  expect(files()[0]!.startsWith('.')).toBe(true);
+  expect(files()[0]!.endsWith(ACCEPT_SUFFIX)).toBe(true);
+  expect(readFileSync(join(s.owner, files()[0]!), 'utf8')).toBe(seed);
+  expect(s.notes.at(-1)).toBe(`(accepted species commit ${seed.slice(0, 12)}, "seed", and every one before it. The kernel takes that in when the agent next asks to molt: tell it to ask again)`);
+  rmSync(join(s.owner, files()[0]!));
+  // The one the gate asked about, from a pipe: taken at once, and not a line that waits for an answer.
+  mkdirSync(join(root, '.teneral'), { recursive: true });
+  writeFileSync(join(root, '.teneral', 'species.json'), JSON.stringify({ asked: seed }));
+  expect(await talk({ ...s.base, root, lines: from('/accept'), interactive: false, waitMs: 200 })).toBe(0);
+  expect(files().map((name) => readFileSync(join(s.owner, name), 'utf8'))).toEqual([seed]);
+  // The client only leaves the word; the kernel is what takes it in.
+  expect(readConsent(root).accepted).toBeUndefined();
+  // A client that was not told where its install is says so and sends nothing as a line either.
+  const blind = setup();
+  expect(await talk({ ...blind.base, lines: from(`/accept ${seed}`, '/quit'), interactive: true })).toBe(0);
+  expect(existsSync(blind.owner)).toBe(false);
+  expect(blind.notes.join('\n')).toContain('cannot accept a species commit');
+  expect(git(root, 'status', '--porcelain')).toBe('');
+});
+
+test('a line that only starts like /accept is a line for the agent', async () => {
+  const s = setup();
+  expect(await talk({ ...s.base, root: s.owner, lines: from('/accepted, thank you', '/quit'), interactive: true })).toBe(0);
+  expect(readdirSync(s.owner).map((name) => readFileSync(join(s.owner, name), 'utf8'))).toEqual(['/accepted, thank you']);
+});
+
+test('when the species has other cage files than the install, a person attaching is told once, after the banner; a script is not', async () => {
+  const s = setup();
+  const cage = 'The species has other versions of box than this install.';
+  expect(await talk({ ...s.base, lines: from('/quit'), interactive: true, banner: 'Using ChatGPT plan.', cage })).toBe(0);
+  expect(s.notes.slice(0, 2)).toEqual(['Using ChatGPT plan.', cage]);
+  const piped = setup();
+  expect(await talk({ ...piped.base, lines: from('/quit'), interactive: false, cage })).toBe(0);
+  expect(await talk({ ...piped.base, lines: from('/quit'), interactive: true, cage: null })).toBe(0);
+  expect(piped.notes.join('\n')).not.toContain('cage');
+  expect(piped.notes.join('\n')).not.toContain('species has other');
 });
