@@ -2,6 +2,8 @@
 
 A minimal agent that rewrites its own code, one measured generation at a time. The conversation outlives every version.
 
+A project of Rayforce Technologies Inc., the company behind [RayforceDB](https://rayforcedb.com/).
+
 *Teneral* is what entomologists call an insect that has just molted: the new body is there, but it has not hardened yet. Here it is a generation of the agent's code that was just switched on and has not yet proven it works.
 
 **Status: experiment.** The question is whether an agent can get better by rewriting its harness, and where that stops helping. Read [What it does not do yet](#what-it-does-not-do-yet) before trusting it with anything.
@@ -428,4 +430,4 @@ Settings to enable on the repository, since they and not the individuals' tokens
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. Copyright (c) 2026 Rayforce Technologies Inc. See `LICENSE`.
