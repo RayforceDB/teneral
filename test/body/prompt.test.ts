@@ -217,3 +217,37 @@ test('it says the smoke run is made as the configured provider, with a key and w
   expect(flat).toMatch(/`TENERAL_AUTH` is not set in that run/);
   expect(flat).toMatch(/must use that key at `TENERAL_BASE_URL` and never look for a sign-in/);
 });
+
+// Organs and notes: what the kernel does with each is pinned against the kernel's own constants and parser.
+import { NOTE_DATA_LIMIT, noteProblem } from '../../kernel/journal';
+import { MAX_ORGANS, ORGANS_FILE, parseOrgans } from '../../kernel/organs';
+
+test('it says what an organ is, how one is pinned, where its archive goes, and how the body finds it', () => {
+  expect(flat).toContain(`\`${ORGANS_FILE}\``);
+  expect(flat).toContain('{ "url", "sha256" }');
+  expect(flat).toContain(`at most ${MAX_ORGANS} organs`);
+  expect(flat).toContain('The kernel downloads nothing');
+  expect(flat).toContain('`$TENERAL_WORKSPACE/../organs/archives/<sha256>.tar.gz`');
+  expect(flat).toContain('`$TENERAL_ORGANS/<name>/`');
+  expect(flat).toContain('`TENERAL_ORGANS`: a directory with one entry per organ you pin');
+  expect(flat).toContain('`bun kernel/organs.ts`');
+  expect(flat).toContain('Gate `organs`');
+  expect(flat).toContain('a rollback returns you to the old pin');
+  expect(flat).toContain('never on a binary you built');
+  // The fields it names are the ones the kernel takes, and no others.
+  const pin = { url: 'https://example.org/x.tar.gz', sha256: 'ab'.repeat(32), dir: 'x-1.0', check: ['bin/x', '--version'] };
+  expect(parseOrgans(JSON.stringify({ x: pin }))).toHaveLength(1);
+  for (const field of Object.keys(pin)) expect(flat).toContain(`"${field}"`);
+});
+
+test('it says what a note is and the rule it exists for', () => {
+  expect(flat).toContain("`{ type: 'note', kind, data }`");
+  expect(flat).toContain(`at most ${NOTE_DATA_LIMIT / 1024} KB`);
+  expect(flat).toContain('The kernel stores it and never reads it');
+  expect(flat).toContain('must be rebuildable from the journal');
+  expect(flat).toContain('in a place named by its schema version');
+  expect(noteProblem('memory.fact_v2-x', { any: ['json'] })).toBeNull();
+  // The seed body does what the prompt says of it.
+  const note = { type: 'note', kind: 'k', data: 'not for the model', v: 1, id: 'n', ts: '2026-11-11T00:00:00.000Z', gen: 'g' } as const;
+  expect(JSON.stringify(buildMessages([note], 'S'))).not.toContain('not for the model');
+});

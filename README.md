@@ -23,6 +23,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 3. The kernel checks the commit:
    - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused;
    - `body/` may hold only regular files, and no more than 200,000 bytes of them;
+   - every organ the commit pins (see [Organs](#organs)) is in the cache with exactly the pinned hash, unpacks safely, and passes its own check. A body that pins none skips this;
    - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
    - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. The stand-in speaks both wire protocols, and the candidate is run as the provider you configured, with a dummy key: never with your key or your sign-in. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
 4. If a check fails, the same generation starts again and is told which check and what it printed. If all pass, the kernel switches to the new commit and starts it.
@@ -38,6 +39,47 @@ Around that:
 - A lock file keeps a second supervisor from running the same checkout, and a body left behind by a supervisor that was killed is stopped before a new one starts.
 
 The agent is woken by sensors, not only by you typing: your lines are one, a clock is another (every 30 minutes unless you change it, and silent until the soul is written), its inbox is a third, and it can build more. It runs in the background, so the clock and the inbox reach it whether or not a terminal is open.
+
+## Organs
+
+An organ is a native dependency the agent adopts for its body: a program or a library that somebody else publishes as release archives, such as a database to build its memory on. The agent chooses it, pins it, and later upgrades it by itself. The mechanism knows nothing about any particular one.
+
+**The pin** is `body/organs.json`, a file of the body like any other, so it molts and rolls back with the code that uses it:
+
+    {
+      "rayforce": {
+        "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
+        "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
+        "dir": "rayforce-3.0.2-linux-x86_64",
+        "check": ["rayforce", "--help"]
+      }
+    }
+
+A name (`a-z`, `0-9`, `-`) maps to the `https` address of a `.tar.gz` archive and the archive's SHA-256. `dir` is optional: the directory inside the archive that is the organ's root, for an archive that wraps everything in one. `check` is optional: a command run in the organ's root that must exit with 0 within 60 seconds; its first word is a file of the organ. At most 16 organs. Nothing else is accepted in the file, and a field nobody defined is refused. No file, or `{}`, means no organs, and then nothing described here happens at all.
+
+**The cache** is `.teneral/organs/`, outside git, with everything named by the archive's hash:
+
+    .teneral/organs/archives/<sha256>.tar.gz    the archive, put there by the agent
+    .teneral/organs/trees/<sha256>/             the archive unpacked, by the kernel
+    .teneral/organs/sets/<id>/<name>            one link per pinned organ, to its root
+
+The agent downloads an archive itself, with its own tools. The kernel never reaches the network for one and does not take the agent's word either: it computes the hash of the cached file itself.
+
+**The gate** `organs` runs after the size check and before anything of the candidate's is executed. For each pin of the candidate commit: the archive is in the cache and hashes to the pin (at most 256 MB); it is unpacked, unless that was done before, beside its place and renamed into it, so a tree that exists is a whole one; then the check runs, with the bare environment of every check. Unpacking refuses the whole archive for any entry that is not a plain file, a directory or a link that stays inside: a name that is absolute or climbs with `..`, a second entry for a name already written, a file that would be written through a link, a link pointing out, a device, a fifo; more than 1 GB unpacked or more than 20,000 entries. A refusal rejects the molt with a message that says what to do, for example `organ rayforce: it is not unpacked, and archive ea20… is not in the cache at …/archives/ea20….tar.gz; download https://… there first`.
+
+**The body finds its organs** through `TENERAL_ORGANS`: a directory with one entry per organ, by name, so the example's program is `$TENERAL_ORGANS/rayforce/rayforce`. The variable is set for the candidate's tests and its smoke run, from the candidate's pins, and for every generation at its start, from the pins of that generation's own commit. It is not set for a body that pins nothing. The unpacked tree is shared by every generation that pins the same archive and is to be read, not written: what an organ stores belongs elsewhere.
+
+**Rollback** needs nothing more. The generation before pins what it pinned, and that tree is still in the cache: the kernel never removes an archive or a tree, the current generation's, the previous one's or any other (so the cache only grows; see `BACKLOG.md`). At each start, a tree that is missing is unpacked again from its archive. When the archive is gone as well, the supervisor does not start the generation and does not roll it back: it stops and says which archive belongs at which path and where to download it, and `./box up` goes on from there once the file is back. A cache that was wiped is a fault of the install, not of the generation, and going a generation back would give up a sound one.
+
+**An upgrade**, as the agent does it: download the new archive and the hash its publisher gives; verify one against the other; move the archive to `archives/<sha256>.tar.gz`; change the pin in the workspace; run `bun kernel/organs.ts` there, which does for the workspace's pins exactly what the gate will do and prints the directory to use as `TENERAL_ORGANS` for its own test run; then molt. If the new version turns out worse, the kernel's rollback or `./box back` returns to the old pin with the old code.
+
+**Improving the dependency itself** does not go through the kernel. The image has `git`, `curl`, `clang` and `make`: the agent clones the dependency's source, builds and tests a patch locally, and proposes it upstream. Only a published release is pinned; when one holds the fix, it is installed as any upgrade. A locally built binary is for trying the patch, not for the body to depend on.
+
+## Notes, and what the body keeps outside the journal
+
+The journal has one event that is the body's own: `{ "type": "note", "kind": "...", "data": ... }`. The kernel stores it and never reads it; the talk clients do not show it, and it is neither a reply nor something that wakes the agent. `kind` is a short name the body chooses (`a-z`, `0-9`, `.`, `_`, `-`, at most 64 characters), `data` is anything that is JSON, at most 64 KB of it. A note that breaks this is refused when it is appended, with nothing written. The seed body writes none and passes them over when it builds a request.
+
+It is there for one rule: **anything the body keeps outside the journal must be rebuildable from the journal, and lies in a place named by its schema version, so that a rolled-back body finds data it understands.** An index, a database, a summary are derived: the journal is the record, and what a store was built from must be in it, as the conversation itself or as notes. A body that changes the shape of its store writes to a new place (`memory/store-v2/`, not `memory/store/` in a new shape) and builds it from the journal; the old place stays as it was. After a rollback the older body opens the place it knows, finds it as it left it, and replays what the journal gained since. A store that is lost or damaged is a store to build again, never a loss.
 
 ## Birth
 
@@ -187,7 +229,7 @@ Nothing is signed. Whoever can write to `.teneral/owner/` speaks as the owner, a
 
 ### Why a container
 
-The agent runs shell commands. `./box` builds a small image (Bun, git, a few standard tools) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped. Anything it writes outside this directory is gone when the container is removed. Run it that way.
+The agent runs shell commands. `./box` builds an image (Bun, git, a few standard tools, and curl, clang and make for [organs](#organs)) and runs the agent in a container that can see this directory and nothing else of your machine: not your home directory, not your keys, not your other projects. It runs as your user id, so the files it writes here stay yours, with every capability dropped. Anything it writes outside this directory is gone when the container is removed. Run it that way.
 
 What the container does not do: it does not stop the agent from changing files inside this directory, including the kernel that supervises it, if it goes around the molt path. It sets no limit on memory or on the number of processes, so a runaway command inside the container can exhaust the machine's memory or process table; `BOX_DOCKER_ARGS="--memory 4g --pids-limit 512"` puts limits back if you want them. The network is also open, because the agent has to reach its model. Whatever it can read here, including its own API key or the tokens of a ChatGPT sign-in, it could send elsewhere.
 
