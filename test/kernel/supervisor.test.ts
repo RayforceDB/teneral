@@ -633,8 +633,10 @@ process.exit(0);
   const [provider, auth, names] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
   expect(provider).toBe('chatgpt');
   expect(auth).toBe(p.auth);
-  // The whole list of what the kernel itself sets: one place, bodyEnv, decides it.
-  expect(names!.split(' ').filter((name) => !['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS'].includes(name))).toEqual([
+  // The whole list of what the kernel itself sets: one place, bodyEnv, decides it. The names left out are the owner's
+  // settings: where these tests are run in an install, Bun reads them from its .env and the body inherits them.
+  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH'];
+  expect(names!.split(' ').filter((name) => !owners.includes(name))).toEqual([
     'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER',
     'TENERAL_SOUL', 'TENERAL_WORKSPACE',
   ]);
