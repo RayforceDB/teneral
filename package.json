@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun kernel/main.ts",
+    "start": "bun kernel/launcher.ts",
     "box": "./box",
     "test": "bun test",
     "check": "tsc --noEmit"

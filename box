@@ -21,6 +21,9 @@ usage: ./box <command>
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
                   --list shows the generations it has lived in. A running agent is stopped
                   for it and started again
+  accept [<commit>]
+                  accept the species commit the agent asked to stand on, or the one named, and
+                  with it that commit's kernel. /accept in talk does the same
   logs            follow what the kernel and the agent print
   run <command>   run a command in a fresh container instead of the agent: ./box run bun test
   fg              run the agent in the foreground of this terminal, for debugging
@@ -36,6 +39,8 @@ EOF
 # The agent's container is named after this directory: a second agent for it is then refused,
 # while `run` commands, which get no name, can run beside it.
 name="teneral-$(basename "$PWD")"
+# The image. A development checkout that must not replace the image of an install beside it names another.
+image="${BOX_IMAGE:-teneral}"
 
 # What that container is doing: running, exited, ... or nothing when there is none.
 state() { docker container inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true; }
@@ -86,7 +91,7 @@ build() {
   # shown only if the build fails. A build that takes more than a moment gets one line.
   local pid waited=0
   tmp="$(mktemp)"
-  docker build --quiet --tag teneral \
+  docker build --quiet --tag "$image" \
     --build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)" . >"$tmp" 2>&1 &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
@@ -375,7 +380,7 @@ setup() {
     plain=(--plain)
   fi
   docker run --rm --interactive --tty "${bare[@]}" "${term_env[@]}" ${extra[@]+"${extra[@]}"} \
-    teneral bun kernel/setup.ts --no-callback ${plain[@]+"${plain[@]}"} "$@" || status=$?
+    "$image" bun kernel/setup.ts --no-callback ${plain[@]+"${plain[@]}"} "$@" || status=$?
   if [ "$status" -eq 76 ]; then
     status=0
     # What docker itself says, should it fail to start this one (the port is taken, say), would be
@@ -383,7 +388,7 @@ setup() {
     tmp="$(mktemp)"
     docker run --rm --interactive --tty "${bare[@]}" "${term_env[@]}" ${extra[@]+"${extra[@]}"} \
       --publish "127.0.0.1:$port:$port" --env TENERAL_CALLBACK_HOST=0.0.0.0 --env "TENERAL_CALLBACK_PORT=$port" \
-      teneral bun kernel/setup.ts --resume ${plain[@]+"${plain[@]}"} "$@" 2>"$tmp" || status=$?
+      "$image" bun kernel/setup.ts --resume ${plain[@]+"${plain[@]}"} "$@" 2>"$tmp" || status=$?
     if [ "$full" -eq 1 ] && [ "$status" -ge 125 ]; then restore_terminal; fi
     cat "$tmp" >&2
     rm -f "$tmp"
@@ -422,7 +427,7 @@ start() {
   # from a crash: `on-failure` and `unless-stopped` would both start it again, the second
   # without end. So after a reboot the agent is down until `./box up`.
   docker run --detach --name "$name" --restart no \
-    "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral >/dev/null
+    "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" >/dev/null
   sleep 1
   if ! alive; then
     echo "It stopped right away, with status $(exit_code):" >&2
@@ -440,7 +445,25 @@ stop() {
 
 # One command of the kernel's, in a container of its own beside (or instead of) the agent's.
 once() {
-  docker run --rm "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral "$@"
+  docker run --rm "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" "$@"
+}
+
+# Where the kernel is that answers the owner's commands (talk, back, accept), relative to this
+# directory: the current generation's own, in .teneral/live, once a generation has one, else this
+# checkout's. The launcher says which (kernel/launcher.ts); it is asked beside a running agent, or
+# in a container of its own. This script, the Dockerfile and the launcher are the install's own and
+# are the same whatever generation is current.
+kernel_home() {
+  local home=""
+  if alive; then
+    home="$(docker exec "$name" bun kernel/launcher.ts home)" || true
+  else
+    home="$(once bun kernel/launcher.ts home)" || true
+  fi
+  case "$home" in
+    .teneral/live) echo .teneral/live ;;
+    *) echo . ;;
+  esac
 }
 
 command="${1:-}"
@@ -473,7 +496,7 @@ case "$command" in
     install
     clear_stopped
     exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} --name "$name" \
-      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image"
     ;;
 
   run)
@@ -483,7 +506,7 @@ case "$command" in
     fi
     prepare
     exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} \
-      "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral "$@"
+      "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" "$@"
     ;;
 
   talk)
@@ -491,16 +514,18 @@ case "$command" in
       say_not_running
       exit 1
     fi
-    # The client runs inside the container, beside the agent, so the host needs no Bun.
+    # The client runs inside the container, beside the agent, so the host needs no Bun. It is the
+    # client of the generation that is running, like the rest of its kernel.
+    talk="$(kernel_home)/kernel/talk.ts"
     # Input from a pipe or a file: plain text, exactly as it always was.
-    if [ ! -t 0 ]; then exec docker exec --interactive "$name" bun kernel/talk.ts "$@"; fi
+    if [ ! -t 0 ]; then exec docker exec --interactive "$name" bun "$talk" "$@"; fi
     terminal_env
     if ! screens "$@"; then
-      exec docker exec --interactive --tty "${term_env[@]}" "$name" bun kernel/talk.ts --plain "$@"
+      exec docker exec --interactive --tty "${term_env[@]}" "$name" bun "$talk" --plain "$@"
     fi
     clip_start
     status=0
-    docker exec --interactive --tty "${term_env[@]}" "${clip_env[@]}" "$name" bun kernel/talk.ts "$@" || status=$?
+    docker exec --interactive --tty "${term_env[@]}" "${clip_env[@]}" "$name" bun "$talk" "$@" || status=$?
     if [ "$status" -gt 128 ]; then
       # The client was cut off in the middle of drawing: with `./box down`, or when the kernel
       # gives up, the container goes and takes it along.
@@ -538,28 +563,42 @@ case "$command" in
 
   back)
     prepare
+    # The current generation's own kernel does it. Should that one be what is broken,
+    # `./box run bun kernel/back.ts` is this checkout's.
+    back="$(kernel_home)/kernel/back.ts"
     # Looking changes nothing, so the agent can stay up for it.
     case " $* " in
       *" --list "* | *" --help "* | *" -h "*)
-        once bun kernel/back.ts "$@"
+        once bun "$back" "$@"
         exit
         ;;
     esac
     if ! alive; then
       # Down already: make the change and leave it down.
-      once bun kernel/back.ts "$@"
+      once bun "$back" "$@"
       exit
     fi
     # The kernel refuses to change generations under a running supervisor. Ask first whether there
     # is somewhere to go, so that a request that cannot be met does not stop the agent at all.
-    once bun kernel/back.ts --dry-run "$@" >/dev/null
+    once bun "$back" --dry-run "$@" >/dev/null
     stop
     docker rm "$name" >/dev/null
     status=0
-    once bun kernel/back.ts "$@" || status=$?
+    once bun "$back" "$@" || status=$?
     # It was up, so it comes up again, on the earlier generation or, had the change failed, as it was.
     start || status=$?
     exit "$status"
+    ;;
+
+  accept)
+    prepare
+    # The owner's word to the kernel: it writes a small file under .teneral/ and a line in the
+    # journal, and can be said while the agent runs.
+    accept="$(kernel_home)/kernel/accept.ts"
+    if alive; then
+      exec docker exec "$name" bun "$accept" "$@"
+    fi
+    once bun "$accept" "$@"
     ;;
 
   '' | help | -h | --help)

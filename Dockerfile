@@ -24,4 +24,5 @@ RUN git config --global --add safe.directory '*' \
  && git config --global user.name teneral \
  && git config --global user.email teneral@localhost
 
-CMD ["bun", "kernel/main.ts"]
+# The launcher, from the owner's checkout. It starts the kernel of whichever generation is current.
+CMD ["bun", "kernel/launcher.ts"]
