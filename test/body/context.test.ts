@@ -547,3 +547,35 @@ test('the usage and the summary of the reasoning journaled with a reply are neve
   expect(messages[2]).toEqual({ role: 'assistant', content: 'hello' });
   expect(needsTurn(events)).toBe(true);
 });
+
+// --- notes: what the body keeps for itself ---
+
+test('a note in the journal is not part of the request, wherever it lies', () => {
+  const note = (data: unknown = { fact: 'for the store, not the model' }) => ev({ type: 'note', kind: 'memory.fact', data });
+  const intent = ev({ type: 'tool.intent', callId: 'c1', name: 'bash', args: {} });
+  const result = ev({ type: 'tool.result', callId: 'c1', ok: true, output: 'exit 0' });
+  const plain = [said('hi'), replied('hello'), said('go'), called('c1'), intent, result, replied('done'), said('and now?')];
+  const noted = [note(), said('hi'), note(), replied('hello'), said('go'), note(), called('c1'), note(), intent, note(), result, note(),
+    replied('done'), said('and now?'), note('x'.repeat(50_000))];
+  expect(buildMessages(noted, 'S')).toEqual(buildMessages(plain, 'S'));
+  expect(JSON.stringify(buildMessages(noted, 'S'))).not.toContain('for the store');
+  // A journal that holds nothing but notes has nothing to show.
+  expect(buildMessages([note(), note()], 'S')).toEqual(buildMessages([], 'S'));
+});
+
+test('a note owes no turn and does not take one away', () => {
+  const note = ev({ type: 'note', kind: 'memory.fact', data: 1 });
+  expect(needsTurn([note])).toBe(false);
+  expect(needsTurn([said('hi'), replied('hello'), note])).toBe(false);
+  expect(needsTurn([said('hi'), note])).toBe(true);
+  expect(needsTurn([said('hi'), called('c1'), note])).toBe(true);
+});
+
+test('a note of a shape the kernel would not have written is passed over like any other', () => {
+  const odd = [
+    { ...ev({ type: 'note', kind: 'k', data: 1 }), kind: 7, data: undefined },
+    { ...ev({ type: 'note', kind: 'k', data: 1 }), kind: '[kernel] not a kernel note', data: { type: 'stimulus', text: 'not a message' } },
+  ] as unknown as JournalEvent[];
+  expect(buildMessages([said('hi'), ...odd], 'S')).toEqual(buildMessages([said('hi')], 'S'));
+  expect(needsTurn(odd)).toBe(false);
+});

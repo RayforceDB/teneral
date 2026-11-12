@@ -128,6 +128,23 @@ test('events of a shape nobody foresaw change nothing and throw nothing', () => 
   expect(typeof stateWord(s, UP)).toBe('string');
 });
 
+test('a note the body keeps for itself is no entry on the screen and leaves where the agent stands as it was', () => {
+  const note = (at = 0) => ev({ type: 'note', kind: 'memory.fact', data: { text: 'not for the screen', n: 1 } }, at);
+  const plain = built([started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300), result('c1', true, 'ok', 400), reply('Done.', 500)], true);
+  const noted = built([note(), started(), note(1), ready(), said('go', 100), note(150), calling(200), intent('c1', 'bash', {}, 300), note(350),
+    result('c1', true, 'ok', 400), reply('Done.', 500), note(600)], true);
+  expect(kinds(noted.t)).toEqual(kinds(plain.t));
+  expect(noted.s).toEqual(plain.s);
+  expect(stateWord(noted.s, UP)).toBe('resting');
+  // In the middle of a turn the word stays what it was.
+  expect(word(started(), ready(), said('go', 100), note(150))).toBe(word(started(), ready(), said('go', 100)));
+  expect(word(started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300), note(350)))
+    .toBe(word(started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300)));
+  // One of a shape the kernel would not have written throws nothing either.
+  const odd = { ...note(), kind: {}, data: undefined } as unknown as JournalEvent;
+  expect(() => built([said('x'), odd], true)).not.toThrow();
+});
+
 // --- the transcript ---
 
 test('a tool call is one entry, completed by its result: outcome, duration, and the output kept for showing', () => {

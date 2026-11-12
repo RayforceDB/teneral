@@ -913,3 +913,50 @@ test('an install moved to another directory starts again there', async () => {
   }
   expect(git(moved, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '))).toHaveLength(3);
 });
+
+// --- notes are the body's own; the kernel decides nothing by them ---
+
+test('a note is not a reply: a promoted generation that only journals notes is still rolled back as silent', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': READY_THEN(`
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: { n: 0 } });
+setInterval(() => appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: { at: Date.now() } }), 50);
+`) });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 400, killGraceMs: 200 })).toBe('stopped');
+  const events = readEvents(p.journal);
+  expect(events.some((e) => e.type === 'note' && e.gen === next)).toBe(true);
+  const rollbacks = events.flatMap((e) => (e.type === 'generation.rolledback' ? [e] : []));
+  expect(rollbacks).toHaveLength(1);
+  expect(rollbacks[0]!.reason).toContain('started but did not reply');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+test('notes between crashes do not count as replies, and notes after a molt request do not hide it', async () => {
+  // Ready, a note, a crash, every time: given up on at the crash limit exactly as without the notes.
+  const crashing = await seedOnly(`${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 'still here' });
+process.exit(1);
+`);
+  expect(crashing.outcome).toBe('halted');
+  expect(started(crashing.events)).toBe(CRASH_LIMIT);
+
+  // The request is found behind the notes journaled after it, and the generation it asks for is promoted.
+  const { dir, seed } = makeRepo({ 'body/main.ts': `${V1.replace("process.exit(75);", `
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 1 });
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 2 });
+process.exit(75);`)}` });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+  expect(readEvents(p.journal).filter((e) => e.type === 'note')).toHaveLength(2);
+});

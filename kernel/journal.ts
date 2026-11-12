@@ -32,7 +32,34 @@ export type EventBody =
   | { type: 'generation.started'; commit: string }
   | { type: 'generation.ready'; commit: string }
   | { type: 'generation.promoted'; commit: string; previous: string }
-  | { type: 'generation.rolledback'; commit: string; to: string; reason: string };
+  | { type: 'generation.rolledback'; commit: string; to: string; reason: string }
+  // The body's own record, for whatever it keeps outside the journal and must be able to build again
+  // from it. The kernel stores a note and never reads one; `noteProblem` says what it takes. It came
+  // later: no older journal holds one, and a reader that does not know the type passes it over.
+  | { type: 'note'; kind: string; data: unknown };
+
+/** What a note's `kind` may be: a short name the body chooses, such as `memory.fact` or `lesson.v2`. */
+const NOTE_KIND = /^[a-z0-9._-]{1,64}$/;
+/** Bytes of a note's `data` once it is JSON. A note is a record, not a store; larger things go in files it names. */
+export const NOTE_DATA_LIMIT = 64 * 1024;
+
+/** Why a note with this `kind` and `data` is not journaled, or null when it is. */
+export function noteProblem(kind: unknown, data: unknown): string | null {
+  if (typeof kind !== 'string' || !NOTE_KIND.test(kind)) {
+    return 'a note\'s kind must be 1 to 64 characters of a-z, 0-9, ".", "_" and "-"';
+  }
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(data);
+  } catch (err) {
+    return `a note's data must be JSON: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  // undefined, a function, a symbol: JSON has no way to write them, and the line would come back without `data`.
+  if (json === undefined) return 'a note\'s data must be JSON, and this value has no JSON form';
+  const bytes = Buffer.byteLength(json, 'utf8');
+  if (bytes > NOTE_DATA_LIMIT) return `a note's data is ${bytes} bytes as JSON; the limit is ${NOTE_DATA_LIMIT}`;
+  return null;
+}
 
 /** `gen` is the commit of the code that wrote the event. */
 export type JournalEvent = EventBody & { v: number; id: string; ts: string; gen: string };
@@ -45,7 +72,12 @@ function endsWithNewline(fd: number): boolean {
   return last[0] === 0x0a;
 }
 
+/** Throws, with nothing written, for a note that `noteProblem` refuses. */
 export function appendEvent(path: string, gen: string, body: EventBody): JournalEvent {
+  if (body.type === 'note') {
+    const problem = noteProblem(body.kind, body.data);
+    if (problem !== null) throw new Error(problem);
+  }
   // The envelope comes last so nothing in the body can overwrite it.
   const event = {
     ...body, v: SCHEMA_VERSION, id: randomUUID(), ts: new Date().toISOString(), gen,

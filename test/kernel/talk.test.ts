@@ -65,6 +65,21 @@ test('nothing prints for the rest', () => {
   expect(render({ ...ev({ type: 'generation.ready', commit: A }), type: 'something.new' } as unknown as JournalEvent)).toBeNull();
 });
 
+test('a note the body keeps for itself prints nothing, moves no turn, and is not in the history', () => {
+  const note = (at = 0) => ev({ type: 'note', kind: 'memory.fact', data: { text: 'not for the screen\u001b[31m', n: 1 } }, at);
+  expect(render(note())).toBeNull();
+  // At rest it does not start a turn; in a turn it neither ends it nor counts as something that arrived late.
+  expect(track(AT_REST, note())).toEqual(AT_REST);
+  expect(after(said('hi'), note(100), reply('hello', 900))).toEqual(after(said('hi'), reply('hello', 900)));
+  expect(after(said('hi'), calling(900), note(920), result(950), note(960))).toEqual(after(said('hi'), calling(900), result(950)));
+  expect(after(said('hi'), reply('hello', 900), note(1000)).busy).toBe(false);
+  expect(recent([said('one'), note(), reply('to one'), note()])).toEqual(['> one', 'to one\n']);
+  // One of a shape the kernel would not have written is passed over the same way.
+  const odd = { ...note(), kind: 7, data: undefined } as unknown as JournalEvent;
+  expect(render(odd)).toBeNull();
+  expect(track(AT_REST, odd)).toEqual(AT_REST);
+});
+
 test('control characters never reach the terminal, and an event of the wrong shape still prints or is skipped without throwing', () => {
   expect(render(reply('red \x1b[31malert\x07 done'))).toBe('red [31malert done\n');
   expect(render(ev({ type: 'tool.intent', callId: 'c', name: 'ba\x1bsh', args: 'not an object' as unknown }))).toBe('  [bash] not an object');
@@ -249,6 +264,25 @@ test('piped lines are sent one at a time, each after the reply to the one before
   const order = readEvents(s.journal).slice(2).map((e) => (e.type === 'stimulus' || e.type === 'assistant' ? e.text : null)).filter((t) => t !== null);
   expect(order).toEqual(['first', 'you said: first', 'second', 'you said: second']);
   expect(readdirSync(s.owner)).toEqual([]);
+});
+
+test('a body that journals notes around its replies changes nothing a piped client prints or waits for', async () => {
+  const s = setup();
+  appendEvent(s.journal, A, { type: 'note', kind: 'memory.fact', data: { n: 0 } });
+  // The stand-in's replies, with a note before and after each.
+  const stop = standIn(s.journal, s.owner);
+  let last = 0;
+  const noting = setInterval(() => {
+    const replies = readEvents(s.journal).filter((e) => e.type === 'assistant').length;
+    if (replies !== last) { last = replies; appendEvent(s.journal, A, { type: 'note', kind: 'memory.fact', data: { n: replies } }); }
+  }, 3);
+  try {
+    expect(await talk({ ...s.base, lines: from('first', 'second'), interactive: false })).toBe(0);
+  } finally {
+    clearInterval(noting);
+    stop();
+  }
+  expect(s.out.join('')).toBe('  [echo] text: first\nyou said: first\n\n  [echo] text: second\nyou said: second\n\n');
 });
 
 test('a piped line waits for an agent in the middle of a turn to come to rest before it is sent', async () => {

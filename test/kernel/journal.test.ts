@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  appendEvent, journalSize, readEvents, readEventsFrom, SCHEMA_VERSION,
+  appendEvent, journalSize, NOTE_DATA_LIMIT, noteProblem, readEvents, readEventsFrom, SCHEMA_VERSION,
 } from '../../kernel/journal';
 
 function tmpJournal(): string {
@@ -145,4 +145,74 @@ test('a reply may carry its usage and a summary of the reasoning; one without th
   expect(SCHEMA_VERSION).toBe(1);
   expect(events.every((e) => e.v === 1)).toBe(true);
   expect(readEventsFrom(path, 0)).toEqual(events);
+});
+
+// --- notes: the body's own record ---
+
+test('a note is stored as given and comes back whole, whatever its data is', () => {
+  const path = tmpJournal();
+  const data = { schema: 3, fact: 'the owner prefers tea', from: ['e1', 'e2'], nested: { n: 1.5, none: null, yes: true } };
+  const note = appendEvent(path, 'gen-a', { type: 'note', kind: 'memory.fact', data });
+  const bare = appendEvent(path, 'gen-a', { type: 'note', kind: 'k', data: null });
+  const events = readEvents(path);
+  expect(events).toEqual([note, bare]);
+  expect(events[0]).toMatchObject({ type: 'note', kind: 'memory.fact', data, gen: 'gen-a', v: 1 });
+  // A note is an addition to version 1, not a new version.
+  expect(SCHEMA_VERSION).toBe(1);
+});
+
+test('a note\'s kind is a short lowercase name', () => {
+  for (const kind of ['a', 'memory.fact', 'lesson-v2', 'x_1', '0', 'a'.repeat(64)]) expect(noteProblem(kind, 1)).toBeNull();
+  for (const kind of ['', 'Memory', 'has space', 'slash/kind', 'ünï', 'a'.repeat(65), 'new\nline', 7, null, undefined, ['a']]) {
+    expect(noteProblem(kind, 1)).toContain('kind');
+  }
+});
+
+test('a note\'s data must have a JSON form and stay under the limit, counted in bytes', () => {
+  expect(noteProblem('k', 'x'.repeat(NOTE_DATA_LIMIT - 2))).toBeNull();
+  expect(noteProblem('k', 'x'.repeat(NOTE_DATA_LIMIT - 1))).toContain(`the limit is ${NOTE_DATA_LIMIT}`);
+  // Two bytes each in UTF-8: half as many characters fill it.
+  expect(noteProblem('k', 'é'.repeat(NOTE_DATA_LIMIT / 2))).toContain('the limit is');
+  expect(noteProblem('k', undefined)).toContain('no JSON form');
+  expect(noteProblem('k', () => 1)).toContain('no JSON form');
+  const loop: Record<string, unknown> = {};
+  loop.self = loop;
+  expect(noteProblem('k', loop)).toContain('must be JSON');
+  expect(noteProblem('k', { big: 10n })).toContain('must be JSON');
+});
+
+test('a note that is refused throws and leaves the journal as it was', () => {
+  const path = tmpJournal();
+  appendEvent(path, 'g', { type: 'stimulus', source: 'terminal', text: 'a' });
+  const size = journalSize(path);
+  expect(() => appendEvent(path, 'g', { type: 'note', kind: 'Bad Kind', data: 1 })).toThrow('kind');
+  expect(() => appendEvent(path, 'g', { type: 'note', kind: 'k', data: 'x'.repeat(NOTE_DATA_LIMIT) })).toThrow('limit');
+  expect(() => appendEvent(path, 'g', { type: 'note', kind: 'k', data: undefined })).toThrow('JSON');
+  expect(journalSize(path)).toBe(size);
+  // A journal that never saw a refused note: nothing is created for one either.
+  const fresh = tmpJournal();
+  expect(() => appendEvent(fresh, 'g', { type: 'note', kind: '', data: 1 })).toThrow();
+  expect(journalSize(fresh)).toBe(0);
+});
+
+test('a journal from before notes reads as it did, and notes among its lines disturb nothing', () => {
+  const path = tmpJournal();
+  mkdirSync(dirname(path), { recursive: true });
+  // Lines as generations from before the type wrote them, byte for byte.
+  const old = [
+    '{"type":"stimulus","source":"terminal","text":"hello","v":1,"id":"a","ts":"2026-01-01T00:00:00.000Z","gen":"gen-0"}',
+    '{"type":"assistant","text":"hi","toolCalls":[],"v":1,"id":"b","ts":"2026-01-01T00:00:01.000Z","gen":"gen-0"}',
+  ];
+  writeFileSync(path, `${old.join('\n')}\n`);
+  const before = readEvents(path);
+  expect(before.map((e) => e.type)).toEqual(['stimulus', 'assistant']);
+  const mark = journalSize(path);
+  const note = appendEvent(path, 'gen-1', { type: 'note', kind: 'memory.fact', data: { n: 1 } });
+  const after = readEvents(path);
+  expect(after.slice(0, 2)).toEqual(before);
+  expect(after[2]).toEqual(note);
+  expect(readEventsFrom(path, mark)).toEqual([note]);
+  // A note is read back as it lies there, even one a later kernel would not have taken: reading never refuses.
+  appendFileSync(path, '{"type":"note","kind":"Not A Kind","v":1,"id":"c","ts":"2026-01-01T00:00:02.000Z","gen":"gen-2"}\n');
+  expect(readEvents(path)).toHaveLength(4);
 });
