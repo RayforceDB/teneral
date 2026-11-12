@@ -10,7 +10,7 @@ A minimal agent that rewrites its own code, one measured generation at a time. T
 
 Two halves in one repository, and three directories that belong to one individual and are never committed.
 
-- `kernel/` is a small supervisor. It starts the agent, checks every new generation, and puts back the previous one when a new one fails. A molt cannot change it.
+- `kernel/` is a small supervisor. It starts the agent, checks every new generation, and puts back the previous one when a new one fails. The agent cannot edit it; a newer kernel reaches an individual only from the project itself, as a mutation from [the species](#the-species).
 - `body/` is everything the agent may rewrite: how it calls the model, its tools, its sensors, how it builds its context. It is kept under 200,000 bytes so the agent can read all of itself.
 - `memory/journal.jsonl` is the agent's history, append-only. Every event carries the commit of the code that wrote it, so generations can be compared.
 - `soul/` holds a few Markdown files the agent writes about who it is and who it works with. They are part of every request to the model.
@@ -21,7 +21,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 1. The agent edits a second checkout of this repository, `.teneral/candidate`, on the branch `lineage/local`. The code it is running is a third checkout, `.teneral/live`, which the kernel resets to the exact commit before every start.
 2. The agent calls its `molt` tool. The tool commits the candidate, journals the request, and the process exits with code 75 when the turn ends.
 3. The kernel checks the commit:
-   - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused;
+   - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused, unless the commit merges a later commit of [the species](#the-species) and holds outside those paths exactly what that commit holds;
    - `body/` may hold only regular files, and no more than 200,000 bytes of them;
    - every organ the commit pins (see [Organs](#organs)) is in the cache with exactly the pinned hash, unpacks safely, and passes its own check. A body that pins none skips this;
    - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
@@ -81,6 +81,56 @@ The journal has one event that is the body's own: `{ "type": "note", "kind": "..
 
 It is there for one rule: **anything the body keeps outside the journal must be rebuildable from the journal, and lies in a place named by its schema version, so that a rolled-back body finds data it understands.** An index, a database, a summary are derived: the journal is the record, and what a store was built from must be in it, as the conversation itself or as notes. A body that changes the shape of its store writes to a new place (`memory/store-v2/`, not `memory/store/` in a new shape) and builds it from the journal; the old place stays as it was. After a rollback the older body opens the place it knows, finds it as it left it, and replays what the journal gained since. A store that is lost or damaged is a store to build again, never a loss.
 
+## The species
+
+`main`, as the project publishes it, is the *species*: the kernel, its tests, this README, the seed body. An individual's branch is a *lineage* of it. Until now a lineage could never take in what the species gained after its birth, except by its owner's hand. Now the agent does that itself, as a molt like any other, called here a *mutation from the species*.
+
+**The rule.** In every generation, everything outside `body/`, `test/body/` and `BACKLOG.md` is byte for byte what one commit of the species holds; and the species commit a lineage stands on only moves forward. "The species commit X stands on" is the merge base of X and the species ref. The gate applies it to a candidate C that would replace generation G like this:
+
+- C leaves everything outside those paths as G has it: an ordinary molt. The species is not looked at, and nothing is fetched, so this works offline.
+- C stands where G stands and changes something outside them: refused at gate `protected`, as it always was, with `protected paths changed: ...`.
+- C stands on a later species commit, because the agent merged the species into its workspace: outside those paths C must hold exactly what that commit holds. If it does not, the gate `species` names the commit and every path that differs. A kernel file the agent edited after merging is caught here.
+- C stands on an earlier species commit than G, or on one beside it: refused, `would move the species back from <a> to <b>`.
+
+So a lineage whose kernel is not a species commit's, such as one from before this rule whose owner merged an unpublished `main` into it, keeps molting its body, and comes under the rule with the first species commit it merges. When the species ref was moved to another line of history, a lineage still molts its body on the kernel it has, and gets onto the new line only by holding exactly its files.
+
+**Which ref.** `TENERAL_UPSTREAM` in `.env` names it: `<remote>/<branch>` when the first part is a remote of this repository, else a local branch. Unset, it is `origin/main` when there is a remote `origin`, else the branch this checkout is on. A species on a remote is fetched by the kernel itself each time a mutation from the species is judged (`git fetch <remote> <branch>`, at most 60 seconds), so what counts is what the remote has, not what the agent's own fetch left in the repository; when the fetch fails the molt is refused without a verdict and can be asked for again. A local branch is never fetched. The kernel never changes a remote's address and never pushes. In a shallow clone git may not see the history a lineage shares with the species; the refusal then says so, and `git fetch --unshallow` mends it.
+
+**Your consent.** A mutation from the species runs a new kernel on your machine. `TENERAL_SPECIES` says what you allow:
+
+| `TENERAL_SPECIES` | |
+|---|---|
+| `ask` (the default) | The gate refuses the molt until you have accepted the species commit it stands on, or a later one. The refusal names the commit and tells the agent to ask you. Nothing of the candidate has run at that point. |
+| `auto` | No acceptance is needed. |
+| `off` | Nothing is taken from the species. |
+
+You accept with `./box accept` (the commit the agent last asked about) or `./box accept <commit>`, or with `/accept` and `/accept <commit>` in `./box talk`; then you tell the agent to ask for its molt again. Accepting a commit accepts every species commit before it. What you accepted is kept in `.teneral/species.json` and journaled as `species.accepted`, with the way it came: `box` or `talk`. From a talk client the acceptance travels as a file in `.teneral/owner/` whose name starts with a dot and ends in `.accept`, holding the commit; the kernel takes it in before it next judges a molt, and no body reads it, because every body passes over names that start with a dot. A line you type is always a `.txt` file, so no text is ever taken for an acceptance. A refusal that waits for you, like one for a fetch that failed, is not counted towards the three rejections of one commit that stop the supervisor.
+
+**The kernel of a generation is the kernel that runs it.** After a mutation from the species is promoted, the supervisor, the gates, the talk client, `back` and `accept` are that generation's own, run from `.teneral/live`. What the container starts is a small launcher, `kernel/launcher.ts`, from this checkout. It checks the current generation out in `.teneral/live`, starts `kernel/main.ts` from there, and starts the next kernel when a supervisor ends with status 85, which a supervisor does after it changed the generation, by a promotion or a rollback, to one whose kernel differs from its own. The old kernel judges the new one: the gates for the candidate run under the running generation's kernel, and execute the candidate's own kernel tests in the gate checkout, as before.
+
+A generation from before the launcher has a kernel that cannot run from `.teneral/live`; this checkout's kernel supervises it, as it always did. That is also how an existing install comes up: `git pull`, `./box down`, `./box up`, nothing else. Its state file is unchanged and is read as it is.
+
+The launcher and a kernel agree by a versioned contract, written at the top of `kernel/launcher.ts`. A kernel says in `kernel/launch.json` the lowest launcher version it can be started by; the launcher is version 1. A species commit that needs a newer launcher than this checkout has is refused at the gate with `your owner must update the install`. Should the current generation need one all the same, the launcher starts nothing, says `the owner must update the install (git pull, then ./box down and ./box up)` and exits with status 78. It does not loop.
+
+**When the new kernel does not work.** The kernel that promotes a mutation from the species writes `.teneral/trial.json` first. Until the new generation has journaled `generation.ready` under its new kernel, the launcher holds that kernel on trial. If it cannot be started, ends before that (with any status), has not got there within 5 minutes, or asks for another kernel without having changed the generation, the launcher goes back to the generation before: it writes the state file and a `generation.rolledback` event itself, with the reason and the end of what that kernel wrote to stderr, and starts the previous generation's kernel. None of that is done by the kernel that failed. A new kernel that works, with a body that does not, rolls the body back itself as any kernel does, and the launcher then starts the old kernel again. Once the generation was ready the trial is over; a kernel that fails later ends the launcher with its status and waits for you, and `./box back` returns to an earlier generation and its kernel.
+
+**The cage is yours.** `box`, the `Dockerfile`, `.dockerignore` and the launcher are the install. They live in this checkout and no mutation from the species puts another version of them into effect, whatever the lineage's commit holds; the container's flags are what your `box` says. When the generation's versions differ from this checkout's, the supervisor logs one line and `./box talk` shows it; you look at the difference and take it, or not, with `git pull` here.
+
+**Which kernel each command uses.**
+
+| Command | Runs |
+|---|---|
+| `./box up`, `./box fg` | this checkout's launcher, which starts the current generation's kernel |
+| `./box talk`, `./box back`, `./box accept` | the kernel in `.teneral/live`, once a generation has one; this checkout's for a generation from before the launcher. `bun kernel/launcher.ts home` prints which |
+| `./box setup`, `./box run <command>` | this checkout: `./box run bun kernel/back.ts` is this checkout's `back`, for when the generation's own is what is broken |
+| `./box logs`, `./box down` | no kernel: Docker |
+
+A talk client older than the journal is no problem: every reader passes over event kinds it does not know.
+
+**A development checkout.** If you work on teneral in the same checkout your individual lives in, your `main` runs ahead of `origin/main`, and the agent cannot take what you have not pushed. Set `TENERAL_UPSTREAM=main`: the species is then your local branch, nothing is fetched, and the agent merges `main`. With `TENERAL_SPECIES=ask` you still accept each commit before its kernel runs.
+
+**What this does not stop.** The rule is checked on a molt. The agent has a shell in this directory: it can write the acceptance file itself, move a local species branch, or edit `.teneral/live` directly. As everywhere here, this guards against mistakes, not against intent. And a lineage only receives: offering its own changes back to the species is not built (see `BACKLOG.md`).
+
 ## Birth
 
 The first time you start it, the agent speaks first. Its journal holds no message yet, so the first one in it becomes the letter in `BIRTH.md`. The letter asks the agent to read its own code, tell you what it found, and ask who it should be for you: its name, what you want from it, how much initiative to take. Then it writes its soul, `soul/SOUL.md` and `soul/OWNER.md`, and from then on those files are part of every turn. They are the agent's own to revise, and they are never committed.
@@ -109,6 +159,7 @@ Requires Docker and git.
     ./box talk              # attach this terminal to it
     ./box down              # stop it
     ./box back              # send it back to the generation before
+    ./box accept            # accept the species commit it asked to take, and with it a new kernel
     ./box setup             # choose another model provider, or sign in again
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
@@ -156,6 +207,7 @@ To change provider or sign in again, run `./box setup`. It asks before replacing
 | Ctrl+V | attach the image that is in your clipboard |
 | `/image <path>` | attach an image file from your machine. Dragging a file into the terminal, or pasting its path, does the same |
 | Esc, `/stop` | interrupt what the agent is doing now; see [Interrupting](#interrupting). When it is doing nothing, this does nothing and says so |
+| `/accept`, `/accept <commit>` | accept the species commit the agent asked about, or the one named; see [The species](#the-species). It goes to the kernel, not to the agent |
 | Tab, `/tools` | show a few rows of what each tool call returned, from now on, and once more for the calls since you last spoke; again to stop |
 | `/history` | print the earlier conversation that was read from the journal when you attached |
 | `/generations` | the generations it has lived in, as `./box back --list` gives them |
@@ -205,7 +257,7 @@ The client runs inside the container, where there is no clipboard and no file of
 
 When the clipboard offers an image in several formats PNG is taken, and nothing is converted. Without such a tool, or over SSH where there is no display, Ctrl+V says what is missing; dragging a file and `/image` work regardless. A client started without `./box` (a plain `docker exec`, or `bun kernel/talk.ts` on the machine itself) has no helper: it says so, and `/image` then takes only files the client can read itself. Nothing is shown as a picture in the terminal; an image is always a chip.
 
-`./box talk --plain` is the same conversation as plain text, without the panel and the input box: the last few exchanges, then replies in full, one short line for each tool call (`  [bash] command: ...`), the kernel's notes as `[kernel] ...`, an interruption as `[interrupted by the owner]`, and what was typed in other terminals marked with `> `. A line that is exactly `/stop` interrupts the turn in progress instead of being sent. That is also what you get whenever the input or the output is not a terminal. It has no way to attach an image.
+`./box talk --plain` is the same conversation as plain text, without the panel and the input box: the last few exchanges, then replies in full, one short line for each tool call (`  [bash] command: ...`), the kernel's notes as `[kernel] ...`, an interruption as `[interrupted by the owner]`, and what was typed in other terminals marked with `> `. A line that is exactly `/stop` interrupts the turn in progress instead of being sent, and `/accept` works as in the full client. That is also what you get whenever the input or the output is not a terminal. It has no way to attach an image.
 
 `./box talk` also takes its lines from a pipe, for scripts, and this is unchanged:
 
@@ -233,6 +285,8 @@ Settings, in `.env`:
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
+| `TENERAL_UPSTREAM` | Which ref is [the species](#the-species): `<remote>/<branch>` or a local branch. Default `origin/main` when there is a remote `origin`, else the branch this checkout is on. |
+| `TENERAL_SPECIES` | Whether the agent may take a mutation from the species: `ask` (the default: you accept each species commit first), `auto`, or `off`. |
 
 `./box setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
 
@@ -240,9 +294,9 @@ To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, 
 
 ### How your lines reach it
 
-`./box talk` runs a small client, `kernel/talk.ts`, inside the agent's container (what it draws at a terminal is in `kernel/tui/`). Each line you enter becomes a file in `.teneral/owner/`, which the agent reads within a quarter of a second and takes exactly as a line typed at its own terminal. What you see is read back from the journal. There is no connection between the client and the agent to break, which is why you can leave and come back, and why a line entered just before a molt or a crash is not lost: the file stays until it is in the journal.
+`./box talk` runs a small client, `kernel/talk.ts`, inside the agent's container (what it draws at a terminal is in `kernel/tui/`); it is the running generation's own, like the rest of its kernel. Each line you enter becomes a file in `.teneral/owner/`, which the agent reads within a quarter of a second and takes exactly as a line typed at its own terminal. What you see is read back from the journal. There is no connection between the client and the agent to break, which is why you can leave and come back, and why a line entered just before a molt or a crash is not lost: the file stays until it is in the journal.
 
-An interrupt is a file in the same directory whose name ends in `.interrupt` and which holds nothing. Its name alone makes it one. A line is always written under a name ending in `.txt`, so nothing you type, and nothing a client forwards as text, can be taken for an interrupt, whatever it says; and a body from before interrupts reads the file as an empty line and drops it.
+An interrupt is a file in the same directory whose name ends in `.interrupt` and which holds nothing. Its name alone makes it one. A line is always written under a name ending in `.txt`, so nothing you type, and nothing a client forwards as text, can be taken for an interrupt, whatever it says; and a body from before interrupts reads the file as an empty line and drops it. Your acceptance of a species commit is a third kind of file there, read by the kernel and by no body; see [The species](#the-species).
 
 Nothing is signed. Whoever can write to `.teneral/owner/` speaks as the owner, and that includes the agent's own shell. `inbox/` is the other door, for everyone else: what arrives there is shown to the agent as coming from another agent and is not to be obeyed.
 
@@ -258,11 +312,11 @@ Worktrees record absolute paths, and inside the container this directory is `/te
 
 A peer's inbox in `soul/peers.json` has to be a path the agent can see, and in the container that means inside this directory. Dropping files into `inbox/` from outside works as it is.
 
-To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install`, `bun kernel/setup.ts` for the setup, then `bun start`. That runs in the foreground, as `./box fg` does, and `bun kernel/talk.ts` in a second terminal is what `./box talk` is; `bun kernel/back.ts`, with the agent stopped, is what `./box back` is. There the agent's shell has everything your account has.
+To run without the container, on a machine you are willing to hand over, you need [Bun](https://bun.sh) 1.4 and git: `bun install`, `bun kernel/setup.ts` for the setup, then `bun start`, which is the launcher. That runs in the foreground, as `./box fg` does. `bun kernel/launcher.ts home` prints where the current generation's kernel is, `.` or `.teneral/live`; `bun <that>/kernel/talk.ts` in a second terminal is what `./box talk` is, and `bun <that>/kernel/back.ts`, with the agent stopped, and `bun <that>/kernel/accept.ts` are `./box back` and `./box accept`. There the agent's shell has everything your account has.
 
 ## What it does not do yet
 
-- **The kernel guards against mistakes, not against intent.** The body has a shell and runs as the same user as the kernel, in the same container. A molt cannot change the kernel, but a shell command can edit `kernel/`, the journal or `.teneral/state.json` directly. Nothing here stops a body that goes around the molt path.
+- **The kernel guards against mistakes, not against intent.** The body has a shell and runs as the same user as the kernel, in the same container. A molt can change the kernel only into a species commit's, but a shell command can edit `kernel/`, `.teneral/live`, the journal, `.teneral/state.json` or the file that records your acceptance of a species commit directly. Nothing here stops a body that goes around the molt path.
 - **Messages between agents are unsigned.** The `from` on a message is whatever the sender wrote.
 - **Nothing measures whether a generation is better.** The checks show it is not broken: it type-checks, its tests pass, it starts and answers one message from a stand-in model. Whether it is an improvement is for you and the agent to judge from the journal.
 
@@ -270,7 +324,7 @@ To run without the container, on a machine you are willing to hand over, you nee
 
 ## Your clone is its own individual
 
-`main` is the shared starting point. Once you run it, your agent commits to its own `lineage/local` branch and diverges. Its journal, its soul and its branch stay on your machine; the kernel never pushes.
+`main` is the shared starting point, and stays the [species](#the-species) your individual descends from. Once you run it, your agent commits to its own `lineage/local` branch and diverges in its body, and takes what the species gains later by merging it. Its journal, its soul and its branch stay on your machine; the kernel never pushes.
 
 ## License
 
