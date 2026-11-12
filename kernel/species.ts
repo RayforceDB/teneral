@@ -12,7 +12,7 @@ import { CHANGEABLE, protectedChanges } from './protected';
 //   In every generation, everything outside the changeable paths is byte for byte what a commit
 //   of the species holds; and the species commit a lineage stands on only moves forward.
 //
-// "The species commit X stands on" is the merge base of X and the species ref. A molt that leaves
+// "The species commit X stands on" is the merge base of X and the species ref. A mutation that leaves
 // everything outside the changeable paths alone is not looked at here at all and needs no network.
 // One that does not is a mutation from the species, or a mistake, and this file tells which.
 
@@ -98,7 +98,7 @@ export type AcceptRoute = 'box' | 'talk';
 
 /** What `.teneral/species.json` holds. */
 export interface Consent {
-  /** The species commit a molt last stood on that the owner had not accepted: what `/accept` with no commit means. */
+  /** The species commit a mutation last stood on that the owner had not accepted: what `/accept` with no commit means. */
   asked?: string;
   /** The species commit the owner accepted last. It covers that commit and every one before it. */
   accepted?: string;
@@ -148,7 +148,7 @@ export function chooseAccept(root: string, wanted: string): { commit: string; su
   let commit: string | null;
   if (wanted === '') {
     if (consent.asked === undefined) {
-      return { why: 'nothing is waiting for your acceptance: no molt has stood on a species commit you had not accepted. With a commit named, one is accepted ahead of time' };
+      return { why: 'nothing is waiting for your acceptance: no mutation has stood on a species commit you had not accepted. With a commit named, one is accepted ahead of time' };
     }
     commit = consent.asked;
   } else {
@@ -280,10 +280,10 @@ export async function judgeSpecies(
   }
   if (mode === 'off') {
     return no(`this commit changes files outside ${AREA} by merging the species (${species.name}), and your owner has switched mutations from the species off (TENERAL_SPECIES=off). `
-      + 'Molt only what you changed in your own body; tell your owner that the species has moved on, if you want it.');
+      + 'Mutate only what you changed in your own body; tell your owner that the species has moved on, if you want it.');
   }
   // From here on it claims to be a mutation from the species, and that is judged against the species as it is now.
-  if (unfetched !== '') return no(`${unfetched}.\nA mutation from the species is judged against the species as its remote has it, so nothing was decided. Call molt again for this commit when the remote can be reached.`, true);
+  if (unfetched !== '') return no(`${unfetched}.\nA mutation from the species is judged against the species as its remote has it, so nothing was decided. Ask again for this commit when the remote can be reached.`, true);
   if (stands.length !== 1) {
     return no(stands.length === 0
       ? `this commit shares no history with the species ${species.name} (${short(tip)}).${shallow} Merge the species into your workspace: git merge ${species.name}.`
@@ -327,7 +327,7 @@ export async function judgeSpecies(
       return no(`this is a mutation from the species: it moves what this lineage stands on from species commit ${stood.map(short).join(', ') || '(none)'} to ${on}, and with that its kernel. `
         + `Your owner has not accepted that commit${consent.accepted === undefined ? '' : ` (the last one accepted is ${short(consent.accepted)})`}. Nothing has been checked or run yet, and nothing is wrong with the commit so far.\n`
         + `Ask your owner to accept species commit ${short(on)}: /accept in ./box talk, or ./box accept ${short(on)} on their machine. Say what the species brings and that you ran its tests. `
-        + 'When they have, call molt again for this same commit; asking again before that only gets this answer again.', true);
+        + 'When they have, ask again for this same commit; asking again before that only gets this answer again.', true);
     }
   }
   return { ok: true, commit: on };

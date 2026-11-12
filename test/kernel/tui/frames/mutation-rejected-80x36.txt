@@ -30,7 +30,7 @@
 
 ● I will ask for the mutation now.
 
-  ▪ molt  motive: remember names                                        ✓ 200ms
+  ▪ mutate  motive: remember names                                      ✓ 200ms
 
 ┃ mutation to e5f6a7b rejected at gate "body tests"
 ┃   … 36 earlier rows; the journal has all of it
@@ -42,7 +42,7 @@
 ┃   (fail) a turn ends when the model stops calling tools [1.20ms]
 ┃     error: expect(received).toBe(expected)
 ┃     Expected: "done"
-┃     Received: "molt"
+┃     Received: "mutation"
 ┃           at <anonymous>
 ┃   (/teneral/.teneral/gate/test/body/loop.test.ts:41:23)
 ┃

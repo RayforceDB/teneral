@@ -36,9 +36,9 @@
     со временем я не смогу держать его в голове целиком
   • у меня есть шесть инструментов
     1. read, write, edit
-    2. bash, molt, send
+    2. bash, mutate, send
 
-  │ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> { // …
+  │ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation'> {…
   │     const events = readEvents(d.journal);
   │ }
 

@@ -31,7 +31,7 @@ const rolledback = (c: string, to: string) => ev(to, { type: 'generation.rolledb
 /** A generation's ordinary life: started, ready, one reply. */
 const lived = (c: string) => [started(c), ready(c), reply(c)];
 /** `c` promoted over `previous`, then its ordinary life. */
-const molted = (c: string, previous: string) => [promoted(c, previous), ...lived(c)];
+const mutated = (c: string, previous: string) => [promoted(c, previous), ...lived(c)];
 
 const everything = () => true;
 const before = (events: JournalEvent[], current: string, exists: (c: string) => boolean = everything) => chooseTarget(events, current, null, exists);
@@ -44,28 +44,28 @@ test('with only the first generation there is nothing to go back to', () => {
 });
 
 test('the one before is the generation the current one was first promoted over', () => {
-  expect(before([...lived(S), ...molted(A, S)], A)).toEqual({ ok: true, target: S });
-  expect(before([...lived(S), ...molted(A, S), ...molted(B, A), ...molted(C, B)], C)).toEqual({ ok: true, target: B });
+  expect(before([...lived(S), ...mutated(A, S)], A)).toEqual({ ok: true, target: S });
+  expect(before([...lived(S), ...mutated(A, S), ...mutated(B, A), ...mutated(C, B)], C)).toEqual({ ok: true, target: B });
 });
 
 test('straight after an automatic rollback, back goes further back, not forward to what was just rolled back', () => {
   // S, then A, then B which failed and was rolled back to A.
-  const events = [...lived(S), ...molted(A, S), ...molted(B, A), rolledback(B, A), started(A), ready(A)];
+  const events = [...lived(S), ...mutated(A, S), ...mutated(B, A), rolledback(B, A), started(A), ready(A)];
   expect(before(events, A)).toEqual({ ok: true, target: S });
   // And when the rollback landed on the first generation, there is nothing before it.
-  expect(before([...lived(S), ...molted(A, S), rolledback(A, S), started(S), ready(S)], S).ok).toBe(false);
+  expect(before([...lived(S), ...mutated(A, S), rolledback(A, S), started(S), ready(S)], S).ok).toBe(false);
 });
 
-test('after going back by hand, back again goes one further, and a molt from there has that generation before it', () => {
-  const toA = [...lived(S), ...molted(A, S), ...molted(B, A), ...molted(C, B), rolledback(C, A), started(A), ready(A)];
+test('after going back by hand, back again goes one further, and a mutation from there has that generation before it', () => {
+  const toA = [...lived(S), ...mutated(A, S), ...mutated(B, A), ...mutated(C, B), rolledback(C, A), started(A), ready(A)];
   expect(before(toA, A)).toEqual({ ok: true, target: S });
-  const thenD = [...toA, ...molted(D, A)];
+  const thenD = [...toA, ...mutated(D, A)];
   expect(before(thenD, D)).toEqual({ ok: true, target: A });
 });
 
 test('a generation that never became ready, or that git no longer has, is passed over', () => {
   // A was promoted, never became ready and was rolled back; then B was promoted over S.
-  const events = [...lived(S), promoted(A, S), started(A), rolledback(A, S), started(S), ready(S), ...molted(B, S), ...molted(C, B)];
+  const events = [...lived(S), promoted(A, S), started(A), rolledback(A, S), started(S), ready(S), ...mutated(B, S), ...mutated(C, B)];
   expect(before(events, C)).toEqual({ ok: true, target: B });
   expect(before(events, C, (c) => c !== B)).toEqual({ ok: true, target: S });
   const none = before(events, C, () => false);
@@ -73,7 +73,7 @@ test('a generation that never became ready, or that git no longer has, is passed
 });
 
 test('a named generation is found by its full id or a prefix of seven or more', () => {
-  const events = [...lived(S), ...molted(A, S), ...molted(B, A)];
+  const events = [...lived(S), ...mutated(A, S), ...mutated(B, A)];
   expect(chooseTarget(events, B, S, everything)).toEqual({ ok: true, target: S });
   expect(chooseTarget(events, B, S.slice(0, 7), everything)).toEqual({ ok: true, target: S });
   expect(chooseTarget(events, B, A.slice(0, 12), everything)).toEqual({ ok: true, target: A });
@@ -81,7 +81,7 @@ test('a named generation is found by its full id or a prefix of seven or more', 
 
 test('a named generation is refused when it cannot be the one meant, each time saying why', () => {
   const twin = `${A.slice(0, 10)}${'0'.repeat(30)}`;
-  const events = [...lived(S), ...molted(A, S), promoted(C, A), started(C), rolledback(C, A), started(A), ready(A), ...molted(twin, A), ...molted(B, twin)];
+  const events = [...lived(S), ...mutated(A, S), promoted(C, A), started(C), rolledback(C, A), started(A), ready(A), ...mutated(twin, A), ...mutated(B, twin)];
   const why = (wanted: string, exists: (c: string) => boolean = everything) => {
     const choice = chooseTarget(events, B, wanted, exists);
     return choice.ok ? `chose ${choice.target}` : choice.why;
@@ -97,7 +97,7 @@ test('a named generation is refused when it cannot be the one meant, each time s
 });
 
 test('the list shows every generation lived in, oldest first, with when it became ready, its replies, and which is current', () => {
-  const events = [...lived(S), reply(S), ...molted(A, S), promoted(C, A), started(C), rolledback(C, A), started(A), reply(A), reply(A)];
+  const events = [...lived(S), reply(S), ...mutated(A, S), promoted(C, A), started(C), rolledback(C, A), started(A), reply(A), reply(A)];
   const rows = generations(events, A);
   expect(rows.map((r) => r.commit)).toEqual([S, A, C]);
   expect(rows.map((r) => r.replies)).toEqual([2, 3, 0]);

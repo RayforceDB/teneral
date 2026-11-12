@@ -1,4 +1,4 @@
-# What a molt must pass, run on every pull request's head, so the human who merges sees it beside
+# What a mutation must pass, run on every pull request's head, so the human who merges sees it beside
 # the change. Nothing here has a secret, and nothing here merges: see README, "Offering a change
 # to the species". The workflow that runs is the pull request's own, as its code and its tests are.
 name: gates
@@ -37,7 +37,7 @@ jobs:
         run: bun kernel/offer.ts gates HEAD
 
   paths:
-    name: paths outside what a molt may change
+    name: paths outside what a mutation may change
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -54,13 +54,13 @@ jobs:
         run: |
           outside="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD | grep -v -E "$CHANGEABLE" || true)"
           if [ -z "$outside" ]; then
-            echo "This pull request changes only what a molt may change: body/, test/body/ and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "This pull request changes only what a mutation may change: body/, test/body/ and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             count="$(printf '%s\n' "$outside" | wc -l | tr -d ' ')"
-            echo "::warning title=Outside the body::This pull request changes $count path(s) a molt could not: the kernel, its tests or the project's own files."
+            echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation could not: the kernel, its tests or the project's own files."
             {
               echo "### This pull request changes $count path(s) outside the body"
-              echo "A molt could not make these changes: the kernel, its tests, the project's own files."
+              echo "A mutation could not make these changes: the kernel, its tests, the project's own files."
               echo
               printf '%s\n' "$outside" | sed 's/^/- `/; s/$/`/'
             } | tee -a "$GITHUB_STEP_SUMMARY"

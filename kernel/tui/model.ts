@@ -1,5 +1,5 @@
 import { OWNER_REASON } from '../back';
-import type { JournalEvent } from '../journal';
+import { eventName, type JournalEvent } from '../journal';
 import { AT_REST, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
@@ -9,17 +9,9 @@ import { clean } from './text';
 // client, nothing here trusts the shape of what the body journaled, and every text an entry
 // holds has been through `clean`.
 //
-// A change the agent proposes to its own body is a mutation. The journals that exist call it a
-// molt (`molt.requested`, `molt.rejected`, the tool `molt`); the names to come are read as the
-// same thing, so this file needs no change when they arrive.
-
-const SYNONYMS: Readonly<Record<string, string>> = { 'mutation.requested': 'molt.requested', 'mutation.rejected': 'molt.rejected' };
-
-/** The event under the name this file knows it by. */
-export function canonical(e: JournalEvent): JournalEvent {
-  const known = typeof e?.type === 'string' && Object.hasOwn(SYNONYMS, e.type) ? SYNONYMS[e.type] : undefined;
-  return known === undefined ? e : { ...e, type: known } as JournalEvent;
-}
+// A change the agent proposes to its own body is a mutation. Journals and bodies from before it
+// had that name say `molt.requested`, `molt.rejected` and the tool `molt`; every event is read
+// here by the name `eventName` gives it (kernel/journal.ts), so both are the same thing.
 
 /** Whether a tool's name is the one that asks for a mutation, under either of its names. */
 export const isMutationTool = (name: string): boolean => name === 'molt' || name === 'mutate';
@@ -85,8 +77,8 @@ export interface Standing {
   spoke: boolean;
   /** The tool running now. */
   tool: { callId: string; name: string } | null;
-  /** The commit of a molt asked for and not yet judged. */
-  molt: string | null;
+  /** The commit of a mutation asked for and not yet judged. */
+  mutation: string | null;
   /** The last finished reply ended with a question, and nothing has arrived since. */
   asked: boolean;
   /** The generation it is in, and every generation the journal names, in the order first met. */
@@ -96,7 +88,7 @@ export interface Standing {
   usage: { input: number; output: number; cached: number | null } | null;
 }
 
-export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, molt: null, asked: false, current: null, known: [], usage: null };
+export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null };
 
 /** A journaled `usage`, when it is one: two counts that are numbers, and maybe a third. */
 function usageOf(value: unknown): Standing['usage'] {
@@ -114,8 +106,7 @@ export function endsWithQuestion(text: string): boolean {
 }
 
 /** `Standing` after one more event. */
-export function stand(s: Standing, event: JournalEvent): Standing {
-  const e = canonical(event);
+export function stand(s: Standing, e: JournalEvent): Standing {
   const f = e as unknown as Record<string, unknown>;
   const turn = track(s.turn, e);
   const at = Date.parse(asText(e.ts));
@@ -124,7 +115,7 @@ export function stand(s: Standing, event: JournalEvent): Standing {
     const c = asText(commit);
     if (c !== '' && !next.known.includes(c)) next = { ...next, known: [...next.known, c] };
   };
-  switch (e.type) {
+  switch (eventName(e.type)) {
     case 'stimulus':
       return { ...next, asked: false };
     case 'assistant': {
@@ -139,10 +130,10 @@ export function stand(s: Standing, event: JournalEvent): Standing {
       return s.tool !== null && s.tool.callId === asText(f.callId) ? { ...next, tool: null } : next;
     case 'turn.interrupted':
       return { ...next, tool: null, asked: false };
-    case 'molt.requested':
-      return { ...next, molt: asText(f.commit) };
-    case 'molt.rejected':
-      return { ...next, molt: null, asked: false };
+    case 'mutation.requested':
+      return { ...next, mutation: asText(f.commit) };
+    case 'mutation.rejected':
+      return { ...next, mutation: null, asked: false };
     case 'generation.started':
       know(f.commit);
       return { ...next, current: asText(f.commit) || s.current, tool: null };
@@ -152,11 +143,11 @@ export function stand(s: Standing, event: JournalEvent): Standing {
     case 'generation.promoted':
       know(f.previous);
       know(f.commit);
-      return { ...next, current: asText(f.commit) || s.current, molt: null, asked: false };
+      return { ...next, current: asText(f.commit) || s.current, mutation: null, asked: false };
     case 'generation.rolledback':
       know(f.commit);
       know(f.to);
-      return { ...next, current: asText(f.to) || s.current, molt: null, asked: false };
+      return { ...next, current: asText(f.to) || s.current, mutation: null, asked: false };
     default:
       return next;
   }
@@ -181,7 +172,7 @@ export interface Alive {
  */
 export function stateWord(s: Standing, alive: Alive): string {
   if (!alive.supervisor) return 'not running';
-  if (s.molt !== null) return 'mutating';
+  if (s.mutation !== null) return 'mutating';
   if (!alive.body) return 'starting';
   if (!s.spoke) return 'waking';
   if (s.tool !== null) return `running ${s.tool.name}`;
@@ -254,13 +245,13 @@ export class Transcript {
    */
   add(e: JournalEvent, before: Standing, live: boolean): void {
     try {
-      this.take(canonical(e), before, live);
+      this.take(e, before, live);
     } catch { /* an event of a shape nobody foresaw is not shown, and nothing else is disturbed */ }
   }
 
   private take(e: JournalEvent, before: Standing, live: boolean): void {
     const f = e as unknown as Record<string, unknown>;
-    switch (e.type) {
+    switch (eventName(e.type)) {
       case 'stimulus': {
         const source = flat(clean(asText(f.source)));
         const text = clean(asText(f.text));
@@ -334,7 +325,7 @@ export class Transcript {
         for (const { entry } of this.tools.values()) Object.assign(entry, { status: 'cut short', rev: entry.rev + 1 });
         this.tools.clear();
         return;
-      case 'molt.rejected':
+      case 'mutation.rejected':
         this.push({
           kind: 'notice', tone: 'warn', title: `mutation to ${shortSha(f.commit)} rejected at gate "${cut(flat(clean(asText(f.gate))), 40)}"`,
           lead: '', body: tailOf(clean(asText(f.output)).trimEnd(), NOTICE_CHARS),

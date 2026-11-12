@@ -261,7 +261,7 @@ export interface Report {
   body: string;
   commits: { commit: string; subject: string; signer: string | null }[];
   files: { path: string; change: string; bytes: number }[];
-  /** The changed paths outside what a molt may change: the kernel, its tests, the project's own files. */
+  /** The changed paths outside what a mutation may change: the kernel, its tests, the project's own files. */
   outside: string[];
   /** Changed files git takes for binary: nothing looked inside them. */
   binary: string[];
@@ -275,13 +275,13 @@ export interface Report {
 /** What the last commit of an offer has to say, each at the start of a line of its message. */
 export const SECTIONS = ['What it changes:', 'Why:', 'Evidence:', 'Not verified:'] as const;
 
-/** The gates of a molt, in the order they run, as a fresh seed meets them. */
+/** The gates of a mutation, in the order they run, as a fresh seed meets them. */
 const GATES = ['body', 'size', 'organs', 'types', 'tests-kernel', 'tests-body', 'smoke'] as const;
 
 /**
  * The full gates on `commit` as if it were a fresh seed: its size, its organs as it pins them, the
  * type check, the kernel's tests, the body's tests and the smoke run, in a checkout made for it.
- * The commit is compared with itself, so the rule about which paths a molt may change, and any
+ * The commit is compared with itself, so the rule about which paths a mutation may change, and any
  * rule about what the rest must be identical to, has nothing to say here: an offer may touch the
  * kernel, and it is the human who decides about that.
  */
@@ -405,7 +405,7 @@ export function formatReport(r: Report): string {
     const total = r.files.reduce((sum, f) => sum + f.bytes, 0);
     lines.push('', `files (${r.files.length}, ${total} bytes as they would stand):`, ...r.files.map((f) => `  ${f.change.padEnd(8)}${String(f.bytes).padStart(8)}  ${f.path}`));
   }
-  if (r.outside.length > 0) lines.push('', `It changes ${r.outside.length} path${r.outside.length === 1 ? '' : 's'} a molt could not: the kernel, its tests or the project's own files.`, ...r.outside.map((p) => `  ${p}`));
+  if (r.outside.length > 0) lines.push('', `It changes ${r.outside.length} path${r.outside.length === 1 ? '' : 's'} a mutation could not: the kernel, its tests or the project's own files.`, ...r.outside.map((p) => `  ${p}`));
   if (r.binary.length > 0) lines.push('', `Binary, so nothing looked inside: ${r.binary.join(', ')}`);
   lines.push('', 'checks:');
   for (const s of r.steps) lines.push(`  ${s.name.padEnd(13)}${mark(s.ok)}${s.detail === '' ? '' : `  ${s.detail.split('\n').join('\n                 ')}`}`);
@@ -779,7 +779,7 @@ const USAGE = `usage: bun kernel/offer.ts <command>     (your owner: ./box offer
                             run the same checks on an open pull request and post what was seen
   list                      what was checked here, and what waits for the owner
   key                       print this individual's public signing key, making it first if there is none
-  gates [<commit>]          the gates of a molt on a commit as a fresh seed, and nothing else (default: HEAD)
+  gates [<commit>]          the gates of a mutation on a commit as a fresh seed, and nothing else (default: HEAD)
 
 for the owner, at a terminal:
   approve <commit>          let exactly this commit go out
@@ -798,7 +798,7 @@ export async function main(
   };
   try {
     if (command === 'gates' && rest.length <= 1) {
-      // What a molt must pass, on any commit, with nothing of an install around it: for the species' own CI, and for a look by hand.
+      // What a mutation must pass, on any commit, with nothing of an install around it: for the species' own CI, and for a look by hand.
       const commit = resolve(root, rest[0] ?? 'HEAD');
       const r = await seedGates(root, commit, { provider: settings(root).TENERAL_PROVIDER });
       const at = (GATES as readonly string[]).indexOf(r.gate);

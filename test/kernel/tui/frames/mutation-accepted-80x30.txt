@@ -30,7 +30,7 @@
 
 ● I will ask for the mutation now.
 
-  ▪ molt  motive: remember names                                        ✓ 200ms
+  ▪ mutate  motive: remember names                                      ✓ 200ms
 
 ┃ mutation accepted  a1b2c3d → e5f6a7b
 

@@ -1,6 +1,6 @@
 import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { journalSize, readEventsFrom, type JournalEvent } from './journal';
+import { eventName, journalSize, readEventsFrom, type JournalEvent } from './journal';
 import { accept, interrupt, tell } from './owner';
 import { ownerCommand } from './offer';
 import { planNotice } from './providers';
@@ -60,7 +60,7 @@ function summary(args: unknown): string {
  */
 export function render(e: JournalEvent): string | null {
   const f = e as unknown as Record<string, unknown>;
-  switch (e.type) {
+  switch (eventName(e.type)) {
     case 'assistant': {
       const text = plain(asText(f.text)).trim();
       // The blank line after it keeps one reply apart from the next thing.
@@ -72,10 +72,10 @@ export function render(e: JournalEvent): string | null {
       if (f.source === 'terminal') return `> ${plain(asText(f.text))}`;
       // Whatever else woke the agent, in one line: another agent's message, the clock, the birth letter.
       return `[${oneLine(asText(f.source), 80)}] ${oneLine(asText(f.text), 200)}`;
-    case 'molt.rejected': {
+    case 'mutation.rejected': {
       const output = tail(asText(f.output), 1500);
       const said = output === '' ? '' : `:\n${output.split('\n').map((line) => `    ${line}`).join('\n')}`;
-      return `[kernel] molt to ${short(f.commit)} rejected at gate "${oneLine(asText(f.gate), 40)}"${said}`;
+      return `[kernel] mutation to ${short(f.commit)} rejected at gate "${oneLine(asText(f.gate), 40)}"${said}`;
     }
     case 'generation.promoted':
       return `[kernel] promoted ${short(f.commit)} (before: ${short(f.previous)})`;
@@ -121,9 +121,9 @@ const BURST_MS = 100;
  */
 export function track(t: Turn, e: JournalEvent): Turn {
   const at = Date.parse(asText(e.ts));
-  switch (e.type) {
+  switch (eventName(e.type)) {
     case 'stimulus':
-    case 'molt.rejected':
+    case 'mutation.rejected':
     case 'generation.promoted':
     case 'generation.rolledback':
       // At rest, this is what starts a turn, and the turn's first request sees it.
@@ -336,7 +336,7 @@ export async function talk(o: TalkOptions): Promise<number> {
       const chosen = chooseAccept(o.root, wanted);
       if ('why' in chosen) return o.note(`(not accepted: ${chosen.why})`);
       accept(o.owner, chosen.commit);
-      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to molt: tell it to ask again)`);
+      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to mutate: tell it to ask again)`);
     } catch (err) {
       o.note(`could not accept that: ${err instanceof Error ? err.message : String(err)}`);
     }

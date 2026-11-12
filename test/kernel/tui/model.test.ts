@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { OWNER_REASON } from '../../../kernel/back';
 import type { EventBody, JournalEvent } from '../../../kernel/journal';
-import { ENTRY_LIMIT, Transcript, UNBORN, canonical, endsWithQuestion, isMutationTool, stand, stateWord, unfinished, type Entry, type Standing } from '../../../kernel/tui/model';
+import { ENTRY_LIMIT, Transcript, UNBORN, endsWithQuestion, isMutationTool, stand, stateWord, unfinished, type Entry, type Standing } from '../../../kernel/tui/model';
 import { soulName, soulNameIn } from '../../../kernel/tui/talk';
 
 const A = 'a'.repeat(40);
@@ -78,10 +78,10 @@ test('waiting for you: the last finished reply ended with a question mark, and n
 });
 
 test('mutating from the request until the kernel answers, whichever way', () => {
-  const born = [started(), ready(), birth(), reply('I am here.'), said('molt'), calling(), intent('c', 'molt', {})];
-  const asked = [...born, ev({ type: 'molt.requested', commit: B, motive: 'm' }), result('c', true, 'requested')];
+  const born = [started(), ready(), birth(), reply('I am here.'), said('mutate'), calling(), intent('c', 'mutate', {})];
+  const asked = [...born, ev({ type: 'mutation.requested', commit: B, motive: 'm' }), result('c', true, 'requested')];
   expect(word(...asked)).toBe('mutating');
-  expect(word(...asked, ev({ type: 'molt.rejected', commit: B, gate: 'tests', output: '' }))).toBe('thinking');
+  expect(word(...asked, ev({ type: 'mutation.rejected', commit: B, gate: 'tests', output: '' }))).toBe('thinking');
   expect(word(...asked, ev({ type: 'generation.promoted', commit: B, previous: A }))).toBe('thinking');
   expect(word(...asked, ev({ type: 'generation.promoted', commit: B, previous: A }), started(B), ready(B), reply('New body.'))).toBe('resting');
   expect(word(...asked, ev({ type: 'generation.rolledback', commit: B, to: A, reason: 'r' }))).toBe('thinking');
@@ -118,7 +118,7 @@ test('when the turn began is kept for as long as it lasts', () => {
 
 test('events of a shape nobody foresaw change nothing and throw nothing', () => {
   const odd = [{ type: 'assistant' }, { type: 'assistant', text: 7, toolCalls: 'x' }, { type: 'tool.intent', args: null }, { type: 'stimulus' },
-    { type: 'molt.rejected' }, { type: 'generation.promoted', commit: {} }, { type: 'generation.rolledback', reason: [1] }, { type: 'something.new' }, { type: 'tool.result' }];
+    { type: 'mutation.rejected' }, { type: 'generation.promoted', commit: {} }, { type: 'generation.rolledback', reason: [1] }, { type: 'something.new' }, { type: 'tool.result' }];
   let s = UNBORN;
   const t = new Transcript();
   for (const body of odd) {
@@ -185,7 +185,7 @@ test('long arguments and long output are kept short: both ends of the output, wi
 test('the kernel\'s notes: promoted with both commits, rejected with the gate and the end of its output, rolled back with its reason and the end of the error', () => {
   const { t } = built([
     ev({ type: 'generation.promoted', commit: B, previous: A }),
-    ev({ type: 'molt.rejected', commit: C, gate: 'tests', output: `${'noise\n'.repeat(5000)}1 fail\nexpected 2` }),
+    ev({ type: 'mutation.rejected', commit: C, gate: 'tests', output: `${'noise\n'.repeat(5000)}1 fail\nexpected 2` }),
     ev({ type: 'generation.rolledback', commit: B, to: A, reason: `crashed 3 times without a reply. Its stderr ended with:\n${'at frame\n'.repeat(50)}TypeError: x is not a function` }),
     ev({ type: 'generation.rolledback', commit: B, to: A, reason: OWNER_REASON }),
   ]);
@@ -256,7 +256,7 @@ test('nothing hostile survives into an entry: escape sequences, control characte
   const { t } = built([
     said(evil), reply(`ok ${evil}`), intent('c', `ba${evil}sh`, { command: evil }), result('c', false, evil),
     ev({ type: 'stimulus', source: `agent:${evil}`, text: evil }),
-    ev({ type: 'molt.rejected', commit: `${evil}abc`, gate: evil, output: evil }),
+    ev({ type: 'mutation.rejected', commit: `${evil}abc`, gate: evil, output: evil }),
     ev({ type: 'generation.rolledback', commit: B, to: A, reason: evil }),
     ev({ type: 'generation.promoted', commit: evil, previous: evil }),
   ]);
@@ -333,21 +333,35 @@ test('what the last request used of the context is kept from the newest reply th
   }
 });
 
-test('a mutation is read under the names of today and the names to come: molt.* and mutation.* events, the tools molt and mutate', () => {
-  const born = [started(), ready(), birth(), reply('I am here.'), said('change yourself'), calling(), intent('c', 'mutate', {})];
-  for (const [requested, rejected] of [['molt.requested', 'molt.rejected'], ['mutation.requested', 'mutation.rejected']] as const) {
-    const asked = [...born, ev({ type: requested, commit: B, motive: 'm' } as unknown as EventBody), result('c', true, 'requested')];
+test('a mutation is read under both of its names: mutation.* and the former molt.* events, the tools mutate and molt', () => {
+  const former = (type: string, fields: object): JournalEvent => ev({ type, ...fields } as unknown as EventBody);
+  for (const [tool, requested, rejected] of [['mutate', 'mutation.requested', 'mutation.rejected'], ['molt', 'molt.requested', 'molt.rejected'], ['molt', 'molt.requested', 'mutation.rejected']] as const) {
+    const born = [started(), ready(), birth(), reply('I am here.'), said('change yourself'), calling(), intent('c', tool, {})];
+    const asked = [...born, former(requested, { commit: B, motive: 'm' }), result('c', true, 'requested')];
     expect(word(...asked)).toBe('mutating');
-    const refused = ev({ type: rejected, commit: B, gate: 'tests', output: '1 fail' } as unknown as EventBody);
+    const refused = former(rejected, { commit: B, gate: 'tests', output: '1 fail' });
     expect(word(...asked, refused)).toBe('thinking');
     expect(of(built([...asked, refused]).t, 'notice')[0]).toMatchObject({ tone: 'warn', title: 'mutation to bbbbbbb rejected at gate "tests"', body: '1 fail' });
+    // The tool line says what was really called.
+    expect(of(built(born).t, 'tool')[0]!.name).toBe(tool);
+    // Promoted: no longer mutating, whichever name asked.
+    expect(after(...asked, ev({ type: 'generation.promoted', commit: B, previous: A })).mutation).toBeNull();
   }
-  expect(canonical(ev({ type: 'mutation.requested', commit: B, motive: '' } as unknown as EventBody)).type).toBe('molt.requested');
-  expect(canonical(reply('x')).type).toBe('assistant');
   expect([isMutationTool('molt'), isMutationTool('mutate'), isMutationTool('bash')]).toEqual([true, true, false]);
-  // The tool line says what was really called.
-  expect(of(built(born).t, 'tool')[0]!.name).toBe('mutate');
   expect(of(built([ev({ type: 'generation.promoted', commit: B, previous: A })]).t, 'notice')[0]!.title).toBe('mutation accepted');
+});
+
+test('a journal that holds both names, as a lineage\'s does once its body has changed, reads as one story', () => {
+  const former = (type: string, fields: object): JournalEvent => ev({ type, ...fields } as unknown as EventBody);
+  const story = [
+    started(), ready(), birth(), reply('I am here.'),
+    former('molt.requested', { commit: B, motive: 'first' }), former('molt.rejected', { commit: B, gate: 'tests', output: 'old' }), reply('I see.'),
+    ev({ type: 'mutation.requested', commit: C, motive: 'second' }), ev({ type: 'mutation.rejected', commit: C, gate: 'types', output: 'new' }),
+  ];
+  expect(of(built(story).t, 'notice').map((n) => n.title)).toEqual(['mutation to bbbbbbb rejected at gate "tests"', 'mutation to ccccccc rejected at gate "types"']);
+  expect(after(...story).mutation).toBeNull();
+  expect(after(...story.slice(0, 5)).mutation).toBe(B);
+  expect(after(...story.slice(0, 8)).mutation).toBe(C);
 });
 
 test('the owner\'s line names its images apart from its words; the same lines from anyone else are text', () => {

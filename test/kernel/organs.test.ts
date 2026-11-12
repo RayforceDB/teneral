@@ -178,7 +178,7 @@ test('a candidate whose organ is in the cache under its hash passes; the organ i
   expect(statSync(join(r.tree, 'tool', 'hello.txt')).ino).toBe(before);
 });
 
-test('pins that cannot be read reject the molt at gate organs, before anything is looked for', async () => {
+test('pins that cannot be read reject the mutation at gate organs, before anything is looked for', async () => {
   for (const [pins, says] of [['{ nope', 'is not JSON'], [JSON.stringify({ Tool: {} }), 'name'], [JSON.stringify(pinOf('tool', 'zz')), '"sha256"']] as const) {
     const r = pinned(pins);
     const result = await runGates(r.dir, r.seed, r.next, NO_CHECKS);
@@ -189,7 +189,7 @@ test('pins that cannot be read reject the molt at gate organs, before anything i
   }
 });
 
-test('an archive that is not in the cache rejects the molt, and the message says where to put it and from where', async () => {
+test('an archive that is not in the cache rejects the mutation, and the message says where to put it and from where', async () => {
   const hash = sha(tarGz(tool()));
   const r = pinned(pinOf('tool', hash));
   const result = await runGates(r.dir, r.seed, r.next, NO_CHECKS);
@@ -216,7 +216,7 @@ test('the kernel hashes the cached archive itself: other bytes under the pinned 
   expect((await runGates(r.dir, r.seed, r.next, NO_CHECKS)).output).toContain('is not a regular file');
 });
 
-test('a molt is judged by the archive every time, even when the organ was unpacked before', async () => {
+test('a mutation is judged by the archive every time, even when the organ was unpacked before', async () => {
   const r = await gateOne(tool());
   expect(r.result).toEqual(OK);
   writeFileSync(archivePath(r.dir, r.hash), 'no longer the archive');
@@ -334,13 +334,13 @@ test('an archive over the size limit is refused unread, and so is one that would
   expect(unpackedIn(crowd.dir)).toEqual([]);
 }, SLOW);
 
-test('a check that fails rejects the molt with what it printed; one that does not end is stopped and rejected', async () => {
+test('a check that fails rejects the mutation with what it printed; one that does not end is stopped and rejected', async () => {
   const failing = await gateOne([{ name: 'bin/check', mode: 0o755, data: '#!/bin/sh\necho CHECK-STDOUT-MARK\necho CHECK-STDERR-MARK >&2\nexit 3\n' }], { check: ['bin/check', 'an argument'] });
   expect(failing.result).toMatchObject({ ok: false, gate: 'organs' });
   expect(failing.result.output).toContain('CHECK-STDOUT-MARK');
   expect(failing.result.output).toContain('CHECK-STDERR-MARK');
   expect(failing.result.output).toContain('organ tool: its check (bin/check an argument), run in the organ\'s directory, did not exit with 0');
-  // The organ itself was sound and stays unpacked; only the molt is refused.
+  // The organ itself was sound and stays unpacked; only the mutation is refused.
   expect(unpackedIn(failing.dir)).toEqual([failing.hash]);
 
   const pidFile = join(tmpdir(), `teneral-organ-check-${failing.hash.slice(0, 12)}.pid`);
@@ -535,15 +535,15 @@ test('a generation is handed its own organs; one that pins none is handed none, 
 test('after a rollback the generation before finds the organ it pinned, not the failed one\'s', async () => {
   const v1 = tarGz(tool('version one'));
   const v2 = tarGz(tool('version two'));
-  // The seed asks for the molt once; the candidate upgrades the organ, sees the new one, and dies before it is ready.
-  const molts = `
+  // The seed asks for the mutation once; the candidate upgrades the organ, sees the new one, and dies before it is ready.
+  const asks = `
 if (!readEvents(journal).some((e) => e.type === 'generation.rolledback')) {
-  appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_NEXT, motive: 'upgrade the organ' });
+  appendEvent(journal, gen, { type: 'mutation.requested', commit: process.env.TEST_NEXT, motive: 'upgrade the organ' });
   process.exit(75);
 }
 process.exit(0);
 `;
-  const { dir, seed } = makeRepo({ 'body/main.ts': `${REPORT}${READY}${molts}`, [ORGANS_FILE]: JSON.stringify(pinOf('tool', sha(v1), { dir: 'tool' })) });
+  const { dir, seed } = makeRepo({ 'body/main.ts': `${REPORT}${READY}${asks}`, [ORGANS_FILE]: JSON.stringify(pinOf('tool', sha(v1), { dir: 'tool' })) });
   stock(dir, v1);
   stock(dir, v2);
   init(dir);
@@ -601,7 +601,7 @@ test('an organ that is gone from the cache altogether halts the start and says w
   const p = paths(dir);
   writeFiles(p.candidate, { [ORGANS_FILE]: JSON.stringify(pinOf('tool', sha(v2), { dir: 'tool' })) });
   const next = commitAll(p.candidate, 'upgrade');
-  // An established generation with one before it, as after a molt long ago, and its organ nowhere.
+  // An established generation with one before it, as after a mutation long ago, and its organ nowhere.
   writeFileSync(p.state, JSON.stringify({ current: next, previous: seed }));
   const logs: string[] = [];
   const run = () => supervise({ root: dir, ...QUIET, log: (line) => { logs.push(line); } });

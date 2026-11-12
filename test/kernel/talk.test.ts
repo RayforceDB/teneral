@@ -45,11 +45,11 @@ test('a tool call prints as one short line: its name and its arguments, clipped'
 
 test('each kernel note prints: promoted, rejected with the gate and the end of its output, rolled back with the reason', () => {
   expect(render(ev({ type: 'generation.promoted', commit: B, previous: A }))).toBe('[kernel] promoted bbbbbbbbbbbb (before: aaaaaaaaaaaa)');
-  const rejected = render(ev({ type: 'molt.rejected', commit: B, gate: 'tests', output: `${'noise\n'.repeat(1000)}1 fail\nexpected 2` }))!;
-  expect(rejected.split('\n')[0]).toBe('[kernel] molt to bbbbbbbbbbbb rejected at gate "tests":');
+  const rejected = render(ev({ type: 'mutation.rejected', commit: B, gate: 'tests', output: `${'noise\n'.repeat(1000)}1 fail\nexpected 2` }))!;
+  expect(rejected.split('\n')[0]).toBe('[kernel] mutation to bbbbbbbbbbbb rejected at gate "tests":');
   expect(rejected.endsWith('    1 fail\n    expected 2')).toBe(true);
   expect(rejected.length).toBeLessThan(3000);
-  expect(render(ev({ type: 'molt.rejected', commit: B, gate: 'same', output: '' }))).toBe('[kernel] molt to bbbbbbbbbbbb rejected at gate "same"');
+  expect(render(ev({ type: 'mutation.rejected', commit: B, gate: 'same', output: '' }))).toBe('[kernel] mutation to bbbbbbbbbbbb rejected at gate "same"');
   expect(render(ev({ type: 'generation.rolledback', commit: B, to: A, reason: 'exited with 1 before it was ready' })))
     .toBe('[kernel] rolled back bbbbbbbbbbbb to aaaaaaaaaaaa: exited with 1 before it was ready');
 });
@@ -65,7 +65,7 @@ test('nothing prints for the rest', () => {
   expect(render(result())).toBeNull();
   expect(render(ev({ type: 'generation.started', commit: A }))).toBeNull();
   expect(render(ev({ type: 'generation.ready', commit: A }))).toBeNull();
-  expect(render(ev({ type: 'molt.requested', commit: B, motive: 'm' }))).toBeNull();
+  expect(render(ev({ type: 'mutation.requested', commit: B, motive: 'm' }))).toBeNull();
   expect(render({ ...ev({ type: 'generation.ready', commit: A }), type: 'something.new' } as unknown as JournalEvent)).toBeNull();
 });
 
@@ -89,7 +89,7 @@ test('control characters never reach the terminal, and an event of the wrong sha
   expect(render(ev({ type: 'tool.intent', callId: 'c', name: 'ba\x1bsh', args: 'not an object' as unknown }))).toBe('  [bash] not an object');
   const odd = [
     { type: 'assistant' }, { type: 'assistant', text: 7, toolCalls: 'x' }, { type: 'tool.intent', args: null },
-    { type: 'stimulus' }, { type: 'molt.rejected' }, { type: 'generation.promoted', commit: {} }, { type: 'generation.rolledback', reason: [1] },
+    { type: 'stimulus' }, { type: 'mutation.rejected' }, { type: 'generation.promoted', commit: {} }, { type: 'generation.rolledback', reason: [1] },
   ];
   for (const body of odd) expect(() => render({ ...ev(said('x')), text: undefined, source: undefined, ...body } as unknown as JournalEvent)).not.toThrow();
 });
@@ -125,9 +125,9 @@ test('a line that arrives while tools run is seen by the request after them', ()
   expect(track(t, reply('to two', 3000)).busy).toBe(false);
 });
 
-test('across a molt the agent stays busy until the new generation has replied', () => {
+test('across a mutation the agent stays busy until the new generation has replied', () => {
   const story = [
-    said('molt please', 0), calling(900), result(1000),
+    said('mutate please', 0), calling(900), result(1000),
     ev({ type: 'generation.promoted', commit: B, previous: A }, 4000),
     ev({ type: 'generation.started', commit: B }, 4001),
     ev({ type: 'generation.ready', commit: B }, 4300),
@@ -138,8 +138,26 @@ test('across a molt the agent stays busy until the new generation has replied', 
   expect(after(...story, said('still there?', 4310), reply('yes, and on the new generation', 5000)).busy).toBe(false);
 });
 
+test('a rejection under its former name, molt.rejected, prints and counts exactly as mutation.rejected does', () => {
+  for (const fields of [{ commit: B, gate: 'tests', output: 'line one\n1 fail' }, { commit: B, gate: 'same', output: '' }, {}]) {
+    const now = ev({ type: 'mutation.rejected', ...fields } as EventBody);
+    const former = { ...now, type: 'molt.rejected' } as JournalEvent;
+    expect(render(former)).toBe(render(now));
+    expect(render(former)).toStartWith('[kernel] mutation to ');
+    expect(track(AT_REST, former)).toEqual(track(AT_REST, now));
+    expect(track(AT_REST, former).busy).toBe(true);
+  }
+  expect(render(ev({ type: 'molt.requested', commit: B, motive: 'm' }))).toBeNull();
+  expect(track(AT_REST, ev({ type: 'molt.requested', commit: B, motive: 'm' }))).toEqual(track(AT_REST, ev({ type: 'mutation.requested', commit: B, motive: 'm' })));
+  // Both in one journal, as a lineage's is once its body has changed: one line each, in order.
+  const mixed = [said('go', 0), ev({ type: 'molt.rejected', commit: A, gate: 'tests', output: '' }, 10), reply('again', 20), ev({ type: 'mutation.rejected', commit: B, gate: 'types', output: '' }, 30)];
+  expect(recent(mixed).filter((line) => line.startsWith('[kernel]'))).toEqual([
+    '[kernel] mutation to aaaaaaaaaaaa rejected at gate "tests"', '[kernel] mutation to bbbbbbbbbbbb rejected at gate "types"',
+  ]);
+});
+
 test('a kernel note by itself starts a turn, and a generation starting with nothing owed stays at rest', () => {
-  expect(after(ev({ type: 'molt.rejected', commit: B, gate: 'tests', output: '' })).busy).toBe(true);
+  expect(after(ev({ type: 'mutation.rejected', commit: B, gate: 'tests', output: '' })).busy).toBe(true);
   expect(after(ev({ type: 'generation.started', commit: A }), ev({ type: 'generation.ready', commit: A }, 300)).busy).toBe(false);
 });
 
@@ -553,7 +571,7 @@ test('/accept goes to the kernel as a file of its own kind, never to the agent a
   expect(files()[0]!.startsWith('.')).toBe(true);
   expect(files()[0]!.endsWith(ACCEPT_SUFFIX)).toBe(true);
   expect(readFileSync(join(s.owner, files()[0]!), 'utf8')).toBe(seed);
-  expect(s.notes.at(-1)).toBe(`(accepted species commit ${seed.slice(0, 12)}, "seed", and every one before it. The kernel takes that in when the agent next asks to molt: tell it to ask again)`);
+  expect(s.notes.at(-1)).toBe(`(accepted species commit ${seed.slice(0, 12)}, "seed", and every one before it. The kernel takes that in when the agent next asks to mutate: tell it to ask again)`);
   rmSync(join(s.owner, files()[0]!));
   // The one the gate asked about, from a pipe: taken at once, and not a line that waits for an answer.
   mkdirSync(join(root, '.teneral'), { recursive: true });

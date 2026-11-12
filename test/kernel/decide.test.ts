@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { CRASH_LIMIT, MOLT_EXIT, decide } from '../../kernel/supervisor';
+import { CRASH_LIMIT, MUTATION_EXIT, decide } from '../../kernel/supervisor';
 
 const fresh = { hasPrevious: true, crashes: 0 };
 
@@ -8,7 +8,7 @@ test('a clean exit stops the supervisor', () => {
 });
 
 test('exit 75 sends the candidate to the gates', () => {
-  expect(decide({ code: MOLT_EXIT, ready: true }, fresh)).toBe('gate');
+  expect(decide({ code: MUTATION_EXIT, ready: true }, fresh)).toBe('gate');
 });
 
 test('a generation that never became ready is rolled back', () => {
@@ -26,7 +26,7 @@ test('a ready generation is restarted until the crash limit', () => {
   expect(decide({ code: 1, ready: true }, { hasPrevious: true, crashes: CRASH_LIMIT - 1 })).toBe('rollback');
 });
 
-test('exit 75 from a generation that never became ready is not a molt request', () => {
-  expect(decide({ code: MOLT_EXIT, ready: false }, fresh)).toBe('rollback');
-  expect(decide({ code: MOLT_EXIT, ready: false }, { hasPrevious: false, crashes: 0 })).toBe('halt');
+test('exit 75 from a generation that never became ready is not a mutation request', () => {
+  expect(decide({ code: MUTATION_EXIT, ready: false }, fresh)).toBe('rollback');
+  expect(decide({ code: MUTATION_EXIT, ready: false }, { hasPrevious: false, crashes: 0 })).toBe('halt');
 });

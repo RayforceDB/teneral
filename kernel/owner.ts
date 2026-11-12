@@ -63,7 +63,7 @@ export function interrupt(dir: string): string {
 
 /**
  * Say, as the owner, that the species commit `commit` is accepted. The supervisor takes the file
- * in before it next judges a molt (`takeAccepts` in kernel/species.ts); the body never reads it.
+ * in before it next judges a mutation (`takeAccepts` in kernel/species.ts); the body never reads it.
  * Returns the file's name.
  */
 export function accept(dir: string, commit: string): string {

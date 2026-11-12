@@ -8,7 +8,7 @@ import { dirname, join, sep } from 'node:path';
 import { createGunzip } from 'node:zlib';
 
 // An organ is a native dependency the body adopts: a release archive somebody else published,
-// pinned in the body by its hash. The pin is in git and molts with the body; the bytes are not.
+// pinned in the body by its hash. The pin is in git and mutates with the body; the bytes are not.
 // They lie in a cache beside the worktrees, named by their hash, so a generation always finds
 // the organ it was gated with, and the one before it finds its own again after a rollback.
 //
@@ -460,7 +460,7 @@ export type Provided = { dir: string | null; problem?: undefined } | { problem: 
  * Makes the pinned organs available and returns the directory that holds them, null when none is
  * pinned, or what is in the way, in words the agent or the owner can act on.
  *
- * `verify` is how a molt is judged: every archive must be in the cache and hash to its pin,
+ * `verify` is how a mutation is judged: every archive must be in the cache and hash to its pin,
  * whether or not it was unpacked before. Without it, as when a generation starts, a tree that is
  * there is taken as it is, and only a missing one is made again from its archive, which is then
  * verified first. The start must not depend on an archive the gate has already seen.

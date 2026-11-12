@@ -577,7 +577,7 @@ export async function runGates(
     const forbidden = protectedDiff(dir, from, to);
     if (forbidden.length > 0) {
       // Outside the changeable paths a lineage holds what the species holds, so this is a mutation from
-      // the species or it is refused. A molt that stays inside them never gets here, and needs no network.
+      // the species or it is refused. A mutation that stays inside them never gets here, and needs no network.
       const verdict = await judgeSpecies(dir, root, from, to, forbidden, opts.species, { signal: opts.signal, graceMs });
       if (!verdict.ok) {
         if (verdict.interrupted) return interrupted();

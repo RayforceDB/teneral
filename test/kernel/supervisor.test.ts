@@ -20,9 +20,9 @@ const journal = process.env.TENERAL_JOURNAL;
 const gen = process.env.TENERAL_GEN;
 const before = readEvents(journal);
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-const answered = ['generation.promoted', 'generation.rolledback', 'molt.rejected'];
+const answered = ['generation.promoted', 'generation.rolledback', 'mutation.rejected'];
 if (before.some((e) => answered.includes(e.type))) process.exit(0);
-appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_NEXT, motive: 'test' });
+appendEvent(journal, gen, { type: 'mutation.requested', commit: process.env.TEST_NEXT, motive: 'test' });
 process.exit(75);
 `;
 
@@ -73,7 +73,7 @@ test('a candidate that fails the gates never runs', async () => {
   const r = await scenario('process.exit(1);\n', { ok: false, gate: 'tests', output: 'boom' });
   expect(r.outcome).toBe('stopped');
   expect(r.state).toEqual({ current: r.seed, previous: null });
-  expect(r.types).toContain('molt.rejected');
+  expect(r.types).toContain('mutation.rejected');
   expect(r.types).not.toContain('generation.promoted');
 });
 
@@ -139,7 +139,7 @@ test('a promoted generation that keeps crashing after it is ready is rolled back
   expect(rollbacks).toHaveLength(1);
   expect(rollbacks[0]).toMatchObject({ commit: next, to: seed, gen: seed });
   expect((rollbacks[0] as { reason: string }).reason).toContain(`crashed ${CRASH_LIMIT} times`);
-  // The seed runs once before the molt and once more after the rollback, where it exits cleanly.
+  // The seed runs once before the mutation and once more after the rollback, where it exits cleanly.
   expect(events.filter((e) => e.type === 'generation.started' && e.gen === seed)).toHaveLength(2);
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
 });
@@ -151,7 +151,7 @@ test('with no previous generation, a ready one that keeps crashing halts the sup
   expect(r.events.map((e) => e.type)).not.toContain('generation.rolledback');
 });
 
-// Exit 75 without a molt.requested is handled as a crash (as if the code were 1).
+// Exit 75 without a mutation.requested is handled as a crash (as if the code were 1).
 // This body journals nothing, so it is never ready, and a generation that is not
 // ready is given up on at once: with no previous generation that is a halt after
 // ONE start, not CRASH_LIMIT. The crash limit only applies to ready generations.
@@ -167,12 +167,12 @@ test('exit 75 with no request from a ready generation is counted as a crash and 
   expect(r.events.filter((e) => e.type === 'generation.started')).toHaveLength(CRASH_LIMIT);
 });
 
-test('a promoted generation that asks to molt before it is ready is rolled back, and its request is ignored', async () => {
+test('a promoted generation that asks to mutate before it is ready is rolled back, and its request is ignored', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
   writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
-appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_V3, motive: 'not ready yet' });
+appendEvent(journal, gen, { type: 'mutation.requested', commit: process.env.TEST_V3, motive: 'not ready yet' });
 process.exit(75);
 ` });
   const v2 = commitAll(p.candidate, 'v2');
@@ -399,18 +399,18 @@ test('restarts wait longer each time', async () => {
   expect(Date.now() - t).toBeGreaterThanOrEqual(180);
 });
 
-// --- rejected molts ---
+// --- rejected mutations ---
 
 test('a generation that keeps asking for the same rejected commit is paced, then halted, never rolled back, reply or not', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
   // v2 becomes ready, speaks, and asks for v3 on every start, whatever the kernel answered. The reply is
-  // there because a real molt request always sits inside one, so a reply must not reset the count.
+  // there because a real mutation request always sits inside one, so a reply must not reset the count.
   writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-appendEvent(journal, gen, { type: 'assistant', text: 'molting', toolCalls: [] });
-appendEvent(journal, gen, { type: 'molt.requested', commit: process.env.TEST_V3, motive: 'again' });
+appendEvent(journal, gen, { type: 'assistant', text: 'mutating', toolCalls: [] });
+appendEvent(journal, gen, { type: 'mutation.requested', commit: process.env.TEST_V3, motive: 'again' });
 process.exit(75);
 ` });
   const v2 = commitAll(p.candidate, 'v2');
@@ -429,7 +429,7 @@ process.exit(75);
   expect(outcome).toBe('halted');
   expect(logs.join('\n')).toContain('the same commit keeps being requested and rejected');
   // Every rejection is journaled, the one that reaches the limit included.
-  expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(REJECTION_LIMIT);
+  expect(events.filter((e) => e.type === 'mutation.rejected')).toHaveLength(REJECTION_LIMIT);
   expect(events.filter((e) => e.type === 'generation.started' && e.gen === v2)).toHaveLength(REJECTION_LIMIT);
   expect(events.map((e) => e.type)).not.toContain('generation.rolledback');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: v2, previous: seed });
@@ -438,23 +438,23 @@ process.exit(75);
   expect(Date.now() - t).toBeGreaterThanOrEqual(120);
 });
 
-/** Asks for a molt that will be rejected, `rounds` times, then stops by itself. `commit` is an expression over `rejected`, the count so far. */
+/** Asks for a mutation that will be rejected, `rounds` times, then stops by itself. `commit` is an expression over `rejected`, the count so far. */
 const asksFor = (commit: string, rounds: number) => `${HEAD}
-const rejected = readEvents(journal).filter((e) => e.type === 'molt.rejected').length;
+const rejected = readEvents(journal).filter((e) => e.type === 'mutation.rejected').length;
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 if (rejected >= ${rounds}) process.exit(0);
-appendEvent(journal, gen, { type: 'molt.requested', commit: ${commit}, motive: 'attempt ' + rejected });
+appendEvent(journal, gen, { type: 'mutation.requested', commit: ${commit}, motive: 'attempt ' + rejected });
 process.exit(75);
 `;
 const REJECT = { gates: () => ({ ok: false, gate: 'tests-body', output: 'boom' }), restartBudget: 2, restartDelayMs: 30 };
 
-test('a generation whose every rejected molt names a new commit is iterating, and is never halted or slowed for it', async () => {
+test('a generation whose every rejected mutation names a new commit is iterating, and is never halted or slowed for it', async () => {
   const rounds = 6;
   expect(rounds).toBeGreaterThan(REJECTION_LIMIT);
   expect(rounds).toBeGreaterThan(REJECT.restartBudget);
   const r = await seedOnly(asksFor("rejected.toString(16).padStart(40, 'c')", rounds), REJECT);
   expect(r.outcome).toBe('stopped');
-  expect(r.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
+  expect(r.events.filter((e) => e.type === 'mutation.rejected')).toHaveLength(rounds);
   expect(started(r.events)).toBe(rounds + 1);
   // Each wait is one unit: the count starts again with every new commit.
   const waits = r.logs.filter((line) => line.includes('rejected at gate'));
@@ -466,7 +466,7 @@ test('alternating between two rejected commits is never halted', async () => {
   const rounds = 8;
   const r = await seedOnly(asksFor("(rejected % 2 === 0 ? 'a' : 'b').repeat(40)", rounds), REJECT);
   expect(r.outcome).toBe('stopped');
-  expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [e.commit[0]] : []))).toEqual(['a', 'b', 'a', 'b', 'a', 'b', 'a', 'b']);
+  expect(r.events.flatMap((e) => (e.type === 'mutation.rejected' ? [e.commit[0]] : []))).toEqual(['a', 'b', 'a', 'b', 'a', 'b', 'a', 'b']);
   for (const line of r.logs.filter((l) => l.includes('rejected at gate'))) expect(line).toContain('restarting in 30 ms');
 });
 
@@ -474,28 +474,28 @@ test('asking again and again for the commit already running is limited the same 
   const gated: string[] = [];
   const r = await seedOnly(`${HEAD}
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-appendEvent(journal, gen, { type: 'molt.requested', commit: gen, motive: 'nothing changed' });
+appendEvent(journal, gen, { type: 'mutation.requested', commit: gen, motive: 'nothing changed' });
 process.exit(75);
 `, { gates: (_dir, _from, to) => { gated.push(to); return PASS; } });
   expect(r.outcome).toBe('halted');
   expect(gated).toEqual([]);
   expect(r.logs.join('\n')).toContain('the same commit keeps being requested and rejected');
-  expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [e.gate] : []))).toEqual(Array(REJECTION_LIMIT).fill('same'));
+  expect(r.events.flatMap((e) => (e.type === 'mutation.rejected' ? [e.gate] : []))).toEqual(Array(REJECTION_LIMIT).fill('same'));
   expect(started(r.events)).toBe(REJECTION_LIMIT);
 });
 
-test('a molt to the commit that is already running is refused without running the gates', async () => {
+test('a mutation to the commit that is already running is refused without running the gates', async () => {
   const gated: string[] = [];
   const r = await seedOnly(`${HEAD}
 const before = readEvents(journal);
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-if (before.some((e) => e.type === 'molt.rejected')) process.exit(0);
-appendEvent(journal, gen, { type: 'molt.requested', commit: gen, motive: 'nothing changed' });
+if (before.some((e) => e.type === 'mutation.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'mutation.requested', commit: gen, motive: 'nothing changed' });
 process.exit(75);
 `, { gates: (_dir, _from, to) => { gated.push(to); return PASS; } });
   expect(r.outcome).toBe('stopped');
   expect(gated).toEqual([]);
-  const rejected = r.events.filter((e) => e.type === 'molt.rejected');
+  const rejected = r.events.filter((e) => e.type === 'mutation.rejected');
   expect(rejected).toHaveLength(1);
   expect(rejected[0]).toMatchObject({ commit: r.seed, gate: 'same' });
   expect(r.events.map((e) => e.type)).not.toContain('generation.promoted');
@@ -657,40 +657,40 @@ test('init tells git never to forget worktrees during gc, once however often it 
   expect(git(dir, 'worktree', 'list', '--porcelain')).toContain(p.live);
 });
 
-// --- a molt always gets an answer ---
+// --- a mutation always gets an answer ---
 
-const interruptions = (events: ReturnType<typeof readEvents>) => events.flatMap((e) => (e.type === 'molt.rejected' && e.gate === 'interrupted' ? [e] : []));
+const interruptions = (events: ReturnType<typeof readEvents>) => events.flatMap((e) => (e.type === 'mutation.rejected' && e.gate === 'interrupted' ? [e] : []));
 
-test('a molt request the kernel never answered is answered at the next start, once', async () => {
+test('a mutation request the kernel never answered is answered at the next start, once', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
   const p = paths(dir);
   const asked = 'd'.repeat(40);
   // What a supervisor killed in the middle of a gate run leaves behind.
   appendEvent(p.journal, seed, { type: 'generation.ready', commit: seed });
-  appendEvent(p.journal, seed, { type: 'molt.requested', commit: asked, motive: 'before the kill' });
+  appendEvent(p.journal, seed, { type: 'mutation.requested', commit: asked, motive: 'before the kill' });
 
   expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   const events = readEvents(p.journal);
   expect(interruptions(events)).toHaveLength(1);
   expect(interruptions(events)[0]).toMatchObject({ commit: asked, gen: seed });
-  expect(interruptions(events)[0]!.output).toContain('molt again');
+  expect(interruptions(events)[0]!.output).toContain('Ask for it again');
   // The answer is there before the generation starts, so it finds it.
-  expect(events.findIndex((e) => e.type === 'molt.rejected')).toBeLessThan(events.findIndex((e) => e.type === 'generation.started'));
+  expect(events.findIndex((e) => e.type === 'mutation.rejected')).toBeLessThan(events.findIndex((e) => e.type === 'generation.started'));
 });
 
-test('a molt request that was already answered is left alone at start', async () => {
+test('a mutation request that was already answered is left alone at start', async () => {
   const r = await scenario('process.exit(1);\n', { ok: false, gate: 'tests', output: 'boom' });
   expect(await supervise({ root: r.dir, ...QUIET })).toBe('stopped');
-  expect(readEvents(paths(r.dir).journal).filter((e) => e.type === 'molt.rejected')).toHaveLength(1);
+  expect(readEvents(paths(r.dir).journal).filter((e) => e.type === 'mutation.rejected')).toHaveLength(1);
 });
 
-test('a body that dies between asking for a molt and exiting with 75 has its request answered', async () => {
+test('a body that dies between asking for a mutation and exiting with 75 has its request answered', async () => {
   const r = await seedOnly(`${HEAD}
 const before = readEvents(journal);
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-if (before.some((e) => e.type === 'molt.rejected')) process.exit(0);
-appendEvent(journal, gen, { type: 'molt.requested', commit: '${'e'.repeat(40)}', motive: 'then it died' });
+if (before.some((e) => e.type === 'mutation.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'mutation.requested', commit: '${'e'.repeat(40)}', motive: 'then it died' });
 process.exit(1);
 `);
   expect(r.outcome).toBe('stopped');
@@ -699,7 +699,7 @@ process.exit(1);
   expect(started(r.events)).toBe(2);
 });
 
-test('a stop signal during a long check returns at once, kills the check, leaves no gate checkout, and the molt is answered at the next start', async () => {
+test('a stop signal during a long check returns at once, kills the check, leaves no gate checkout, and the mutation is answered at the next start', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
@@ -726,7 +726,7 @@ test('a stop signal during a long check returns at once, kills the check, leaves
   for (let i = 0; i < 100 && existsSync(`/proc/${checkChild}`); i++) await Bun.sleep(20);
   expect(() => process.kill(checkChild, 0)).toThrow();
   expect(readdirSync(join(dir, '.teneral')).filter((name) => name.startsWith('gate-'))).toEqual([]);
-  expect(readEvents(p.journal).map((e) => e.type)).not.toContain('molt.rejected');
+  expect(readEvents(p.journal).map((e) => e.type)).not.toContain('mutation.rejected');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
 
   // The next start tells the agent what became of its request; V1 exits cleanly once it has an answer.
@@ -867,7 +867,10 @@ test('excused: the owner stopped this generation lately, or nothing was said to 
   expect(excused('new', [promoted, stopped, said], [said])).toBe(true);
   expect(excused('new', [promoted, stopped, said], [stopped, said])).toBe(true);
   expect(excused('new', [promoted, stopped, said, ev('stimulus', 'new', { source: 'clock', text: 'tick' })], [ev('stimulus', 'new', { source: 'clock', text: 'tick' })])).toBe(false);
+  expect(excused('new', [promoted, stopped, ev('mutation.rejected')], [])).toBe(false);
+  // Under its former name a rejection owes a reply all the same.
   expect(excused('new', [promoted, stopped, ev('molt.rejected')], [])).toBe(false);
+  expect(excused('new', [promoted, stopped, ev('molt.rejected')], [stopped])).toBe(false);
   // Another generation's interruption says nothing of this one.
   expect(excused('new', [ev('turn.interrupted', 'old'), promoted], [ev('turn.interrupted', 'old')])).toBe(false);
   expect(excused('new', [], [])).toBe(false);
@@ -1019,7 +1022,7 @@ setInterval(() => appendEvent(journal, gen, { type: 'note', kind: 'memory.fact',
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
 });
 
-test('notes between crashes do not count as replies, and notes after a molt request do not hide it', async () => {
+test('notes between crashes do not count as replies, and notes after a mutation request do not hide it', async () => {
   // Ready, a note, a crash, every time: given up on at the crash limit exactly as without the notes.
   const crashing = await seedOnly(`${HEAD}
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
@@ -1044,7 +1047,7 @@ process.exit(75);`)}` });
   expect(readEvents(p.journal).filter((e) => e.type === 'note')).toHaveLength(2);
 });
 
-// --- the species: a generation with another kernel, the owner's acceptance, a molt that was not judged ---
+// --- the species: a generation with another kernel, the owner's acceptance, a mutation that was not judged ---
 
 /** An install on a first generation with a kernel file, and a second in the workspace that changes `files` as well as its body. */
 function withKernel(files: Record<string, string>, body = `${V1}\n// v2`) {
@@ -1095,13 +1098,13 @@ test('rolling back to a generation with another kernel ends the supervisor the s
   expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
 });
 
-test('a molt that was refused without a verdict may be asked for again, any number of times: the owner\'s word, or the species\' remote, is what is waited for', async () => {
+test('a mutation that was refused without a verdict may be asked for again, any number of times: the owner\'s word, or the species\' remote, is what is waited for', async () => {
   const rounds = REJECTION_LIMIT + 3;
   const r = await seedOnly(asksFor("'c'.repeat(40)", rounds), {
     gates: () => ({ ok: false, gate: 'species', output: 'ask your owner', undecided: true }), restartDelayMs: 20,
   });
   expect(r.outcome).toBe('stopped');
-  expect(r.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
+  expect(r.events.filter((e) => e.type === 'mutation.rejected')).toHaveLength(rounds);
   for (const line of r.logs.filter((l) => l.includes('rejected at gate'))) expect(line).toContain('restarting in 20 ms');
   // The same answer with a verdict in it is counted as ever.
   const counted = await seedOnly(asksFor("'c'.repeat(40)", rounds), { gates: () => ({ ok: false, gate: 'species', output: 'differs' }) });
@@ -1113,9 +1116,9 @@ test('what the owner accepted from a talk client is taken in at the start and be
   init(dir);
   const p = paths(dir);
   // The second generation is asked for by a first whose owner accepts that very commit while it runs.
-  const saying = V1.replace("appendEvent(journal, gen, { type: 'molt.requested'", `
+  const saying = V1.replace("appendEvent(journal, gen, { type: 'mutation.requested'", `
 require('node:fs').writeFileSync(require('node:path').join(process.env.TENERAL_OWNER, '.said-while-running.accept'), process.env.TEST_NEXT);
-appendEvent(journal, gen, { type: 'molt.requested'`);
+appendEvent(journal, gen, { type: 'mutation.requested'`);
   expect(saying).not.toBe(V1);
   writeFiles(dir, { 'body/main.ts': saying });
   const first = commitAll(dir, 'the owner speaks while it runs');
@@ -1167,4 +1170,152 @@ test('a kernel entry point acts on the install the launcher names, or the one it
   expect(installRoot('/srv/agent/.teneral/live/kernel', {})).toBe('/srv/agent');
   expect(installRoot('/srv/agent/.teneral/candidate/kernel', {})).toBe('/srv/agent/.teneral/candidate');
   expect(installRoot('/srv/agent/.teneral/live/kernel', { TENERAL_ROOT: '/elsewhere' })).toBe('/elsewhere');
+});
+
+// --- a body from before a mutation was called one: it asks with molt.requested and hears only molt.rejected ---
+
+/** V1 as such a body would be: the same protocol under the former names, and deaf to the new ones. */
+const FORMER = V1.replaceAll('mutation.requested', 'molt.requested').replaceAll('mutation.rejected', 'molt.rejected');
+/** Asks under the former name, `rounds` times, counting only the answers it can hear. */
+const formerAsksFor = (commit: string, rounds: number) => asksFor(commit, rounds).replaceAll('mutation.requested', 'molt.requested').replaceAll('mutation.rejected', 'molt.rejected');
+
+test('the stand-ins for a former body really speak only the former names', () => {
+  for (const body of [FORMER, formerAsksFor("'c'.repeat(40)", 1)]) {
+    expect(body).toContain("'molt.requested'");
+    expect(body).toContain("'molt.rejected'");
+    expect(body).not.toContain('mutation.');
+  }
+});
+
+test('a request under the former name is judged like any other and promoted', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': FORMER });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${FORMER}\n// v2` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  const judged: string[] = [];
+  const outcome = await supervise({ root: dir, ...QUIET, gates: (_dir, from, to) => { judged.push(`${from}>${to}`); return PASS; } });
+  expect(outcome).toBe('stopped');
+  expect(judged).toEqual([`${seed}>${next}`]);
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+  const types = readEvents(p.journal).map((e) => e.type);
+  expect(types).toContain('generation.promoted');
+  expect(types.filter((t) => t.startsWith('mutation.') || t === 'molt.rejected')).toEqual([]);
+});
+
+test('a request under the former name is rejected under the former name, so the body that made it hears the answer', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': FORMER });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': 'process.exit(1);\n' });
+  process.env.TEST_NEXT = commitAll(p.candidate, 'v2');
+  const logs: string[] = [];
+  // FORMER stops by itself only once it finds molt.rejected; answered any other way it would ask until the limit halts it.
+  expect(await supervise({ root: dir, ...QUIET, gates: () => ({ ok: false, gate: 'tests', output: 'boom' }), log: (line) => { logs.push(line); } })).toBe('stopped');
+  const events = readEvents(p.journal);
+  expect(events.filter((e) => e.type === 'molt.requested')).toHaveLength(1);
+  expect(events.filter((e) => e.type === 'molt.rejected')).toHaveLength(1);
+  expect(events.find((e) => e.type === 'molt.rejected')).toMatchObject({ commit: process.env.TEST_NEXT!, gate: 'tests', output: 'boom', gen: seed });
+  expect(events.map((e) => e.type).filter((t) => t.startsWith('mutation.'))).toEqual([]);
+  expect(logs.join('\n')).toContain(`mutation to ${process.env.TEST_NEXT} rejected at gate tests`);
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+test('a request under today\'s name is rejected under today\'s name', async () => {
+  const r = await scenario('process.exit(1);\n', { ok: false, gate: 'tests', output: 'boom' });
+  expect(r.types.filter((t) => t.includes('.re'))).toEqual(['generation.ready', 'mutation.requested', 'mutation.rejected', 'generation.ready']);
+});
+
+test('a request under the former name that was never answered is answered at the next start under the former name, once; one already answered under either name is left alone', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const p = paths(dir);
+  const asked = 'd'.repeat(40);
+  appendEvent(p.journal, seed, { type: 'generation.ready', commit: seed });
+  appendEvent(p.journal, seed, { type: 'molt.requested', commit: asked, motive: 'before the kill' });
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  const answers = readEvents(p.journal).filter((e) => e.type === 'molt.rejected' || e.type === 'mutation.rejected');
+  expect(answers).toHaveLength(1);
+  expect(answers[0]).toMatchObject({ type: 'molt.rejected', commit: asked, gate: 'interrupted', gen: seed });
+  // The text names no tool: the body that reads it may call it `molt` or `mutate`.
+  expect((answers[0] as { output: string }).output).toContain('Ask for it again');
+  expect((answers[0] as { output: string }).output).not.toMatch(/molt|mutate/);
+
+  for (const [requested, rejected] of [['molt.requested', 'mutation.rejected'], ['mutation.requested', 'molt.rejected'], ['molt.requested', 'molt.rejected']] as const) {
+    const other = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+    const q = paths(other.dir);
+    appendEvent(q.journal, other.seed, { type: requested, commit: asked, motive: 'm' });
+    appendEvent(q.journal, other.seed, { type: rejected, commit: asked, gate: 'tests', output: 'no' });
+    expect(await supervise({ root: other.dir, ...QUIET })).toBe('stopped');
+    expect(readEvents(q.journal).filter((e) => (e as { gate?: string }).gate === 'interrupted')).toEqual([]);
+  }
+});
+
+test('a journal with both names: the pending request is the last one, whatever its name, and it is answered in kind', async () => {
+  const asked = (n: string) => n.repeat(40);
+  for (const [first, firstAnswer, last, lastAnswer] of [
+    ['molt.requested', 'molt.rejected', 'mutation.requested', 'mutation.rejected'],
+    ['mutation.requested', 'mutation.rejected', 'molt.requested', 'molt.rejected'],
+  ] as const) {
+    const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+    const p = paths(dir);
+    appendEvent(p.journal, seed, { type: first, commit: asked('1'), motive: 'answered long ago' });
+    appendEvent(p.journal, seed, { type: firstAnswer, commit: asked('1'), gate: 'tests', output: 'no' });
+    appendEvent(p.journal, seed, { type: last, commit: asked('2'), motive: 'never answered' });
+    expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+    const events = readEvents(p.journal);
+    const answers = events.filter((e) => e.type === 'molt.rejected' || e.type === 'mutation.rejected');
+    expect(answers.map((e) => [e.type, e.commit, e.gate])).toEqual([[firstAnswer, asked('1'), 'tests'], [lastAnswer, asked('2'), 'interrupted']]);
+  }
+});
+
+test('a former body that dies between asking and exiting with 75 has its request answered under the former name', async () => {
+  const r = await seedOnly(`${HEAD}
+const before = readEvents(journal);
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+if (before.some((e) => e.type === 'molt.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'molt.requested', commit: '${'e'.repeat(40)}', motive: 'then it died' });
+process.exit(1);
+`);
+  expect(r.outcome).toBe('stopped');
+  expect(r.events.flatMap((e) => (e.type === 'molt.rejected' ? [[e.commit, e.gate]] : []))).toEqual([['e'.repeat(40), 'interrupted']]);
+  expect(r.events.map((e) => e.type)).not.toContain('mutation.rejected');
+  expect(started(r.events)).toBe(2);
+});
+
+test('rejections are counted the same under the former name: the same commit three times halts, a new commit each time never does', async () => {
+  const same = await seedOnly(formerAsksFor("'c'.repeat(40)", 10), REJECT);
+  expect(same.outcome).toBe('halted');
+  expect(same.logs.join('\n')).toContain('the same commit keeps being requested and rejected');
+  expect(same.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(REJECTION_LIMIT);
+  const rounds = 6;
+  const iterating = await seedOnly(formerAsksFor("rejected.toString(16).padStart(40, 'c')", rounds), REJECT);
+  expect(iterating.outcome).toBe('stopped');
+  expect(iterating.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
+  expect(iterating.events.map((e) => e.type).filter((t) => t.startsWith('mutation.'))).toEqual([]);
+});
+
+test('a lineage whose body changed its names on the way: the former body asks and is promoted, the new one asks and is answered under the new name', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': FORMER });
+  init(dir);
+  const p = paths(dir);
+  // v2 is a body of today: it asks once for a commit that is refused, hears mutation.rejected, and stops.
+  writeFiles(p.candidate, { 'body/main.ts': `${HEAD}
+const before = readEvents(journal);
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'assistant', text: 'here', toolCalls: [] });
+if (before.some((e) => e.type === 'mutation.rejected')) process.exit(0);
+appendEvent(journal, gen, { type: 'mutation.requested', commit: '${'f'.repeat(40)}', motive: 'under the new name' });
+process.exit(75);
+` });
+  const v2 = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = v2;
+  const outcome = await supervise({ root: dir, ...QUIET, gates: (_dir, _from, to) => (to === v2 ? PASS : { ok: false, gate: 'head', output: 'no such commit' }) });
+  expect(outcome).toBe('stopped');
+  const story = readEvents(p.journal).filter((e) => !e.type.startsWith('generation.s') && e.type !== 'assistant').map((e) => `${e.type} ${e.gen === seed ? 'seed' : 'v2'}`);
+  expect(story).toEqual([
+    'generation.ready seed', 'molt.requested seed', 'generation.promoted v2',
+    'generation.ready v2', 'mutation.requested v2', 'mutation.rejected v2', 'generation.ready v2',
+  ]);
 });

@@ -87,7 +87,7 @@ test('a commit that merges a later species commit, and holds outside the changea
   const merged = merge(work, 'main');
   expect(readFileSync(join(work, 'body/a.ts'), 'utf8')).toBe('export const a = 2;\n');
   expect(await gate(work, own, merged)).toEqual({ ok: true, gate: 'all', output: '' });
-  // And the next molt from there is an ordinary one again.
+  // And the next mutation from there is an ordinary one again.
   writeFiles(work, { 'body/a.ts': 'export const a = 3;\n' });
   expect(await gate(work, merged, commitAll(work, 'on'))).toEqual({ ok: true, gate: 'all', output: '' });
 });
@@ -143,7 +143,7 @@ test('a commit that would stand on an earlier species commit than the running ge
   expect(r.output).toContain('Merge main (now ');
 });
 
-test('a species ref that was force-moved: the body still molts, and the lineage gets onto the new line only with exactly its files', async () => {
+test('a species ref that was force-moved: the body  mutates, and the lineage gets onto the new line only with exactly its files', async () => {
   const { root, work, seed } = local();
   publish(root, { 'kernel/k.ts': 'export const k = 2;\n', 'kernel/only-b.ts': 'export {};\n' });
   const g = merge(work, 'main');
@@ -215,7 +215,7 @@ test('the kernel fetches a remote species itself: a commit the agent pulled by a
   expect(git(root, 'remote', 'get-url', 'origin')).toBe(`file://${up}`);
 });
 
-test('with the remote out of reach, a mutation from the species is refused without a verdict and may be asked again; the body molts as ever', async () => {
+test('with the remote out of reach, a mutation from the species is refused without a verdict and may be asked again; the body mutates as ever', async () => {
   const { up, root, work, start } = remote();
   publish(up, { 'kernel/k.ts': 'export const k = 2;\n' });
   git(root, 'fetch', '-q', 'origin');
@@ -224,7 +224,7 @@ test('with the remote out of reach, a mutation from the species is refused witho
   const r = await gate(work, start, merged);
   expect(r).toMatchObject({ ok: false, gate: 'species', undecided: true });
   expect(r.output).toContain('the species origin/main could not be fetched');
-  expect(r.output).toContain('Call molt again');
+  expect(r.output).toContain('Ask again for this commit');
   // Offline, a change to the body alone needs nothing of the species.
   git(work, 'reset', '-q', '--hard', start);
   writeFiles(work, { 'body/a.ts': 'export const a = 2;\n' });
@@ -238,7 +238,7 @@ test('with the remote out of reach, a mutation from the species is refused witho
   expect(touched.output).toContain('could not be fetched');
 });
 
-test('a fetch that does not end in time is stopped, and the molt refused without a verdict', async () => {
+test('a fetch that does not end in time is stopped, and the mutation refused without a verdict', async () => {
   const { root, work, start } = remote();
   // A remote that never answers: git is told to reach it through a command that only waits.
   git(root, 'remote', 'set-url', 'origin', 'ext::sleep 30');
@@ -272,13 +272,13 @@ test('a shallow clone takes a mutation from the species; one whose history git c
   expect(r.output).toContain('git fetch --unshallow');
 });
 
-test('a lineage from before this rule, whose kernel is ahead of the published species, molts its body, and joins the species when that is published', async () => {
+test('a lineage from before this rule, whose kernel is ahead of the published species, mutates its body, and joins the species when that is published', async () => {
   // As the living lineages are: the owner merged an unpublished main into the lineage by hand.
   const { up, root, work, start } = remote();
   const unpublished = publish(root, { 'kernel/k.ts': 'export const k = 2;\n' }, 'the owner\'s own, not pushed');
   const g = merge(work, 'main');
   expect(git(root, 'rev-parse', 'origin/main')).toBe(start);
-  // Its body molts, with the remote out of reach too.
+  // Its body mutates, with the remote out of reach too.
   git(root, 'remote', 'set-url', 'origin', join(up, 'gone'));
   writeFiles(work, { 'body/a.ts': 'export const a = 2;\n' });
   const own = commitAll(work, 'body');
@@ -379,7 +379,7 @@ test('ask: the gate refuses a mutation from the species until the owner has acce
   expect(r.output).toContain(`from species commit ${seed.slice(0, 12)} to ${b}`);
   expect(r.output).toContain(`./box accept ${b.slice(0, 12)}`);
   expect(r.output).toContain('/accept in ./box talk');
-  expect(r.output).toContain('call molt again for this same commit');
+  expect(r.output).toContain('ask again for this same commit');
   expect(readConsent(root)).toMatchObject({ asked: b });
   expect(readConsent(root).accepted).toBeUndefined();
   // Asking again changes nothing.
@@ -569,7 +569,7 @@ test('with a SIGNERS file in the install, a species commit is stood on only when
     signed(maintainer, 5);
     const onSigned = merge(work, 'main');
     expect(await gate(work, first, onSigned)).toEqual({ ok: true, gate: 'all', output: '' });
-    // The body goes on molting whatever the species' commits carry: the signature is asked of a move along the species only.
+    // The body goes on mutating whatever the species' commits carry: the signature is asked of a move along the species only.
     writeFiles(work, { 'body/a.ts': 'export const a = 7;\n' });
     expect(await gate(work, onSigned, commitAll(work, 'body'))).toEqual({ ok: true, gate: 'all', output: '' });
     expect(CAGE).toContain('SIGNERS');

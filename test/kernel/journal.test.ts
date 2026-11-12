@@ -3,7 +3,8 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  appendEvent, journalSize, NOTE_DATA_LIMIT, noteProblem, readEvents, readEventsFrom, SCHEMA_VERSION,
+  appendEvent, eventName, isMutationRejection, isMutationRequest, journalSize, NOTE_DATA_LIMIT, noteProblem, readEvents, readEventsFrom, rejectionFor,
+  SCHEMA_VERSION,
 } from '../../kernel/journal';
 
 function tmpJournal(): string {
@@ -228,4 +229,38 @@ test('a turn the owner interrupted is an event of its own; a journal without one
   expect(Object.keys(stopped).sort()).toEqual(['gen', 'id', 'ts', 'type', 'v']);
   expect(events.map((e) => e.type as string)).toEqual(['stimulus', 'turn.interrupted', 'something.later']);
   expect(SCHEMA_VERSION).toBe(1);
+});
+
+// --- the former names of a mutation's two events ---
+
+test('molt.requested and molt.rejected are read as mutation.requested and mutation.rejected, and no other name is touched', () => {
+  expect(eventName('molt.requested')).toBe('mutation.requested');
+  expect(eventName('molt.rejected')).toBe('mutation.rejected');
+  for (const type of ['mutation.requested', 'mutation.rejected', 'generation.promoted', 'stimulus', 'molt', 'molt.accepted', 'from.the.future', '', 'toString', '__proto__']) expect(eventName(type)).toBe(type);
+  // Whatever a damaged line holds where its type should be.
+  for (const odd of [undefined, null, 7, {}, ['molt.requested']]) expect(eventName(odd)).toBe('');
+});
+
+test('a journal is stored as it was written and read as it was stored: the former names are not rewritten, on disk or in what readEvents returns', () => {
+  const path = tmpJournal();
+  appendEvent(path, 'g', { type: 'molt.requested', commit: 'c1', motive: 'old' });
+  appendEvent(path, 'g', { type: 'molt.rejected', commit: 'c1', gate: 'tests', output: 'no' });
+  appendEvent(path, 'g', { type: 'mutation.requested', commit: 'c2', motive: 'new' });
+  appendEvent(path, 'g', { type: 'mutation.rejected', commit: 'c2', gate: 'tests', output: 'no' });
+  const events = readEvents(path);
+  // A body from before the change reads through this very function and knows only the former names.
+  expect(events.map((e) => e.type)).toEqual(['molt.requested', 'molt.rejected', 'mutation.requested', 'mutation.rejected']);
+  expect(events.map((e) => eventName(e.type))).toEqual(['mutation.requested', 'mutation.rejected', 'mutation.requested', 'mutation.rejected']);
+  expect(events.map(isMutationRequest)).toEqual([true, false, true, false]);
+  expect(events.map(isMutationRejection)).toEqual([false, true, false, true]);
+  expect(readEventsFrom(path, 0).map((e) => e.type)).toEqual(events.map((e) => e.type));
+});
+
+test('a request is rejected under the name it was made by', () => {
+  const path = tmpJournal();
+  const former = appendEvent(path, 'g', { type: 'molt.requested', commit: 'c1', motive: 'old' });
+  const now = appendEvent(path, 'g', { type: 'mutation.requested', commit: 'c2', motive: 'new' });
+  if (!isMutationRequest(former) || !isMutationRequest(now)) throw new Error('unreachable');
+  expect(rejectionFor(former, 'tests', 'boom')).toEqual({ type: 'molt.rejected', commit: 'c1', gate: 'tests', output: 'boom' });
+  expect(rejectionFor(now, 'types', 'bang')).toEqual({ type: 'mutation.rejected', commit: 'c2', gate: 'types', output: 'bang' });
 });

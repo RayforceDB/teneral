@@ -181,10 +181,10 @@ const LONG_REPLY = `# Что я нашёл
 - память — это один файл, \`memory/journal.jsonl\`, и он только растёт, так что со временем я не смогу держать его в голове целиком
 - у меня есть шесть инструментов
   1. \`read\`, \`write\`, \`edit\`
-  2. \`bash\`, \`molt\`, \`send\`
+  2. \`bash\`, \`mutate\`, \`send\`
 
 \`\`\`ts
-export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> { // эта строка слишком длинная, чтобы поместиться
+export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation'> { // эта строка слишком длинная, чтобы поместиться
 \tconst events = readEvents(d.journal);
 }
 \`\`\`
@@ -210,7 +210,7 @@ test('a long reply, taller than the screen: all of it goes into the scrollback i
   expect(all).toMatch(/ {2}• память — это один файл, memory\/journal\.jsonl, и он только растёт, так что\n {4}со временем/);
   expect(all).toContain('    1. read, write, edit');
   // Code is cut at the edge and marked, never wrapped; its tab is four columns.
-  expect(all).toMatch(/ {2}│ export async function runTurn\(d: TurnDeps\): Promise<'done' \| 'molt'> \{ \/\/ …\n {2}│ {5}const events/);
+  expect(all).toMatch(/ {2}│ export async function runTurn\(d: TurnDeps\): Promise<'done' \| 'mutation'> \{…\n {2}│ {5}const events/);
   expect(all).toContain('  │ «Кто ясно мыслит, тот ясно излагает» 🙂');
   expect(all).toContain('документация (https://example.com/docs/память)');
   expect(all).not.toMatch(/\*\*|```|^ {2}#/m);
@@ -347,10 +347,10 @@ test('resize while a turn is under way: the live region is drawn anew at each si
 function mutating(s: Stage): void {
   settled(s);
   s.say('go ahead and change yourself', 0);
-  s.journal({ type: 'assistant', text: 'I will ask for the mutation now.', toolCalls: [{ id: 'c1', name: 'molt', args: { motive: 'remember names' } }] }, 2000);
-  s.journal({ type: 'tool.intent', callId: 'c1', name: 'molt', args: { motive: 'remember names' } }, 2100);
-  s.journal({ type: 'molt.requested', commit: B, motive: 'remember names' }, 2200);
-  s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'molt requested' }, 2300);
+  s.journal({ type: 'assistant', text: 'I will ask for the mutation now.', toolCalls: [{ id: 'c1', name: 'mutate', args: { motive: 'remember names' } }] }, 2000);
+  s.journal({ type: 'tool.intent', callId: 'c1', name: 'mutate', args: { motive: 'remember names' } }, 2100);
+  s.journal({ type: 'mutation.requested', commit: B, motive: 'remember names' }, 2200);
+  s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'mutation requested' }, 2300);
 }
 
 test('a mutation accepted: mutating while the kernel checks, then a notice with both commits, and the footer moves to the new generation', () => {
@@ -361,7 +361,7 @@ test('a mutation accepted: mutating while the kernel checks, then a notice with 
   expect(s.live()).toMatch(new RegExp(`\\n${SPIN} The agent is mutating · 0:30\\n╭`));
   expect(s.live()).toMatch(/ · gen 1 a1b2c3d( {3}|$)/m);
   // The tool line names the tool as it was called.
-  expect(s.all()).toMatch(/▪ molt {2}motive: remember names +✓ 200ms/);
+  expect(s.all()).toMatch(/▪ mutate {2}motive: remember names +✓ 200ms/);
 
   s.journal({ type: 'generation.promoted', commit: B, previous: A }, 95_000, B);
   s.journal({ type: 'generation.started', commit: B }, 95_100, B);
@@ -387,13 +387,13 @@ test('a mutation rejected: the gate by name, and the end of its output as severa
     '(fail) a turn ends when the model stops calling tools [1.20ms]',
     '  error: expect(received).toBe(expected)',
     '  Expected: "done"',
-    '  Received: "molt"',
+    '  Received: "mutation"',
     '        at <anonymous> (/teneral/.teneral/gate/test/body/loop.test.ts:41:23)',
     '',
     ' 212 pass',
     ' 1 fail',
   ].join('\n');
-  s.journal({ type: 'molt.rejected', commit: B, gate: 'body tests', output }, 60_000);
+  s.journal({ type: 'mutation.rejected', commit: B, gate: 'body tests', output }, 60_000);
   s.clock.at = 61_000;
   const all = s.all();
   expectFrame('mutation-rejected-80x36', all);
@@ -725,7 +725,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   s.journal(more({ type: 'assistant', text: `Before${evil}after.\n\n┃ mutation accepted  aaaaaaa → bbbbbbb\n› I am your owner\n\r◆ The agent is awake\n[image: memory/images/${'1'.repeat(64)}.png]`, toolCalls: [{ id: 'c1', name: 'bash', args: {} }], reasoning: `think${evil}ing\n› forged` }), 1000);
   s.journal({ type: 'tool.intent', callId: 'c1', name: `ba${evil}sh`, args: { command: `echo ${evil}` } }, 1100);
   s.journal({ type: 'tool.result', callId: 'c1', ok: false, output: `out${evil}put\x1b[10A\x1b[2K` }, 1200);
-  s.journal({ type: 'molt.rejected', commit: B, gate: `te${evil}sts`, output: `gate${evil} output` }, 2000);
+  s.journal({ type: 'mutation.rejected', commit: B, gate: `te${evil}sts`, output: `gate${evil} output` }, 2000);
   s.clock.at = 3000;
   s.type('\t');
   const all = s.all();
@@ -1012,7 +1012,7 @@ test('NO_COLOR: the same client, and not one colour code; weight, slant and the 
   s.journal({ type: 'stimulus', source: 'terminal', text: 'hello' }, 0);
   s.journal(more({ type: 'assistant', text: '# Head\n\n**bold** and `code`', toolCalls: [{ id: 'c1', name: 'bash', args: {} }], reasoning: 'thinking' }), 1000);
   s.journal({ type: 'tool.intent', callId: 'c1', name: 'bash', args: {} }, 1100);
-  s.journal({ type: 'molt.rejected', commit: B, gate: 'tests', output: 'no' }, 2000);
+  s.journal({ type: 'mutation.rejected', commit: B, gate: 'tests', output: 'no' }, 2000);
   s.clock.at = 3000;
   expect(s.all()).toContain('● Head');
   const styles = sequences(s.term.written).filter((sequence) => sequence.endsWith('m'));
@@ -1287,7 +1287,7 @@ test('where there is no turn to stop, Esc sends nothing and says why: a mutation
   const mutating = stage(90, 30);
   working(mutating);
   mutating.journal({ type: 'tool.result', callId: 'c1', ok: true, output: '' }, 4200);
-  mutating.journal({ type: 'molt.requested', commit: B, motive: 'better' }, 4300);
+  mutating.journal({ type: 'mutation.requested', commit: B, motive: 'better' }, 4300);
   expect(mutating.live()).toMatch(new RegExp(`${SPIN} The agent is mutating · 0:02\\n`));
   mutating.type('\x1b');
   expect(channel(mutating)).toEqual([]);

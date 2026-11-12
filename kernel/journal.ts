@@ -30,6 +30,12 @@ export type EventBody =
   // The owner stopped the turn in progress (kernel/owner.ts). It ends that turn: nothing is owed after it.
   // It came later too: a journal without one reads as before, and a reader from before it passes it by.
   | { type: 'turn.interrupted' }
+  // The body asks to be switched onto `commit`, and the kernel says no. (Yes is `generation.promoted`.)
+  | { type: 'mutation.requested'; commit: string; motive: string }
+  | { type: 'mutation.rejected'; commit: string; gate: string; output: string }
+  // The same two under the names they were first written by. Every journal from before the change
+  // holds them, and a body from before it still writes the one and understands only the other, so
+  // they are read for good: see `eventName`. Nothing new should write them but `rejectionFor`.
   | { type: 'molt.requested'; commit: string; motive: string }
   | { type: 'molt.rejected'; commit: string; gate: string; output: string }
   | { type: 'generation.started'; commit: string }
@@ -81,6 +87,40 @@ function endsWithNewline(fd: number): boolean {
   const last = Buffer.alloc(1);
   readSync(fd, last, 0, 1, size - 1);
   return last[0] === 0x0a;
+}
+
+/** The former names of event types, each with the name it is read as. */
+const FORMER_NAMES: Readonly<Record<string, string>> = { 'molt.requested': 'mutation.requested', 'molt.rejected': 'mutation.rejected' };
+
+/**
+ * The name an event type is read by. A journal is append-only and never rewritten, so a type that
+ * was renamed stays in it under its former name; every reader asks here, or through the two
+ * functions below, and treats both names as one.
+ */
+export function eventName(type: unknown): string {
+  if (typeof type !== 'string') return '';
+  return Object.hasOwn(FORMER_NAMES, type) ? FORMER_NAMES[type]! : type;
+}
+
+export type MutationRequest = Extract<JournalEvent, { type: 'mutation.requested' | 'molt.requested' }>;
+export type MutationRejection = Extract<JournalEvent, { type: 'mutation.rejected' | 'molt.rejected' }>;
+
+/** Whether `e` is a body asking for a mutation, under either name. */
+export function isMutationRequest(e: JournalEvent): e is MutationRequest {
+  return eventName(e.type) === 'mutation.requested';
+}
+
+/** Whether `e` is the kernel rejecting one, under either name. */
+export function isMutationRejection(e: JournalEvent): e is MutationRejection {
+  return eventName(e.type) === 'mutation.rejected';
+}
+
+/**
+ * The rejection of `request`, under the name the request used: a body that asks with
+ * `molt.requested` is one from before the change, and `molt.rejected` is the only answer it hears.
+ */
+export function rejectionFor(request: MutationRequest, gate: string, output: string): EventBody {
+  return { type: request.type === 'molt.requested' ? 'molt.rejected' : 'mutation.rejected', commit: request.commit, gate, output };
 }
 
 /** Throws, with nothing written, for a note that `noteProblem` refuses. */

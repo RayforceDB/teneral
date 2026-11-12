@@ -7,14 +7,16 @@ import {
   BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, protectedDiff, runGates, sh, type GateResult,
 } from './gates';
 import {
-  appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
+  appendEvent, isMutationRejection, isMutationRequest, journalSize, readEvents, readEventsFrom, rejectionFor, type JournalEvent,
 } from './journal';
 import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
 import { cageNotice, takeAccepts } from './species';
 
-/** The agent exits with this code to ask for a molt. */
-export const MOLT_EXIT = 75;
+/** The agent exits with this code to ask for a mutation. */
+export const MUTATION_EXIT = 75;
+/** @deprecated The name from before a mutation was called one. A lineage's own tests may still import it. */
+export const MOLT_EXIT = MUTATION_EXIT;
 /** Crashes in a row, with no reply in between, before a generation is given up on. */
 export const CRASH_LIMIT = 3;
 /** Rejections in a row of one and the same commit before the supervisor stops and leaves it to the owner. */
@@ -31,8 +33,8 @@ export type Decision = 'stop' | 'gate' | 'restart' | 'rollback' | 'halt';
 /** `crashes` counts earlier crashes of this generation since its last reply. */
 export function decide(exit: Exit, s: { hasPrevious: boolean; crashes: number }): Decision {
   if (exit.code === 0) return 'stop';
-  // Only a generation that proved it can start may ask for a molt, so `previous` is always one that did.
-  if (exit.code === MOLT_EXIT && exit.ready) return 'gate';
+  // Only a generation that proved it can start may ask for a mutation, so `previous` is always one that did.
+  if (exit.code === MUTATION_EXIT && exit.ready) return 'gate';
   const givenUp = !exit.ready || s.crashes + 1 >= CRASH_LIMIT;
   if (!givenUp) return 'restart';
   return s.hasPrevious ? 'rollback' : 'halt';
@@ -210,19 +212,20 @@ function reconcileJournal(p: Paths, state: State, events: JournalEvent[]): void 
   }
 }
 
-/** What the agent is told when a molt it asked for was never judged. */
-const INTERRUPTED = 'The kernel was stopped, or the body died, before the gates finished with this commit. Nothing was decided about it. Call molt again.';
+/** What the agent is told when a mutation it asked for was never judged. A body from before the tool was renamed reads this too, so the tool is not named. */
+const INTERRUPTED = 'The kernel was stopped, or the body died, before the gates finished with this commit. Nothing was decided about it. Ask for it again.';
 
 /**
- * A molt request must not be left hanging: the agent waits for one of three answers. If the
- * latest request in `events` has none after it, say that it was interrupted. Returns whether it did.
+ * A mutation request must not be left hanging: the agent waits for one of three answers. If the
+ * latest request in `events` has none after it, say that it was interrupted, under the name the
+ * request used. Returns whether it did.
  */
-function answerPendingMolt(p: Paths, gen: string, events: JournalEvent[]): boolean {
+function answerPendingMutation(p: Paths, gen: string, events: JournalEvent[]): boolean {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
-    if (e.type === 'molt.rejected' || e.type === 'generation.promoted' || e.type === 'generation.rolledback') return false;
-    if (e.type === 'molt.requested') {
-      appendEvent(p.journal, gen, { type: 'molt.rejected', commit: e.commit, gate: 'interrupted', output: INTERRUPTED });
+    if (isMutationRejection(e) || e.type === 'generation.promoted' || e.type === 'generation.rolledback') return false;
+    if (isMutationRequest(e)) {
+      appendEvent(p.journal, gen, rejectionFor(e, 'interrupted', INTERRUPTED));
       return true;
     }
   }
@@ -253,7 +256,7 @@ function onProbation(state: State, events: JournalEvent[]): boolean {
 export function excused(gen: string, all: JournalEvent[], lately: JournalEvent[]): boolean {
   const stopped = all.findLastIndex((e) => e.type === 'turn.interrupted' && e.gen === gen);
   if (stopped === -1) return false;
-  const owed = all.slice(stopped + 1).find((e) => ['stimulus', 'molt.rejected', 'generation.promoted', 'generation.rolledback'].includes(e.type));
+  const owed = all.slice(stopped + 1).find((e) => isMutationRejection(e) || ['stimulus', 'generation.promoted', 'generation.rolledback'].includes(e.type));
   return owed === undefined || lately.some((e) => e.id === owed.id);
 }
 
@@ -459,14 +462,6 @@ function forwardStderr(stream: ReadableStream<Uint8Array>, show: (chunk: Uint8Ar
   };
 }
 
-function lastOf<T extends JournalEvent['type']>(events: JournalEvent[], type: T): Extract<JournalEvent, { type: T }> | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type === type) return e as Extract<JournalEvent, { type: T }>;
-  }
-  return undefined;
-}
-
 /**
  * Run generations until the agent exits cleanly or the owner stops it ('stopped'), or nothing
  * can run ('halted'), or the generation was changed to one whose kernel is not this one
@@ -527,7 +522,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       reconcileJournal(p, state, readEvents(p.journal));
       // Read again: the line above may have added the note of a promotion or rollback.
       const events = readEvents(p.journal);
-      if (answerPendingMolt(p, state.current, events)) log('a molt was asked for and never answered; told the agent to ask again');
+      if (answerPendingMutation(p, state.current, events)) log('a mutation was asked for and never answered; told the agent to ask again');
       probation = onProbation(state, events);
     } catch (err) {
       log(`cannot start: ${reasonOf(err)}`);
@@ -694,9 +689,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       const ready = events.some((e) => e.type === 'generation.ready' && e.gen === gen);
       const standing = { hasPrevious: state.previous !== null, crashes };
       let decision = decide({ code, ready }, standing);
-      const request = lastOf(events, 'molt.requested');
+      const request = events.findLast(isMutationRequest);
       if (decision === 'gate' && !request) {
-        // A molt with no commit named is a crash like any other, so it is counted and cannot spin.
+        // A mutation with no commit named is a crash like any other, so it is counted and cannot spin.
         log(`generation ${gen} exited with ${code} but named no commit; treating it as a crash`);
         decision = decide({ code: 1, ready }, standing);
       }
@@ -706,8 +701,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       // Alive, ready and silent: the kernel ended this run itself, so the exit code says nothing.
       if (silent && state.previous !== null) decision = 'rollback';
       // Anything but the gates or a rollback leaves a request made in this run without an answer.
-      if (decision !== 'gate' && decision !== 'rollback' && answerPendingMolt(p, gen, events)) {
-        log(`generation ${gen} asked for a molt and did not exit to have it judged; told it to ask again`);
+      if (decision !== 'gate' && decision !== 'rollback' && answerPendingMutation(p, gen, events)) {
+        log(`generation ${gen} asked for a mutation and did not exit to have it judged; told it to ask again`);
       }
 
       if (decision === 'stop') return 'stopped';
@@ -743,11 +738,11 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         continue;
       }
       // decision === 'gate', and the request exists or the decision would have been replaced above.
-      if (!request) throw new Error('unreachable: gate without a molt request');
+      if (!request) throw new Error('unreachable: gate without a mutation request');
       let result: GateResult;
       if (request.commit === gen) {
         // Nothing to test and nothing to switch to; promoting it would only erase `previous`.
-        result = { ok: false, gate: 'same', output: `${gen} is the generation already running; commit a change in the workspace before asking to molt` };
+        result = { ok: false, gate: 'same', output: `${gen} is the generation already running; commit a change in the workspace before asking to mutate` };
       } else {
         // The gates take minutes. A stop signal aborts them; the request then stays unanswered in the
         // journal, and the next start answers it as interrupted.
@@ -762,7 +757,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         if (stopping) return 'stopped';
       }
       if (!result.ok) {
-        appendEvent(p.journal, gen, { type: 'molt.rejected', commit: request.commit, gate: result.gate, output: result.output });
+        // Under the name the request used, so that a body from before the change still hears it.
+        appendEvent(p.journal, gen, rejectionFor(request, result.gate, result.output));
         // Asking is never a reason to roll back, and asking for something new each time is iterating: it
         // waits one unit and is never stopped. Asking for the same rejected commit again is slowed more
         // each time and, at the limit, left to the owner. A run that was only interrupted judged nothing.
@@ -771,12 +767,12 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         const times: number = result.gate === 'interrupted' || result.undecided ? 0 : (last?.commit === request.commit ? last.times : 0) + 1;
         if (times > 0) rejected = { commit: request.commit, times };
         if (times >= REJECTION_LIMIT) {
-          log(`molt to ${request.commit} rejected at gate ${result.gate}`);
+          log(`mutation to ${request.commit} rejected at gate ${result.gate}`);
           log(`the same commit keeps being requested and rejected (${request.commit}, ${times} times in a row); stopping`);
           return 'halted';
         }
         const delay = delayAfter(Math.max(times, 1));
-        log(`molt to ${request.commit} rejected at gate ${result.gate}; restarting in ${delay} ms`);
+        log(`mutation to ${request.commit} rejected at gate ${result.gate}; restarting in ${delay} ms`);
         await pause(delay);
         continue;
       }

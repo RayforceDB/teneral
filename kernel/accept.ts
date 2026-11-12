@@ -35,7 +35,7 @@ export function main(args: string[], root: string, out: (line: string) => void, 
     }
     acceptSpecies(root, p.journal, readState(p).current, chosen.commit, 'box');
     out(`Accepted species commit ${chosen.commit.slice(0, 12)}${chosen.subject === '' ? '' : ` (${chosen.subject})`}, and every one before it.`);
-    out('A molt that stands on it now goes on to the checks. Tell the agent to ask again.');
+    out('A mutation that stands on it now goes on to the checks. Tell the agent to ask again.');
     return 0;
   } catch (e) {
     err(`Not done: ${e instanceof Error ? e.message : String(e)}.`);
