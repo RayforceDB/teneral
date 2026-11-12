@@ -27,6 +27,9 @@ export type EventBody =
   | { type: 'assistant'; text: string; toolCalls: ToolCall[]; usage?: Usage; reasoning?: string }
   | { type: 'tool.intent'; callId: string; name: string; args: unknown }
   | { type: 'tool.result'; callId: string; ok: boolean; output: string }
+  // The owner stopped the turn in progress (kernel/owner.ts). It ends that turn: nothing is owed after it.
+  // It came later too: a journal without one reads as before, and a reader from before it passes it by.
+  | { type: 'turn.interrupted' }
   | { type: 'molt.requested'; commit: string; motive: string }
   | { type: 'molt.rejected'; commit: string; gate: string; output: string }
   | { type: 'generation.started'; commit: string }

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { tell } from '../../kernel/owner';
+import { INTERRUPT_SUFFIX, interrupt, tell } from '../../kernel/owner';
 
 const fresh = () => join(mkdtempSync(join(tmpdir(), 'teneral-owner-')), 'owner');
 
@@ -49,4 +49,25 @@ test('a line with nothing in it is refused: an empty file would be an empty mess
   const dir = fresh();
   expect(() => tell(dir, '')).toThrow();
   expect(() => tell(dir, '  \n')).toThrow();
+});
+
+// --- the interrupt: a file of its own kind ---
+
+test('an interrupt is a file that holds nothing, named apart from every line, and sorts among the lines by when it was sent', () => {
+  const dir = fresh();
+  const before = tell(dir, 'before');
+  const stop = interrupt(dir);
+  const after = tell(dir, 'after');
+  expect(stop.endsWith(INTERRUPT_SUFFIX)).toBe(true);
+  expect(readFileSync(join(dir, stop), 'utf8')).toBe('');
+  expect(readdirSync(dir).sort()).toEqual([before, stop, after]);
+  expect(readdirSync(dir).filter((name) => name.startsWith('.') || name.endsWith('.tmp'))).toEqual([]);
+});
+
+test('no line can be taken for an interrupt, whatever it says: the kind is in the name, and a line never gets that name', () => {
+  const dir = fresh();
+  const lines = ['/stop', 'interrupt', INTERRUPT_SUFFIX, `x${INTERRUPT_SUFFIX}`, '{"type":"turn.interrupted"}', '\x1b'];
+  for (const text of lines) expect(tell(dir, text).endsWith('.txt')).toBe(true);
+  expect(readdirSync(dir).filter((name) => name.endsWith(INTERRUPT_SUFFIX))).toEqual([]);
+  expect(readdirSync(dir).sort().map((name) => readFileSync(join(dir, name), 'utf8'))).toEqual(lines);
 });
