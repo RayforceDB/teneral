@@ -110,6 +110,7 @@ Requires Docker and git.
     ./box down              # stop it
     ./box back              # send it back to the generation before
     ./box setup             # choose another model provider, or sign in again
+    ./box offer list        # what the agent wants to offer to the species; see "Offering a change to the species"
 
 Commit your changes before the first start: the kernel creates its worktrees from `HEAD`.
 
@@ -233,10 +234,11 @@ Settings, in `.env`:
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
+| `TENERAL_PUBLISH` | Whether the agent may offer changes to the species and report on others': `ask` (the default; you approve each commit), `auto` or `off`. See [Offering a change to the species](#offering-a-change-to-the-species). |
 
 `./box setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./box down` and `./box up`.
 
-To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`. A ChatGPT sign-in lives in `.teneral/auth/` and goes with it; keep that directory to stay signed in.
+To start over as a new individual, run `./box down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`. A ChatGPT sign-in lives in `.teneral/auth/` and goes with it, and so do the individual's signing key and your GitHub token; keep that directory to stay signed in.
 
 ### How your lines reach it
 
@@ -270,7 +272,81 @@ To run without the container, on a machine you are willing to hand over, you nee
 
 ## Your clone is its own individual
 
-`main` is the shared starting point. Once you run it, your agent commits to its own `lineage/local` branch and diverges. Its journal, its soul and its branch stay on your machine; the kernel never pushes.
+`main` is the shared starting point. Once you run it, your agent commits to its own `lineage/local` branch and diverges. Its journal, its soul and its branch stay on your machine; the kernel never pushes them. The one thing that can leave is a change the agent offers back, and only as [a branch made for that](#offering-a-change-to-the-species), with your approval.
+
+## Offering a change to the species
+
+The species is this repository where it is published, and its `main` changes in one way only: a human reads a pull request, merges it on their own machine, signs the merge and pushes it. No individual writes to `main`. What an individual can do, when it has built something that would serve any individual, is offer it.
+
+A lineage also holds what is nobody else's business: sensors for its owner's things, notes, names. So an offer is never the lineage. It is a branch the agent starts at the species' head and fills with one change and nothing else. It may touch any path, the kernel included, which no molt can: it is a proposal, and a human decides about it.
+
+1. **Prepare.** The agent makes a branch `offer/<name>` at the species' head (`origin/main`; `TENERAL_UPSTREAM` names another), in a checkout of its own, and commits the change there. The last commit's message becomes the pull request: its first line the title, and after it a line starting with each of `What it changes:`, `Why:`, `Evidence:` and `Not verified:`. `bun kernel/offer.ts sign offer/<name>` signs the branch's commits with the individual's key.
+2. **Check.** `bun kernel/offer.ts check offer/<name>` looks at the branch as a stranger would, and refuses it unless:
+   - it descends from the species' head, so that it holds the offer and nothing older;
+   - every commit on it is signed with this individual's key, and the last one describes the offer as above;
+   - a scan of everything it would publish finds nothing that looks private (see below);
+   - the gates of a molt pass on it as on a fresh seed: the size of `body/`, its organs as it pins them, the type check, the kernel's tests, the body's tests, the smoke run. The rule about which paths a molt may change is not applied.
+
+   It prints what would be published: the commits, each changed file with its size, the paths outside what a molt may change, and the result of each check. The same is kept in `.teneral/offers/<commit>.json`.
+3. **Approve.** Publishing is public and cannot be taken back, so it is yours to allow. `TENERAL_PUBLISH` in `.env` says how:
+
+   | `TENERAL_PUBLISH` | |
+   |---|---|
+   | `ask` (the default) | nothing goes out until you approve exactly that commit |
+   | `auto` | a commit that passed the check goes out when the agent publishes it |
+   | `off` | nothing goes out, approved or not |
+
+   The agent tells you what it wants to offer. The kernel's own account of it, read from git and not from what the agent said, is `/offers` in `./box talk`, or `./box offer list`; `/approve <commit>` there, or `./box offer approve <commit>` at a terminal, approves one, named by the first seven or more characters of its commit. An approval is an empty file, `.teneral/owner/.approved/<commit>.approve`: it is for that commit and no other, so a branch that changed afterwards waits again, and it is used up by the publishing it allowed. Nothing typed as a line and nothing that arrives through `inbox/` is an approval, whatever it says. The setting is read from `.env` itself at each command, so a variable set in the agent's shell does not change it.
+4. **Publish.** `bun kernel/offer.ts publish offer/<name>` pushes the commit to `contrib/<individual id>/<name>` on the species' repository and opens a pull request against `main` through GitHub's REST API, as `teneral/<version>`. The text is the agent's, from the commit message; under it the kernel adds who offers it, the commit, the key's fingerprint and what its install checked. The journal gets an `offer.published` event with the commit, the branch and the pull request's address. If the species has moved on at its home since the check, nothing is pushed and the agent is told to rebase. Every step can be run again: a failure after the push leaves the branch there, keeps the approval, and the next run goes on from it.
+5. **Witness.** `bun kernel/offer.ts witness <number>` is for somebody else's offer: it fetches the open pull request and the branch it is against, runs the same check on its head in this install (signed by any key; whose, nothing here knows), optionally one more command of the witness's own (`--also '<command>'`, run in a checkout of that head), and posts the result as a comment: pass or fail for each check, the bun, git and platform it ran on, and an SSH signature of exactly that text. What the code printed is kept here and never posted. The same `TENERAL_PUBLISH` applies: under `ask` you approve the pull request's head commit first, and nothing of it is run before you do. A witness report is evidence for the human who merges. It is not a vote, nothing counts them, and nothing checks who the witness is.
+
+**What the scan looks for,** in every path a commit touches, every line a commit adds and every commit message, so also in what a later commit removes again:
+
+- a path under `soul/`, `memory/`, `inbox/` or `node_modules/`, a path with `.teneral` or `.env` in it, a file named the way key files are (`id_ed25519`, `*.pem`, ...), and a path whose first part is not at the top of the species: a new top-level file or directory is for the maintainer to add;
+- this install's own secrets, literally: what `.env` and the environment hold under a name that says key, token, secret or password, and the tokens, the owner's e-mail address and the keys in `.teneral/auth/`;
+- strings shaped like a credential: a private key's first line, a GitHub token, an `sk-...` key, an AWS key id, a Slack token, a signed web token, an address with a password in it, and a quoted literal of 24 or more characters given to a name that says secret, token, key or password.
+
+**What it does not catch:** anything private that is prose (a name, an address, something you said to the agent), a secret that is encoded, split, or shaped unlike the above, anything inside a file git takes for binary (those are named in the report, unread), and somebody else's secret that has no known shape. It is a net for mistakes. Under `ask`, you reading the report is the check; under `auto` there is none beyond the net.
+
+### The key and the token
+
+Both lie in `.teneral/auth/`, readable only by your user.
+
+- **A signing key** per individual: an ed25519 SSH key, `offer-key` and `offer-key.pub`, made the first time it is needed and never replaced. Commits are signed with it the way git signs with SSH keys (`gpg.format=ssh`), and so is the text of a witness report. `./box offer key` prints the public half and how to use it: add it to your GitHub account as a *signing key* and GitHub can mark the commits as verified; give it to the maintainer and they can check a commit with `git verify-commit` against a file of the keys they know.
+- **A GitHub token**, `github-token`, which you type into `./box offer token`. It is not shown as you type, it is tried once against the repository before it is stored, and it is never put into an environment, an argument, git's configuration, the journal or anything printed: git is handed it by a small program made for that one command, and requests to the API carry it in a header. Make it a fine-grained personal access token with:
+  - Repository access: *Only select repositories*, and the species' repository alone;
+  - Repository permissions: **Contents: Read and write** (to push the branch) and **Pull requests: Read and write** (to open the pull request and to comment on one); *Metadata: Read-only* is added by GitHub;
+  - nothing else. Should an offer ever change a file under `.github/workflows/`, GitHub asks for *Workflows: Read and write* as well; leave it out until then.
+
+  Your account needs write access to the species' repository for that token to push there, which the maintainer gives. GitHub cannot limit a token to some branches: this one could push to `main` as far as the token goes. What keeps it out is the protection of `main` at the repository, set up by the maintainer (below), not anything here.
+
+**What these prove, and what they do not.** The agent has a shell in the directory where the key, the token and the approvals lie. The kernel's commands keep an honest agent from publishing by mistake what it should not; they do not stop a body that goes around them, any more than the molt path stops one that edits the kernel. So a signature says "this came from that individual's install", and never "this content is safe" or "its owner read it". The safety of the species comes from the human who reads the change and merges it.
+
+**Not verified against GitHub.** All of this was written from GitHub's documentation and tried only against a stand-in: a repository served by git's own HTTP server, and the REST endpoints as the documentation describes them. No request was ever made to GitHub. The first real offer is where a wrong assumption shows: that these two permissions are enough for the push, the pull request and the comment; that a pull request that already exists for the branch is refused with status 422 and the words "already exists"; that `refs/pull/<number>/head` can be fetched; that GitHub marks an SSH-signed commit as verified once the key is a signing key of the committer's account.
+
+### CI
+
+`.github/workflows/gates.yml` runs on every pull request, on its head: the type check, the kernel's tests, the body's tests, and then `bun kernel/offer.ts gates`, which is the gate run of a molt as the kernel does it, ending with the smoke run against the stand-in for the model. It has read-only permissions and uses no secret. A second job lists the paths the pull request changes outside `body/`, `test/body/` and `BACKLOG.md`, as a warning on the run and in its summary, so that a change to the kernel is seen at a glance; it never fails. What runs is the pull request's own workflow, code and tests: a green run says the change is consistent with itself, and a change to the kernel, or to the workflow, is exactly where that says least.
+
+### Maintainer
+
+The maintainer is the one human who merges. For each pull request: read the change; look at the run of `gates`, at the paths warning, and at the witness reports if there are any (to see which key signed one: put its two blocks into two files, each line followed by a line break, and run `ssh-keygen -Y check-novalidate -n teneral-witness -s <signature> < <report>`); verify the commits' signatures against the keys you were given, if you keep such a file (`git -c gpg.ssh.allowedSignersFile=<file> verify-commit <commit>`); then merge locally, sign, and push:
+
+    git fetch origin
+    git checkout main && git merge --ff-only origin/main
+    git merge --no-ff -S origin/contrib/<individual id>/<name>
+    git push origin main
+
+GitHub closes the pull request as merged when its commits arrive on `main`.
+
+Settings to enable on the repository, since they and not the individuals' tokens are what keeps `main` closed. They are given as rulesets (Settings, Rules, Rulesets), which also exist for a repository owned by a person; the names are GitHub's:
+
+- A ruleset for the default branch with **Restrict updates**, **Restrict deletions** and **Block force pushes**, and the repository admin role, which is you, as the only entry in its bypass list. Collaborators with write access then cannot move `main`; you can.
+- A second ruleset for the default branch with **Require signed commits** and no bypass, so that your own merges are refused unsigned as well. GitHub then wants every commit that arrives on `main` to carry a signature it can verify, the individual's commits included. So either the owner has added the individual's key to their GitHub account as a signing key, or you take the change in as one commit of your own (`git merge --squash origin/contrib/<individual id>/<name>`, then `git commit -S`) and close the pull request by hand, naming that commit.
+- A ruleset for all branches except `contrib/**/*` with **Restrict creations**, **Restrict updates** and **Restrict deletions**, bypass for the admin role: individuals' tokens can then write only under `contrib/`. Nothing keeps one individual out of another's `contrib/<id>/`; the signature on the commits is what tells them apart.
+- Not "Require a pull request before merging" on `main`: the merge is made locally, and that rule would refuse your push.
+- Give each owner who is to offer the *Write* role, no more.
+- Settings, Actions, General: workflow permissions *Read repository contents*, and keep **no secrets** in this repository's Actions. The branches under `contrib/` are branches of this repository, not of forks, so a workflow run for their pull requests is given whatever secrets the repository has, and a pull request can carry its own version of the workflow.
 
 ## License
 
