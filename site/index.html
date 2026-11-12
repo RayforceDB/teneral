@@ -50,21 +50,21 @@
   .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
 
   header.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
-  header.top .mark { width: 34px; height: 34px; display: block; }
+  header.top .logo { height: 30px; width: auto; display: block; }
   header.top nav { display: flex; gap: 22px; font-size: 15px; }
   header.top nav a { text-decoration: none; color: var(--soft); }
   header.top nav a:hover { color: var(--ink); }
   @media (max-width: 560px) { header.top nav { gap: 16px; font-size: 14px; } header.top nav a.wide { display: none; } }
 
-  .hero { padding-top: 72px; padding-bottom: 84px; }
-  .hero .logo { width: min(460px, 78vw); height: auto; display: block; margin-left: -8px; }
+  .hero { padding-top: 64px; padding-bottom: 88px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 56px; align-items: center; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 44px; padding-top: 40px; padding-bottom: 64px; } }
   .hero h1 {
     font-size: clamp(30px, 5.2vw, 56px);
     line-height: 1.08;
     letter-spacing: -.025em;
     font-weight: 650;
-    margin: 44px 0 20px;
-    max-width: 17ch;
+    margin: 0 0 22px;
+    max-width: 13ch;
     text-wrap: balance;
   }
   .hero p.lede { font-size: clamp(18px, 2.1vw, 21px); color: var(--soft); max-width: 56ch; margin: 0 0 32px; }
@@ -76,10 +76,20 @@
   .btn.solid { background: var(--ink); color: var(--paper); }
   .btn.solid:hover { background: var(--accent); border-color: var(--accent); color: var(--paper); }
   .btn:hover { border-color: var(--accent); }
-  .status {
-    display: inline-block; margin-left: 4px; font-size: 14px; color: var(--soft);
-  }
-  .status b { color: var(--accent); font-weight: 600; }
+  .meta { margin: 26px 0 0; font-size: 14px; color: var(--soft); }
+  .meta a { color: var(--ink); font-weight: 600; }
+
+  .stack { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .stack li { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 13px 18px 14px; }
+  .stack h3 { margin: 0; font-size: 16.5px; letter-spacing: -.01em; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .stack h3 code { background: none; padding: 0; font-size: 12.5px; font-weight: 400; color: var(--accent); }
+  .stack p { margin: 3px 0 0; font-size: 14.5px; line-height: 1.5; color: var(--soft); }
+  .stack li.base { background: var(--ink); border-color: var(--ink); color: var(--paper); padding: 18px 18px 19px; margin-top: 4px; }
+  .stack li.base h3 { font-size: 19px; }
+  .stack li.base h3 code, .stack li.base p { color: inherit; opacity: .72; }
+  .stack li.base a { text-decoration: none; }
+  .stack li.base a:hover { color: inherit; text-decoration: underline; }
+  .stack .cap { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--soft); margin: 0 0 4px 4px; border: 0; background: none; padding: 0; }
 
   section { padding: 68px 0; border-top: 1px solid var(--line); }
   .eyebrow { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 12px; }
@@ -126,11 +136,11 @@
 
 <div class="wrap">
   <header class="top">
-    <a href="#top" aria-label="teneral"><img class="mark" src="mark.png" alt=""></a>
+    <a href="#top" aria-label="teneral"><img class="logo" src="logo.png" alt="teneral" width="1200" height="308"></a>
     <nav>
       <a class="wide" href="#how">How it works</a>
-      <a href="#species">The species</a>
-      <a class="wide" href="#memory">Memory</a>
+      <a href="#foundation">Foundation</a>
+      <a class="wide" href="#species">The species</a>
       <a href="#start">Start</a>
       <a href="https://github.com/singaraiona/teneral">GitHub</a>
     </nav>
@@ -139,14 +149,39 @@
 
 <main id="top">
   <div class="wrap hero">
-    <img class="logo" src="logo.png" alt="teneral" width="1200" height="308">
-    <h1>An agent that rewrites its own code.</h1>
-    <p class="lede">One measured generation at a time, under a kernel that checks every new body and puts back the last one that worked. The conversation outlives every version.</p>
-    <div class="actions">
-      <a class="btn solid" href="#start">Raise one</a>
-      <a class="btn" href="https://github.com/singaraiona/teneral">Read the source</a>
-      <span class="status"><b>Status: experiment.</b> MIT, TypeScript on Bun, no runtime dependencies.</span>
+    <div>
+      <h1>An agent that rewrites its own code.</h1>
+      <p class="lede">One measured generation at a time, under a kernel that checks every new body and puts back the last one that worked. The conversation outlives every version.</p>
+      <div class="actions">
+        <a class="btn solid" href="#start">Raise one</a>
+        <a class="btn" href="https://github.com/singaraiona/teneral">Read the source</a>
+      </div>
+      <p class="meta">Open source under MIT · TypeScript on Bun · built on <a href="https://rayforcedb.com/">RayforceDB</a></p>
     </div>
+
+    <ul class="stack" aria-label="What an individual is made of, from what changes most to what holds still">
+      <li class="cap">One individual, top to bottom</li>
+      <li>
+        <h3>Soul <code>soul/</code></h3>
+        <p>Its name, its character, who it lives alongside. Written by itself, never shared.</p>
+      </li>
+      <li>
+        <h3>Body <code>body/</code></h3>
+        <p>How it senses, thinks and acts. Its own to rewrite.</p>
+      </li>
+      <li>
+        <h3>Kernel <code>kernel/</code></h3>
+        <p>Judges every new body and restores the last one that stood. No mutation can change it.</p>
+      </li>
+      <li>
+        <h3>Journal <code>memory/journal.jsonl</code></h3>
+        <p>Everything that happened, append-only, each line stamped with the body that wrote it.</p>
+      </li>
+      <li class="base">
+        <h3><a href="#foundation">RayforceDB</a> <code>the foundation</code></h3>
+        <p>The columnar engine under its memory: what it knows, what it recalls, how it measures itself.</p>
+      </li>
+    </ul>
   </div>
 
   <section id="what">
@@ -156,27 +191,48 @@
       <p><strong>Teneral</strong> is what entomologists call an insect that has just shed its old skin: the new body is there, but it has not hardened yet. Here it is a generation of the agent's code that was just switched on and has not yet proven it works.</p>
       <p>The question behind the project is plain: can an agent become more capable by rebuilding its own harness, step by step, and where does that stop helping? The model that does the thinking is fixed. Everything around it is the agent's to change.</p>
 
-      <div class="grid">
+    </div>
+  </section>
+
+  <section id="foundation">
+    <div class="wrap">
+      <p class="eyebrow">Foundation</p>
+      <h2>Built on RayforceDB.</h2>
+      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal the kernel keeps, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows.</p>
+      <p>RayforceDB is a SIMD-accelerated columnar database in pure C with no dependencies. It is one small binary that starts in a moment, which is exactly what a body that may be replaced tomorrow can stand on.</p>
+
+      <div class="two">
         <div class="card">
-          <h3>Body</h3>
-          <code class="path">body/</code>
-          <p>How it senses, thinks and acts: the model call, the tools, the sensors, the way it builds its context. Small enough to read, and its own to rewrite.</p>
+          <h3>Memory</h3>
+          <p>Facts with their sources, tables of raw events partitioned by date, and queries and rules over both. What goes into a request is a query, not a pile of files.</p>
         </div>
         <div class="card">
-          <h3>Kernel</h3>
-          <code class="path">kernel/</code>
-          <p>A small supervisor. It wakes the agent, judges every new body before the agent moves in, and returns it to the last one that stood. No mutation can change it.</p>
+          <h3>Measurement</h3>
+          <p>Every journal line carries the commit of the body that wrote it. Loaded into columns, that history answers the question each mutation has to answer: did this generation do better than the one before?</p>
         </div>
         <div class="card">
-          <h3>Journal</h3>
-          <code class="path">memory/journal.jsonl</code>
-          <p>Everything that happens, append-only. Each line carries the commit of the body that wrote it, so generations can be compared against their own past.</p>
+          <h3>Pinned with the generation</h3>
+          <p>The engine is pinned in the body by address and hash. The kernel verifies it at the gate, and a rollback brings the old binary back together with the old code.</p>
         </div>
         <div class="card">
-          <h3>Soul</h3>
-          <code class="path">soul/</code>
-          <p>A few pages the agent writes itself on its first day: its name, its character, who it lives alongside. Never committed, never shared.</p>
+          <h3>Rebuildable by rule</h3>
+          <p>Whatever lives in the store must be rebuildable from the journal, in a place named by its schema version. A mutation that reshapes memory writes to a new place; the body before it still finds data it understands.</p>
         </div>
+      </div>
+
+<pre><span class="c">// body/organs.json: the whole installation</span>
+{
+  "rayforce": {
+    "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
+    "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
+    "dir": "rayforce-3.0.2-linux-x86_64",
+    "check": ["./rayforce", "--help"]
+  }
+}</pre>
+      <p style="margin-top:26px"><strong>Two projects, one loop.</strong> teneral runs RayforceDB under a real workload every day. What an individual finds, it reports or patches upstream; what RayforceDB releases, an individual takes by changing one hash and asking to mutate.</p>
+      <div class="actions" style="margin-top:22px">
+        <a class="btn solid" href="https://rayforcedb.com/">RayforceDB</a>
+        <a class="btn" href="https://github.com/RayforceDB/rayforce">Source and releases</a>
       </div>
     </div>
   </section>
@@ -254,45 +310,6 @@
     </div>
   </section>
 
-  <section id="memory">
-    <div class="wrap">
-      <p class="eyebrow">Memory</p>
-      <h2>The journal is the record. What the agent remembers with is RayforceDB.</h2>
-      <p>The kernel keeps one thing: an append-only journal that the agent cannot rewrite. Everything the agent thinks with is its own to build, and to rebuild in every generation: what it stores, how it indexes, what it recalls into a request, what it lets fade.</p>
-      <p>The first living individual chose <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a> as the engine for that, and adopted it as an organ: a SIMD-accelerated columnar database in pure C with no dependencies, small enough to pin by hash and start in a moment.</p>
-
-      <div class="two">
-        <div class="card">
-          <h3>Why it fits</h3>
-          <p>One small binary, so a generation carries its exact version and a rollback brings the old one back. Tables partitioned by date for the raw events, queries and rules over facts and their sources, and a write-ahead log of its own under the store.</p>
-        </div>
-        <div class="card">
-          <h3>Rebuildable by rule</h3>
-          <p>Whatever the agent keeps outside the journal must be rebuildable from it, in a place named by its schema version. A mutation that changes the shape of memory writes to a new place; the body before it still finds data it understands.</p>
-        </div>
-        <div class="card">
-          <h3>Two projects, one loop</h3>
-          <p>teneral runs RayforceDB under a real workload every day. What an individual finds, it reports or patches upstream; what RayforceDB releases, an individual installs by changing one hash and asking to mutate.</p>
-        </div>
-      </div>
-
-<pre><span class="c">// body/organs.json: the whole installation</span>
-{
-  "rayforce": {
-    "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
-    "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
-    "dir": "rayforce-3.0.2-linux-x86_64",
-    "check": ["./rayforce", "--help"]
-  }
-}</pre>
-      <div class="actions" style="margin-top:26px">
-        <a class="btn solid" href="https://rayforcedb.com/">RayforceDB</a>
-        <a class="btn" href="https://github.com/RayforceDB/rayforce">Source and releases</a>
-      </div>
-      <p style="margin-top:22px">The seed body ships no memory beyond the journal: an organ is a choice each individual makes. This is the one ours made.</p>
-    </div>
-  </section>
-
   <section id="start">
     <div class="wrap">
       <p class="eyebrow">Start</p>
@@ -313,8 +330,7 @@ cd teneral
 <footer>
   <div class="wrap">
     <span><img class="mark" src="mark.png" alt="">teneral · MIT</span>
-    <span>An experiment. Read what it does not do yet before trusting it with anything.</span>
-    <span><a href="https://github.com/singaraiona/teneral">github.com/singaraiona/teneral</a> · memory on <a href="https://rayforcedb.com/">RayforceDB</a></span>
+    <span><a href="https://github.com/singaraiona/teneral">github.com/singaraiona/teneral</a> · built on <a href="https://rayforcedb.com/">RayforceDB</a></span>
   </div>
 </footer>
 
