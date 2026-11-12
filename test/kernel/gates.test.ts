@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   BODY_SIZE_LIMIT, DEFAULT_CHECKS, git, runGates, sh, startStubProvider, type GateOptions,
 } from '../../kernel/gates';
@@ -633,6 +633,15 @@ function ownRepo(): { dir: string; seed: string } {
   const here = join(import.meta.dir, '..', '..');
   const { dir } = makeRepo({});
   for (const name of ['body', 'kernel', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
+  // A lineage that pins organs runs these tests too, in its gates. Its body is smoked here with the organs the
+  // gate run was given: the copy is shown the same cache. Run by hand with nothing given, it is smoked without them.
+  const given = process.env.TENERAL_ORGANS;
+  if (given && existsSync(join(dir, 'body', 'organs.json'))) {
+    mkdirSync(join(dir, '.teneral'), { recursive: true });
+    symlinkSync(resolve(given, '..', '..'), join(dir, '.teneral', 'organs'));
+    mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+    appendFileSync(join(dir, '.git', 'info', 'exclude'), '.teneral\n');
+  } else rmSync(join(dir, 'body', 'organs.json'), { force: true });
   return { dir, seed: commitAll(dir, 'own') };
 }
 
