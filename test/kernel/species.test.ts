@@ -510,7 +510,7 @@ test('the cage is the install\'s: when the generation\'s checkout has other cage
   const { dir: root, seed } = makeRepo({ ...SEED, box: 'one\n', Dockerfile: 'FROM one\n', 'kernel/launcher.ts': '// one\n', 'body/main.ts': 'process.exit(0);\n' });
   init(root);
   const p = paths(root);
-  expect(CAGE).toEqual(['box', 'Dockerfile', '.dockerignore', 'kernel/launcher.ts']);
+  expect(CAGE).toEqual(['box', 'Dockerfile', '.dockerignore', 'kernel/launcher.ts', 'SIGNERS']);
   expect(cageDifferences(root, p.live)).toEqual([]);
   expect(cageNotice(root, p.live)).toBeNull();
   // The species moves the cage on; the lineage takes the commit; the generation's checkout has it.
@@ -525,4 +525,55 @@ test('the cage is the install\'s: when the generation\'s checkout has other cage
   expect(cageNotice(root, p.candidate)).toBeNull();
   rmSync(p.live, { recursive: true, force: true });
   expect(cageNotice(root, p.live)).toBeNull();
+});
+
+// --- the maintainer's signature ---
+
+test('with a SIGNERS file in the install, a species commit is stood on only when a key listed there signed it; without the file none is asked for', async () => {
+  const { root, work, seed } = local();
+  const keys = mkdtempSync(join(tmpdir(), 'teneral-keys-'));
+  const made = (name: string): string => {
+    const r = Bun.spawnSync(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', name, '-f', join(keys, name)]);
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+    return join(keys, name);
+  };
+  const [maintainer, stranger] = [made('maintainer'), made('stranger')];
+  const signed = (key: string | null, n: number): string => {
+    writeFiles(root, { 'kernel/k.ts': `export const k = ${n};\n` });
+    git(root, 'add', '-A');
+    git(root, ...ID, '-c', 'gpg.format=ssh', ...(key ? ['-c', `user.signingkey=${key}.pub`] : []), 'commit', '-q', ...(key ? ['-S'] : []), '-m', `species ${n}`);
+    return git(root, 'rev-parse', 'HEAD');
+  };
+  try {
+    // No file: an unsigned species commit is taken, as before.
+    signed(null, 2);
+    const first = merge(work, 'main');
+    expect(await gate(work, seed, first)).toEqual({ ok: true, gate: 'all', output: '' });
+
+    writeFileSync(join(root, 'SIGNERS'), `test@localhost ${readFileSync(`${maintainer}.pub`, 'utf8')}`);
+    // The file is the install's own and lies in the owner's checkout, not in a commit.
+    writeFileSync(join(root, '.git', 'info', 'exclude'), 'SIGNERS\n');
+
+    const bare = signed(null, 3);
+    const onBare = merge(work, 'main');
+    const refused = await gate(work, first, onBare);
+    expect(refused).toMatchObject({ ok: false, gate: 'species' });
+    expect(refused.output).toContain(`the species commit ${bare} does not carry a signature by a key this install trusts`);
+
+    const foreign = signed(stranger, 4);
+    const onForeign = merge(work, 'main');
+    const alsoRefused = await gate(work, first, onForeign);
+    expect(alsoRefused).toMatchObject({ ok: false, gate: 'species' });
+    expect(alsoRefused.output).toContain(foreign);
+
+    signed(maintainer, 5);
+    const onSigned = merge(work, 'main');
+    expect(await gate(work, first, onSigned)).toEqual({ ok: true, gate: 'all', output: '' });
+    // The body goes on molting whatever the species' commits carry: the signature is asked of a move along the species only.
+    writeFiles(work, { 'body/a.ts': 'export const a = 7;\n' });
+    expect(await gate(work, onSigned, commitAll(work, 'body'))).toEqual({ ok: true, gate: 'all', output: '' });
+    expect(CAGE).toContain('SIGNERS');
+  } finally {
+    rmSync(keys, { recursive: true, force: true });
+  }
 });

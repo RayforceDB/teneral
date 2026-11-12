@@ -276,7 +276,8 @@ test('it says how the owner consents, and that a refusal that waits for the owne
 test('it says that the new kernel is started by the launcher, which puts a generation back when that kernel fails, and that the cage is the owner\'s', () => {
   expect(flat).toMatch(/a small launcher, which no mutation changes, starts the kernel of your new generation/);
   expect(flat).toMatch(/the launcher puts you back on the generation before/);
-  expect(flat).toMatch(/`box`, the `Dockerfile` and the launcher \(`kernel\/launcher\.ts`\) are your owner's install/);
+  expect(flat).toMatch(/`box`, the `Dockerfile`, the launcher \(`kernel\/launcher\.ts`\) and `SIGNERS`, the list of keys whose signature makes a commit the species' word, are your owner's install/);
+  expect(flat).toMatch(/a species commit not signed by one of its keys is refused at gate `species`/);
   expect(flat).toMatch(/your owner must update the install/);
   expect(flat).toMatch(/Offering a change of your own back is a path of its own/);
 });

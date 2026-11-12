@@ -71,6 +71,26 @@ export function speciesRef(root: string, upstream?: string): SpeciesRef | { prob
   return { name, ref: remote ? `refs/remotes/${remote.name}/${remote.branch}` : `refs/heads/${name}`, remote };
 }
 
+// --- the maintainer's signature ---
+
+/**
+ * The file in the owner's checkout that lists the keys whose signature makes a commit the species' word, in the
+ * form git and ssh-keygen read (`<principal> <key type> <key>` a line). It is part of the cage: the install's
+ * copy is the one read, whatever a generation's checkout holds.
+ */
+export const SIGNERS = 'SIGNERS';
+
+/**
+ * Why species commit `commit` is not signed by a key the install trusts, as git says it; null when it is.
+ * Also null where the install keeps no such file: then no signature is asked for.
+ */
+export function unsigned(root: string, commit: string): string | null {
+  const file = join(root, SIGNERS);
+  if (!existsSync(file)) return null;
+  const r = run(root, '-c', 'gpg.format=ssh', '-c', `gpg.ssh.allowedSignersFile=${file}`, 'verify-commit', commit);
+  return r.code === 0 ? null : r.output.trim() || `git verify-commit exited with ${r.code}`;
+}
+
 // --- the owner's consent ---
 
 /** How an acceptance reached the kernel: `./box accept`, or `/accept` in a talk client. */
@@ -286,6 +306,11 @@ export async function judgeSpecies(
       + `A mutation from the species takes everything outside those paths exactly as the species has it. For each path: git checkout ${short(on)} -- <path>, or git rm <path> when the species has no such file. `
       + `If a species commit later than ${short(on)} was meant, merge it first: git merge ${species.name}.${shallow}`);
   }
+  const signature = unsigned(root, on);
+  if (signature !== null) {
+    return no(`the species commit ${on} does not carry a signature by a key this install trusts (the file ${SIGNERS} in your owner's checkout): ${signature}\n`
+      + 'A mutation from the species is taken only from a commit its maintainer signed. There is nothing in your workspace to mend: tell your owner which commit it is and what git said.');
+  }
   const needs = launcherNeeded(root, to);
   if (typeof needs === 'object' && needs !== null) return no(`the species commit ${on} cannot be started here: ${needs.problem}, so ${UPDATE}.`);
   if (o.launcher === undefined || o.launcher === null) {
@@ -314,7 +339,7 @@ export async function judgeSpecies(
  * The files that are the owner's install and that no mutation from the species puts into effect:
  * the script that builds and runs the container, the image, and the launcher the container starts.
  */
-export const CAGE: readonly string[] = ['box', 'Dockerfile', '.dockerignore', 'kernel/launcher.ts'];
+export const CAGE: readonly string[] = ['box', 'Dockerfile', '.dockerignore', 'kernel/launcher.ts', SIGNERS];
 
 /**
  * Which cage files of the kernel at `home` differ from the install's own at `root`. Only a kernel
