@@ -251,3 +251,15 @@ test('it says what a note is and the rule it exists for', () => {
   const note = { type: 'note', kind: 'k', data: 'not for the model', v: 1, id: 'n', ts: '2026-11-11T00:00:00.000Z', gen: 'g' } as const;
   expect(JSON.stringify(buildMessages([note], 'S'))).not.toContain('not for the model');
 });
+
+test('it says how to offer a change to the species, as the kernel checks it, and that going public is the owner\'s decision', async () => {
+  const { SECTIONS, WAITING } = await import('../../kernel/offer');
+  expect(prompt).toContain('## Offering a change to the species');
+  for (const section of SECTIONS) expect(flat).toContain(`\`${section}\``);
+  for (const command of ['sign', 'check', 'publish']) expect(flat).toContain(`\`bun kernel/offer.ts ${command} offer/<name>\``);
+  expect(flat).toContain(`exits with ${WAITING} and sends nothing`);
+  expect(flat).toMatch(/Never write an approval yourself and never touch `TENERAL_PUBLISH`/);
+  expect(flat).toMatch(/Never anything from your soul, your journal or your inbox/);
+  expect(flat).toMatch(/It runs a stranger's code on your install, so your owner approves that commit first/);
+  expect(flat).toMatch(/not a vote/);
+});
