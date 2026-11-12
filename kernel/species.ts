@@ -192,8 +192,10 @@ export function takeAccepts(root: string, owner: string, journal: string, gen: s
         log(`an acceptance from the owner's terminal (${name}) names no commit of this repository; dropped`);
         continue;
       }
-      acceptSpecies(root, journal, gen, commit, 'talk');
       taken.push(commit);
+      // Said twice, or said here after `./box accept` said it: it stands already, and the journal has it once.
+      if (readConsent(root).accepted === commit) continue;
+      acceptSpecies(root, journal, gen, commit, 'talk');
     } catch (err) {
       log(`an acceptance from the owner's terminal (${name}) could not be taken: ${err instanceof Error ? err.message : String(err)}`);
     }

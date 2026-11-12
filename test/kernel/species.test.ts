@@ -459,6 +459,12 @@ test('/accept from a talk client: a file of its own kind in the owner\'s channel
   expect(readEvents(p.journal).filter((e) => e.type === 'species.accepted')).toMatchObject([{ commit: b, route: 'talk', gen: seed }]);
   expect((await ask()).ok).toBe(true);
   expect(takeAccepts(root, p.owner, p.journal, seed)).toEqual([]);
+  // Said again, twice: the files are taken away, and the journal still has it once.
+  accept(p.owner, b);
+  accept(p.owner, b);
+  expect(takeAccepts(root, p.owner, p.journal, seed)).toEqual([b, b]);
+  expect(readdirSync(p.owner)).toEqual([]);
+  expect(readEvents(p.journal).filter((e) => e.type === 'species.accepted')).toHaveLength(1);
 });
 
 test('nothing typed can be an acceptance: a line is a line whatever it says, and only a file of the kind, naming a real commit, is taken', () => {
