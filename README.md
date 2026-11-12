@@ -207,21 +207,37 @@ To change provider or sign in again, run `./box setup`. It asks before replacing
 | Alt+Enter, Ctrl-J | a new line; a pasted text keeps its line breaks. The box grows to eight rows |
 | Left, Right, Home, End, Ctrl-A, Ctrl-E | move in the line; with Ctrl or Alt, Left and Right jump by words |
 | Backspace, Delete, Ctrl-U, Ctrl-K, Ctrl-W | delete a character, to the start of the line, to its end, the word before. Backspace at the very start removes the last attached image |
-| Up, Down | the line above or below in a text of several lines; at the first or last line, what you sent before |
+| Up, Down | the line above or below in a text of several lines; at the first or last line, what you sent before. While commands are listed, they choose one |
+| `/` | list the commands under the box, fewer with each letter typed; see [Commands](#commands) |
 | Ctrl+V | attach the image that is in your clipboard |
 | `/image <path>` | attach an image file from your machine. Dragging a file into the terminal, or pasting its path, does the same |
-| Esc, `/stop` | interrupt what the agent is doing now; see [Interrupting](#interrupting). When it is doing nothing, this does nothing and says so |
+| Esc, `/stop` | interrupt what the agent is doing now; see [Interrupting](#interrupting). When it is doing nothing, this does nothing and says so. While commands are listed, Esc closes the list and does nothing else |
 | `/accept`, `/accept <commit>` | accept the species commit the agent asked about, or the one named; see [The species](#the-species). It goes to the kernel, not to the agent |
-| Tab, `/tools` | show a few rows of what each tool call returned, from now on, and once more for the calls since you last spoke; again to stop |
+| Tab, `/tools` | show a few rows of what each tool call returned, from now on, and once more for the calls since you last spoke; again to stop. While commands are listed, Tab completes the chosen one instead |
 | `/history` | print the earlier conversation that was read from the journal when you attached |
 | `/generations` | the generations it has lived in, as `./box back --list` gives them |
+| `/offers`, `/approve <commit>` | what waits for your approval before it goes out to the species, and the approval of one commit; see [Offering a change to the species](#offering-a-change-to-the-species) |
+| `/plain` | how to get the plain text client |
 | `/help` | the keys and commands |
+| `//...` | send the agent a line that begins with a slash: it arrives with one |
 | Ctrl-L | draw the live region again |
 | `/quit`, Ctrl-D on an empty line, Ctrl-C | leave. The agent goes on |
 
 PageUp, PageDown and the mouse are your terminal's own; the client never asks for the mouse. The cursor you see in the box is drawn by the client; the terminal's own cursor is hidden while the client runs and is given back when it ends.
 
 Esc interrupts a turn. Nothing else in the client stops the agent or changes it; `./box down` and `./box back` do that. Leaving takes the live region away and leaves the conversation in the scrollback, with one line saying that the agent goes on. When the terminal goes away without a word (a closed window, a dropped connection), the client notices within about half a minute and ends by itself. Any number of terminals can be attached at once. Each sees the same replies, and what was typed in the others marked as such. The client keeps a bounded part of the conversation in memory, whatever the size of the journal. When the window changes size the live region is drawn anew at the new width; what was already printed is the terminal's to wrap, as with any output. One limit: a terminal that wraps its rows again, made much narrower and lower in a single step, can push the top of the old live region out of reach, and a few of its rows may then stay in the scrollback. The colours, the mark and the glyphs are in one place, `kernel/tui/theme.ts`: true colour, with the nearest of 256 or 16 colours where that is what the terminal has, chosen to read on a dark background and on a light one; `NO_COLOR` is honoured, and a locale that is not UTF-8 gets ASCII marks.
+
+### Commands
+
+A line that is a slash, a word of lower-case letters and, after a blank, whatever follows it, is a command; the table above has them all, and so has `/help`, which prints the same table the client itself reads (`kernel/commands.ts`).
+
+- Type `/` and the commands are listed under the input box, where the footer otherwise is: each with what may follow it (`<path>` has to, `[commit]` may) and one line on what it does, the chosen one marked `▸`. Every letter leaves fewer. At most six are shown, the ones around the chosen one, fewer on a low screen. The list is part of the live region and leaves nothing in the scrollback.
+- **Up** and **Down**, or Ctrl-P and Ctrl-N, choose, and go round at the ends. **Tab** completes the chosen name, with a blank after it when something may follow. **Enter** on a whole name runs it. Enter on part of a name runs the chosen command when nothing follows that command (`/h`, Enter is `/help`); when something has to or may follow (`/image`, `/approve`, `/accept`) it only completes the name, so that a slip of the hand accepts nothing, and a second Enter runs it. **Esc** closes the list and leaves what you typed; it sends no interrupt then, even while the agent works, and the list stays closed until you change the line. These keys belong to the list only while it is open. A line brought back with Up from what you sent before is never offered a list, so Up and Down go on through the history.
+- The name is coloured as you type: set back while it is part of a command's name, in your own colour once it is a command, and as a warning when Enter would refuse it. What follows the name stays plain.
+- A name that is no command is not sent to the agent. One line says so and names the nearest command, and what you typed stays in the box to be put right. The same goes for words after a command that takes none (`/stop now`).
+- To send the agent a line that begins with a slash, begin it with two: `//help me` arrives as `/help me`. That is rarely needed. A path such as `/home/you/notes.txt`, a slash further on in the line, a slash followed by a blank, a name with a capital or a digit in it, and any text of several lines are not commands: they are not listed, not coloured, and sent as they are, and a path that names an image is attached as before.
+
+The plain client has `/help`, `/stop`, `/accept`, `/offers`, `/approve` and `/quit`, typed whole; `/help` lists them there.
 
 ### Interrupting
 
@@ -235,6 +251,7 @@ While the agent is in the middle of a turn, waiting for the model or running a t
 - A mutation that was already asked for is not undone: the kernel checks the commit and answers. While it checks, and between two runs of the agent, there is no turn to stop, and Esc says so.
 - A second Esc while the first is unanswered does nothing. If nothing answers within five seconds the client says so: a body from before interrupts does not hear them, and `./box down` still stops it for certain. An individual born earlier gets there when it takes this change into its own body.
 - Esc never leaves the client, and Ctrl-C never interrupts the agent: it leaves, as before.
+- While commands are listed under the input box, Esc closes that list and sends nothing; the line over the box does not say `esc to interrupt` then. Pressed again, it interrupts.
 - A generation that was just promoted and is interrupted before its first reply is neither rolled back for its silence nor taken as proven: it has its 10 minutes again from when something is next said to it.
 
 Only you can interrupt. The interrupt travels where your lines do, through `.teneral/owner/`, as a file of its own kind (see [How your lines reach it](#how-your-lines-reach-it)); nothing that arrives through `inbox/`, and nothing a tool prints, can stop a turn.
@@ -261,7 +278,7 @@ The client runs inside the container, where there is no clipboard and no file of
 
 When the clipboard offers an image in several formats PNG is taken, and nothing is converted. Without such a tool, or over SSH where there is no display, Ctrl+V says what is missing; dragging a file and `/image` work regardless. A client started without `./box` (a plain `docker exec`, or `bun kernel/talk.ts` on the machine itself) has no helper: it says so, and `/image` then takes only files the client can read itself. Nothing is shown as a picture in the terminal; an image is always a chip.
 
-`./box talk --plain` is the same conversation as plain text, without the panel and the input box: the last few exchanges, then replies in full, one short line for each tool call (`  [bash] command: ...`), the kernel's notes as `[kernel] ...`, an interruption as `[interrupted by the owner]`, and what was typed in other terminals marked with `> `. A line that is exactly `/stop` interrupts the turn in progress instead of being sent, and `/accept` works as in the full client. That is also what you get whenever the input or the output is not a terminal. It has no way to attach an image.
+`./box talk --plain` is the same conversation as plain text, without the panel and the input box: the last few exchanges, then replies in full, one short line for each tool call (`  [bash] command: ...`), the kernel's notes as `[kernel] ...`, an interruption as `[interrupted by the owner]`, and what was typed in other terminals marked with `> `. A line that is exactly `/stop` interrupts the turn in progress instead of being sent, `/accept` works as in the full client, and `/help`, typed by a person, lists the commands there are. That is also what you get whenever the input or the output is not a terminal. It has no way to attach an image.
 
 `./box talk` also takes its lines from a pipe, for scripts, and this is unchanged:
 
