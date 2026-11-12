@@ -40,7 +40,7 @@
 
 | mutation accepted  a1b2c3d -> e5f6a7b
 
-| The agent is thinking | 0:01
+| The agent is thinking | 0:01 | esc to interrupt
 +-----------------------------------------------------------------------------+
 | [image 1 | png | 64x48 | 29 B]                                              |
 | >                                                                           |

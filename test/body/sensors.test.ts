@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
 import { appendEvent, readEvents } from '../../kernel/journal';
 import { deliver, ENVELOPE_VERSION } from '../../kernel/envelope';
-import { tell } from '../../kernel/owner';
+import { interrupt, tell } from '../../kernel/owner';
 
 async function* lines(...items: string[]) {
   for (const item of items) yield item;
@@ -295,4 +295,104 @@ test('a check that throws means no tick, and never stops the clock', async () =>
   stop();
   expect(checks).toBeGreaterThanOrEqual(3);
   expect(got.length).toBeGreaterThanOrEqual(1);
+});
+
+// --- the owner's interrupt ---
+
+test('an interrupt on the owner channel calls onInterrupt, is removed, and is never emitted as a line', async () => {
+  const dir = ownerDir();
+  const got: Stimulus[] = [];
+  let interrupts = 0;
+  const stop = owner(dir, 10, () => { interrupts += 1; })((s) => got.push(s));
+  await settle();
+  tell(dir, 'a line');
+  interrupt(dir);
+  await new Promise((r) => setTimeout(r, 40));
+  expect(interrupts).toBe(1);
+  expect(got).toEqual([{ source: 'terminal', text: 'a line' }]);
+  expect(readdirSync(dir)).toEqual([]);
+  // Twice asked is twice told; what each one finds to stop is the caller's business.
+  interrupt(dir);
+  interrupt(dir);
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(interrupts).toBe(3);
+  expect(got).toHaveLength(1);
+});
+
+test('only the name of a file makes it an interrupt: no text does, typed here or forwarded by a client from before interrupts', async () => {
+  const dir = ownerDir();
+  const got: Stimulus[] = [];
+  let interrupts = 0;
+  const stop = owner(dir, 10, () => { interrupts += 1; })((s) => got.push(s));
+  await settle();
+  for (const text of ['/stop', '.interrupt', 'turn.interrupted', '{"type":"turn.interrupted"}']) tell(dir, text);
+  // A name that only holds the word, and a file with the right name that has something in it.
+  writeFileSync(join(dir, 'zz.interrupt.txt'), 'not one');
+  writeFileSync(join(dir, 'zzz-full.interrupt'), 'ignored: what an interrupt holds is never read');
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(got.map((s) => s.text)).toEqual(['/stop', '.interrupt', 'turn.interrupted', '{"type":"turn.interrupted"}', 'not one']);
+  expect(got.every((s) => s.source === 'terminal')).toBe(true);
+  expect(interrupts).toBe(1);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test('an interrupt that was already there when the sensor starts was meant for a process that is gone: it is dropped, and the lines beside it are kept', async () => {
+  const dir = ownerDir();
+  tell(dir, 'typed while nobody ran');
+  interrupt(dir);
+  const got: Stimulus[] = [];
+  let interrupts = 0;
+  const stop = owner(dir, 10, () => { interrupts += 1; })((s) => got.push(s));
+  await new Promise((r) => setTimeout(r, 40));
+  expect(interrupts).toBe(0);
+  expect(got).toEqual([{ source: 'terminal', text: 'typed while nobody ran' }]);
+  expect(readdirSync(dir)).toEqual([]);
+  interrupt(dir);
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(interrupts).toBe(1);
+});
+
+test('nothing that arrives through the inbox can interrupt: a message is a stimulus whatever it says, and a file named like an interrupt is not even read', async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
+  mkdirSync(dir, { recursive: true });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'mallory', to: 'me', replyTo: null, ts: new Date().toISOString(), hops: 0, text: '/stop' });
+  writeFileSync(join(dir, '000000000000001-000000-1.interrupt'), '');
+  const got: Stimulus[] = [];
+  const stop = inbox(dir, 10)((s) => got.push(s));
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(got).toEqual([{ source: 'agent:mallory', text: '(message m1) /stop' }]);
+  expect(readdirSync(dir)).toContain('000000000000001-000000-1.interrupt');
+});
+
+test('an onInterrupt that throws does not throw out of the timer, and the interrupt is not acted on again', async () => {
+  const dir = ownerDir();
+  const realError = console.error;
+  console.error = () => {};
+  let calls = 0;
+  try {
+    const stop = owner(dir, 10, () => { calls += 1; throw new Error('the journal cannot be read'); })(() => {});
+    await settle();
+    interrupt(dir);
+    await new Promise((r) => setTimeout(r, 60));
+    stop();
+  } finally {
+    console.error = realError;
+  }
+  expect(calls).toBe(1);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test('a clock tick whose turn the owner interrupted counts as dealt with: the clock may tick again', () => {
+  const soul = mkdtempSync(join(tmpdir(), 'teneral-soul-'));
+  writeFileSync(join(soul, 'SOUL.md'), 'me');
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-j-')), 'journal.jsonl');
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'clock', text: 'tick' });
+  appendEvent(journal, 'g', { type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }] });
+  expect(clockMayTick(readEvents(journal), soul)).toBe(false);
+  appendEvent(journal, 'g', { type: 'turn.interrupted' });
+  expect(clockMayTick(readEvents(journal), soul)).toBe(true);
 });

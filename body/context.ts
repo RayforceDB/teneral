@@ -15,6 +15,11 @@ const INTERRUPTED =
   '[interrupted] The process stopped while this tool was running. It may have partly run. Check the current state before repeating it.';
 const NOT_STARTED = '[not started] The process stopped before this tool ran. It is safe to call it again.';
 
+/** How a `turn.interrupted` event reads to the agent, where it happened. Nothing is owed for it: see `needsTurn`. */
+const STOPPED =
+  '[interrupted] Your owner interrupted your turn here. The request to the model was cancelled and any tool that was running was stopped. ' +
+  'Do not take that work up again unless your owner asks; when you next reply, say in a line where it stopped.';
+
 /** A journal field as text, whatever was written there. */
 function asText(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -268,6 +273,8 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       }
       // Results are placed here, right after their call, whatever was journaled in between.
       out.push({ role: 'assistant', content, tool_calls: wire }, ...answered);
+    } else if (e.type === 'turn.interrupted') {
+      out.push({ role: 'user', content: STOPPED });
     } else {
       const note = kernelNote(e);
       if (note !== null) out.push({ role: 'user', content: note });
@@ -282,11 +289,13 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   return [{ role: 'system', content: prompt }, ...fit(out, budgetChars - prompt.length)];
 }
 
-/** True when the last thing in the conversation is not the agent's own finished reply. */
+/** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
 export function needsTurn(events: JournalEvent[]): boolean {
   let afterReply = false;
   for (const e of events) {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;
+    // The owner ended that turn. What was unanswered stays so until something else arrives.
+    else if (e.type === 'turn.interrupted') afterReply = false;
     else if (e.type === 'stimulus' || kernelNote(e) !== null) afterReply = true;
   }
   return afterReply;

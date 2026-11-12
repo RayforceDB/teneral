@@ -228,6 +228,20 @@ function onProbation(state: State, events: JournalEvent[]): boolean {
   return true;
 }
 
+/**
+ * Whether a generation on probation that has not replied is excused for now, because its owner
+ * interrupted it (kernel/owner.ts) and either nothing has been said to it since, so that no reply
+ * is owed, or the first thing said since came only within the time just measured (`lately`), so
+ * that it has not had its full time for it yet. Being stopped by the owner is not silence. It is
+ * not a reply either: the generation stays on probation and is measured again.
+ */
+export function excused(gen: string, all: JournalEvent[], lately: JournalEvent[]): boolean {
+  const stopped = all.findLastIndex((e) => e.type === 'turn.interrupted' && e.gen === gen);
+  if (stopped === -1) return false;
+  const owed = all.slice(stopped + 1).find((e) => ['stimulus', 'molt.rejected', 'generation.promoted', 'generation.rolledback'].includes(e.type));
+  return owed === undefined || lately.some((e) => e.id === owed.id);
+}
+
 /** Locks this process holds, so a lock file naming our own pid can be told from one a dead process with the same pid left. */
 const heldLocks = new Set<string>();
 
@@ -592,13 +606,25 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       /** This run was ended because a newly promoted generation stayed silent. */
       let silent = false;
       if (probation) {
-        timers.probation = setTimeout(() => {
-          let replied = false;
-          try { replied = since().some((e) => e.type === 'assistant' && e.gen === gen); } catch { /* not replied */ }
-          if (replied) return;
-          silent = true;
-          stop();
-        }, probationMs);
+        // `from`: where the journal ended when this measure of time began.
+        const measure = (from: number): void => {
+          timers.probation = setTimeout(() => {
+            let replied = false;
+            let waived = false;
+            let next = from;
+            try {
+              next = journalSize(p.journal);
+              replied = since().some((e) => e.type === 'assistant' && e.gen === gen);
+              waived = !replied && excused(gen, readEvents(p.journal), readEventsFrom(p.journal, from));
+            } catch { /* not replied */ }
+            if (replied) return;
+            // The owner stopped its turn: that is neither a reply nor silence. The time starts again.
+            if (waived) return measure(next);
+            silent = true;
+            stop();
+          }, probationMs);
+        };
+        measure(mark);
       }
       const code = await running.exited;
       const ranMs = Date.now() - startedAt;

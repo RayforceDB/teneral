@@ -46,7 +46,7 @@
 ┃   [giving up] 3 turns in a row failed in this generation's own code; exiting
 ┃   so the kernel can act
 
-⠋ The agent is thinking · 0:11
+⠋ The agent is thinking · 0:11 · esc to interrupt
 ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯

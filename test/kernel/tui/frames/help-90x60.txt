@@ -48,13 +48,20 @@
 
     /help          this
     /image <path>  attach an image file from your machine
+    /stop          interrupt what the agent is doing now (also Esc)
     /tools         show or hide what each tool call returned (also Tab)
     /generations   the generations this individual has lived in
     /history       print the earlier conversation that was read from the journal
     /plain         how to get the plain text client
     /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)
 
-  Leaving ends this client only. Nothing here stops the agent or changes it.
+  Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model
+  is cancelled, a command that is running is killed with everything it started, and the
+  agent waits for what you say next. It is told that you interrupted it. When it is doing
+  nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by
+  it.
+
+  Leaving ends this client only. Nothing else here stops the agent or changes it.
 
   While the agent is doing something, the line over the input box says what: waking (its
   first start, before its first words), thinking, running <tool>, mutating (it proposed a

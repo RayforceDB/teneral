@@ -49,6 +49,8 @@ let quitting = false;
 let wake: (() => void) | null = null;
 /** Stimuli journaled by this process, so a failed turn can tell that one came in while it ran. */
 let arrived = 0;
+/** Aborts the turn in progress; null between turns. */
+let current: AbortController | null = null;
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
@@ -57,11 +59,26 @@ function emit(s: Stimulus): void {
   wake?.();
 }
 
+/**
+ * The owner asked for the work in progress to stop: only the owner's channel can (body/sensors.ts).
+ * A turn that is running is aborted, and journals that itself (body/loop.ts). A turn that is owed
+ * but not running, because it failed and waits to be tried again or is only about to begin, is
+ * ended here. When nothing is owed there is nothing to stop and the request is dropped: it is
+ * never kept for a turn that has not been asked for yet.
+ */
+function interrupt(): void {
+  if (current !== null) return current.abort();
+  if (!needsTurn(readEvents(journal))) return;
+  appendEvent(journal, gen, { type: 'turn.interrupted' });
+  console.error('[interrupted]');
+  wake?.();
+}
+
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
   // The owner's lines from `./box talk`, which may come and go while this process lives.
-  owner(ownerDir),
+  owner(ownerDir, undefined, interrupt),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
@@ -71,6 +88,7 @@ const sensors: Sensor[] = [
 async function turn(): Promise<{ error: unknown } | null> {
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
+  current = new AbortController();
   try {
     const outcome = await runTurn({
       journal, gen, provider, tools: TOOLS, ctx, budgetChars, sight,
@@ -78,11 +96,16 @@ async function turn(): Promise<{ error: unknown } | null> {
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
       onTool: (name) => console.error(`[tool] ${name}`),
+      signal: current.signal,
     });
     if (outcome === 'molt') process.exit(75);
+    // Not a failure: nothing is counted and nothing is tried again. The loop below finds no turn owed and waits.
+    if (outcome === 'interrupted') console.error('[interrupted]');
     return null;
   } catch (error) {
     return { error };
+  } finally {
+    current = null;
   }
 }
 

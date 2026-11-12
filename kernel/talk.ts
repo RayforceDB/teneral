@@ -1,14 +1,15 @@
 import { closeSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { journalSize, readEventsFrom, type JournalEvent } from './journal';
-import { tell } from './owner';
+import { interrupt, tell } from './owner';
 import { planNotice } from './providers';
 import { paths } from './supervisor';
 
 // The owner's terminal: `./box talk` runs this inside the agent's container. What is typed goes to
 // the agent as files in the owner directory (kernel/owner.ts); what the agent says is read back
 // from the journal. Nothing here talks to the agent's process, so any number of these can run at
-// once, and ending one ends nothing else.
+// once, and ending one ends nothing else. `/stop` asks the agent, over the same channel, to stop
+// the turn it is in; that is all this program can do to it.
 //
 // It is in kernel/ because it is the owner's tool, not part of the agent: it has to keep working
 // whatever the body does to itself. For the same reason nothing here trusts the shape of what the
@@ -77,6 +78,8 @@ export function render(e: JournalEvent): string | null {
       return `[kernel] promoted ${short(f.commit)} (before: ${short(f.previous)})`;
     case 'generation.rolledback':
       return `[kernel] rolled back ${short(f.commit)} to ${short(f.to)}: ${oneLine(asText(f.reason), 300)}`;
+    case 'turn.interrupted':
+      return '[interrupted by the owner]';
     default:
       return null;
   }
@@ -128,6 +131,9 @@ export function track(t: Turn, e: JournalEvent): Turn {
       return t.late > 0 ? { busy: true, late: 0, burst: null } : AT_REST;
     case 'tool.result':
       return { busy: true, late: 0, burst: null };
+    case 'turn.interrupted':
+      // The owner stopped the turn. Nothing is owed until something else arrives.
+      return AT_REST;
     case 'generation.started':
       // A new process: its first request will see everything journaled before it was asked.
       return { busy: t.busy, late: 0, burst: null };
@@ -243,6 +249,7 @@ export interface TalkOptions {
  * With a person typing: the last few exchanges are shown, every line goes to the agent the moment
  * it is entered, and everything journaled from then on is shown as it happens, except the lines
  * typed here. `/quit` or the end of input (Ctrl-D) ends this program, at once. The agent goes on.
+ * `/stop` interrupts the turn the agent is in, and says so when it is in none.
  *
  * With piped input, the rule is made for scripts:
  * - Lines are sent one at a time. A line is sent when the agent is at rest; the next one, or the
@@ -253,6 +260,8 @@ export interface TalkOptions {
  * - If nothing at all is journaled for `waitMs` while a line waits to be sent or answered, it
  *   gives up with status 1 and says so on stderr. Lines not yet sent are dropped.
  * - `/quit` as a line ends it at once with status 0, without waiting for anything.
+ * - `/stop` as a line takes its place among the others: when it comes up and the agent is in a turn,
+ *   that turn is interrupted, and the next line, or the exit, waits until the agent is at rest.
  * - No history is shown, so the output holds only what happened after the first line. Input with
  *   no lines in it is the exception: then the history is all that is shown, and the exit is at once.
  */
@@ -289,6 +298,22 @@ export async function talk(o: TalkOptions): Promise<number> {
     }
   };
 
+  /** `/stop`: ask the agent to stop the turn it is in. Returns whether there was one to stop and the request went out. */
+  const stop = (): boolean => {
+    if (!turn.busy && mine.length === 0) {
+      o.note('(the agent is not in the middle of a turn: nothing to interrupt)');
+      return false;
+    }
+    try {
+      interrupt(o.owner);
+      o.note('(interrupt sent)');
+      return true;
+    } catch (err) {
+      o.note(`could not send the interrupt: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
   /** Ends the wait between two looks at the journal, when a line was typed or the input ended. */
   let nudge: () => void = () => {};
   const nap = () => new Promise<void>((resolve) => {
@@ -305,8 +330,9 @@ export async function talk(o: TalkOptions): Promise<number> {
         const text = raw.trim();
         if (text === '') continue;
         if (text === '/quit') { quit = true; return; }
-        if (o.interactive) send(text);
-        else queue.push(text);
+        if (!o.interactive) queue.push(text);
+        else if (text === '/stop') stop();
+        else send(text);
         nudge();
       }
     } catch { /* an input that fails has ended */ } finally {
@@ -317,7 +343,7 @@ export async function talk(o: TalkOptions): Promise<number> {
 
   if (o.interactive) {
     history();
-    o.note('--- attached. Type to talk. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
+    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
     if (turn.busy) o.note('(the agent is in the middle of a turn)');
   }
 
@@ -350,7 +376,16 @@ export async function talk(o: TalkOptions): Promise<number> {
     } else {
       if (current !== null && journaled && !turn.busy) current = null;
       if (current === null) {
-        if (queue.length > 0) {
+        if (queue[0] === '/stop') {
+          queue.shift();
+          // Not a line to be answered: what is waited for is only that the agent comes to rest.
+          if (stop()) {
+            current = '/stop';
+            journaled = true;
+            sent += 1;
+            activity = Date.now();
+          }
+        } else if (queue.length > 0) {
           if (!turn.busy) {
             current = queue.shift()!;
             journaled = false;

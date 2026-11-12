@@ -216,3 +216,16 @@ test('a journal from before notes reads as it did, and notes among its lines dis
   appendFileSync(path, '{"type":"note","kind":"Not A Kind","v":1,"id":"c","ts":"2026-01-01T00:00:02.000Z","gen":"gen-2"}\n');
   expect(readEvents(path)).toHaveLength(4);
 });
+
+test('a turn the owner interrupted is an event of its own; a journal without one, or with a kind not known here, reads as before', () => {
+  const path = tmpJournal();
+  const said = appendEvent(path, 'gen-a', { type: 'stimulus', source: 'terminal', text: 'go' });
+  const stopped = appendEvent(path, 'gen-a', { type: 'turn.interrupted' });
+  // A line a later version might write: kept as it is, for the readers that know it.
+  appendFileSync(path, '{"type":"something.later","v":1,"id":"y","ts":"2027-01-01T00:00:00.000Z","gen":"gen-z"}\n');
+  const events = readEvents(path);
+  expect(events.slice(0, 2)).toEqual([said, stopped]);
+  expect(Object.keys(stopped).sort()).toEqual(['gen', 'id', 'ts', 'type', 'v']);
+  expect(events.map((e) => e.type as string)).toEqual(['stimulus', 'turn.interrupted', 'something.later']);
+  expect(SCHEMA_VERSION).toBe(1);
+});

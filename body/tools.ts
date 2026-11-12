@@ -25,7 +25,8 @@ export interface ToolContext {
 
 export interface Tool {
   spec: ToolSpec;
-  run(args: unknown, ctx: ToolContext): Promise<string>;
+  /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (body/loop.ts). */
+  run(args: unknown, ctx: ToolContext, signal?: AbortSignal): Promise<string>;
 }
 
 const OUTPUT_CAP = 20_000;
@@ -140,20 +141,31 @@ export function bashEnv(env: Record<string, string | undefined>): Record<string,
  * `detached` makes bash the leader of its own process group; at the limit the whole group is killed.
  * The call ends when bash does. Something bash started may still hold the pipes open (a background
  * job, or one that left the group and so escaped the kill): the pipes get DRAIN_MS more, then reading stops.
+ * When `signal` aborts (the owner interrupted the turn) the group is killed as at the limit, at once.
  */
-export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS): Promise<string> {
+export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) return 'not run: interrupted by your owner before it started\n';
   const p = Bun.spawn(['bash', '-c', command], {
     cwd, env: bashEnv(process.env), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
+  const killGroup = (): void => {
     try {
       process.kill(-p.pid, 'SIGKILL');
     } catch {
       p.kill('SIGKILL');
     }
+  };
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    killGroup();
   }, timeoutMs);
+  let interrupted = false;
+  const onAbort = (): void => {
+    interrupted = true;
+    killGroup();
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   // One buffer for both pipes, in the order the output arrived.
   const output = new Clipped(OUTPUT_CAP);
   const pipes = [drain(p.stdout, output), drain(p.stderr, output)];
@@ -161,6 +173,7 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
     await p.exited;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
   let patience: ReturnType<typeof setTimeout> | undefined;
   const heldOpen = await Promise.race([
@@ -169,10 +182,12 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
   ]);
   clearTimeout(patience);
   if (heldOpen) for (const pipe of pipes) pipe.stop();
-  const status = timedOut
+  const status = interrupted
+    ? 'interrupted by your owner and killed, with everything it started'
+    : timedOut
     ? `timed out after ${timeoutMs / 1000}s and was killed`
     : p.exitCode === null ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
-  const note = heldOpen && !timedOut
+  const note = heldOpen && !timedOut && !interrupted
     ? '\n[something this command started is still running and holds its output open; it was left running, and what it prints from now on is not read]'
     : '';
   return `${status}\n${output.text()}${note}`;
@@ -184,8 +199,8 @@ const bash: Tool = {
     description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped. It does not see your API key.',
     parameters: params({ command: 'The command' }),
   },
-  async run(args, ctx) {
-    return runBash(str(args, 'command'), ctx.workspace);
+  async run(args, ctx, signal) {
+    return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal);
   },
 };
 

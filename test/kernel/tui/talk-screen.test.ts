@@ -140,7 +140,7 @@ test('first start: while the agent reads itself, each finished tool call is prin
   expect(all).not.toContain('You have just woken');
   expect(all).toMatch(/▪ read {2}path: body\/main\.ts +✓ 40ms\n {2}▪ read {2}path: body\/loop\.ts +✓ 30ms/);
   // The call without a result is not printed yet: it is in the live region, which is redrawn.
-  expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: wc -l body/\\*\\.ts && cat BACKLOG\\.md \\| head -50 +running\\n\\n${SPIN} The agent is waking · running bash · 0:08\\n╭`));
+  expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: wc -l body/\\*\\.ts && cat BACKLOG\\.md \\| head -50 +running\\n\\n${SPIN} The agent is waking · running bash · 0:08 · esc to interrupt\\n╭`));
   // The clock moves, and so does the spinner; nothing else does.
   const printed = s.term.vt.scrollback.length + s.term.vt.cursor.row;
   s.clock.at = 71_000;
@@ -240,7 +240,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   expectFrame('turn-in-progress-90x30', during);
   // The line and the words before the call are final and printed; the call is live, with the activity line.
   expect(during).toContain('› look around\n\n● I will look.\n\n  ▪ bash  command: ls -la');
-  expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: ls -la +running\\n\\n${SPIN} Mica is running bash · 0:02\\n╭`));
+  expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: ls -la +running\\n\\n${SPIN} Mica is running bash · 0:02 · esc to interrupt\\n╭`));
   expect(during).not.toContain('on its way');
   // Something said meanwhile, here and at another terminal, waits under the call that is still running.
   s.type('and then?\r');
@@ -319,7 +319,7 @@ test('resize while a turn is under way: the live region is drawn anew at each si
         expect(live.filter((row) => row.includes('half a line'))).toEqual([`│ › half a line${' '.repeat(cols - 17)}│`]);
         expect(live.at(-1)).toMatch(/^ gpt-6\.1-sol/);
       }
-      if (height >= 20) expect(live.filter((row) => new RegExp(`^${SPIN} Mica is running bash · 0:03$`).test(row))).toHaveLength(1);
+      if (height >= 20) expect(live.filter((row) => new RegExp(`^${SPIN} Mica is running bash · 0:03 · esc to in`).test(row))).toHaveLength(1);
       // Down to a screen of a few columns there is a row to type on, with the cursor in it.
       expect(live.some((row) => row.startsWith('│') || row.startsWith('›') || row.startsWith(' '))).toBe(true);
       expect(s.term.vt.block).not.toBeNull();
@@ -952,7 +952,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
   const help = s.all();
   expectFrame('help-90x60', help);
   expect(help).toMatch(/ {2}── teneral talk ─+\n {2}Enter sends what you typed/);
-  for (const command of ['/quit', '/generations', '/tools', '/image <path>', '/history', '/plain', '/help']) expect(help).toContain(`    ${command}`);
+  for (const command of ['/quit', '/generations', '/stop', '/tools', '/image <path>', '/history', '/plain', '/help']) expect(help).toContain(`    ${command}`);
   expect(help).not.toContain('/mouse');
   const flowed = help.replace(/\n {2}/g, ' ');
   expect(flowed).toContain('mutating (it proposed a change to its own body and the kernel is checking it)');
@@ -984,13 +984,13 @@ test('the footer turns through tips, each naming a real key or command, and give
   const s = stage(130, 30, { helper: 'xclip' });
   settled(s);
   const seen = new Set<string>();
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 13; i++) {
     s.clock.at = i * 20_000;
     seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-1)!)?.[1] ?? '');
   }
   expect([...seen].sort()).toEqual([
     './box talk --plain is this as plain text', '/generations lists the bodies it has lived in', '/help lists the keys and commands', '/history prints the earlier conversation',
-    '/image <path> attaches an image file', 'Alt+Enter starts a new line', 'Ctrl+V attaches the clipboard\'s image', 'Ctrl-C leaves; the agent goes on',
+    '/image <path> attaches an image file', 'Alt+Enter starts a new line', 'Ctrl+V attaches the clipboard\'s image', 'Ctrl-C leaves; the agent goes on', 'Esc interrupts what it is doing',
     'Tab shows what the tool calls returned', 'Up brings back what you sent before', 'drag an image file in to attach it',
   ]);
   s.clock.at = 0;
@@ -1050,7 +1050,7 @@ test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, mar
   expect(all).toContain('|   \\\\  //   Talking with your teneral agent');
   expect(all).toContain(`| [image 1 | png | 64x48 | ${png(64, 48).length} B]`);
   expect(all).toContain(' gpt-6.1-sol | .../work/teneral | gen 2 e5f6a7b');
-  expect(all).toMatch(/^[|/\\-] The agent is thinking \| 0:01$/m);
+  expect(all).toMatch(/^[|/\\-] The agent is thinking \| 0:01 \| esc to interrupt$/m);
 });
 
 // --- cost ---
@@ -1178,4 +1178,171 @@ test('the command line knows --plain and --wait, and refuses anything else befor
   expect(run.stderr.toString()).toContain('usage: bun kernel/talk.ts [--plain] [--wait <seconds>]');
   expect(run.stderr.toString()).not.toContain('\x1b');
   expect(Bun.spawnSync([process.execPath, join(import.meta.dir, '..', '..', '..', 'kernel', 'talk.ts'), '--wait', 'soon'], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' }).exitCode).toBe(2);
+});
+
+// --- Esc and /stop: the owner interrupts ---
+
+/** What lies in the owner channel, as [the end of the name, what the file holds]. */
+const channel = (s: Stage): [string, string][] => (existsSync(s.p.owner) ? readdirSync(s.p.owner) : []).filter((name) => !name.startsWith('.')).sort()
+  .map((name) => [name.slice(name.lastIndexOf('.')), readFileSync(join(s.p.owner, name), 'utf8')]);
+/** The body takes what is in the channel. */
+const taken = (s: Stage): void => {
+  for (const name of readdirSync(s.p.owner)) if (!name.startsWith('.')) unlinkSync(join(s.p.owner, name));
+};
+/** A turn under way: the owner asked, and a command has been running for two seconds. */
+function working(s: Stage): void {
+  settled(s);
+  s.clock.at = 1000;
+  s.say('look around', 1500);
+  s.journal({ type: 'assistant', text: 'I will look.', toolCalls: [{ id: 'c1', name: 'bash', args: { command: 'sleep 300' } }] }, 2000);
+  s.journal({ type: 'tool.intent', callId: 'c1', name: 'bash', args: { command: 'sleep 300' } }, 2100);
+  s.clock.at = 4100;
+}
+const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
+
+test('Esc while the agent works sends one interrupt and no line; the line over the box says so, and when the journal answers a quiet line stands in the conversation and the agent rests', () => {
+  const s = stage(90, 30, { name: 'Mica' });
+  working(s);
+  expect(s.live()).toMatch(new RegExp(`\\n${SPIN} Mica is running bash · 0:02 · esc to interrupt\\n╭`));
+  s.type('\x1b');
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+  expect(s.live()).toMatch(new RegExp(`\\n${SPIN} Mica is running bash · 0:02 · interrupting …\\n╭`));
+  expectFrame('interrupting-90x30', s.all());
+  // Pressed again while the first is unanswered: nothing more is sent, and the client is still there.
+  s.type('\x1b\x1b');
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+  expect(s.app.closed).toBe(false);
+  // The body stops the command, answers the call, and journals the interruption.
+  taken(s);
+  s.journal({ type: 'tool.result', callId: 'c1', ok: false, output: '[interrupted] Your owner interrupted this turn while this tool was running.\ninterrupted by your owner and killed' }, 4400);
+  s.journal({ type: 'turn.interrupted' }, 4410);
+  s.clock.at = 5000;
+  const all = s.all();
+  expectFrame('interrupted-90x30', all);
+  expect(all).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
+  expect(all.match(/interrupted by you/g)).toHaveLength(1);
+  expect(all).not.toMatch(/interrupting|esc to interrupt|running/);
+  expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
+  // What is said next starts a turn like any other, which can be interrupted in its turn.
+  s.say('something else', 6000);
+  s.clock.at = 7000;
+  expect(s.live()).toMatch(new RegExp(`${SPIN} Mica is thinking · 0:01 · esc to interrupt`));
+  s.type('\x1b');
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+});
+
+test('Esc while the agent does nothing sends nothing and says so once, however often it is pressed; so does /stop', () => {
+  const s = stage(90, 30, { name: 'Mica' });
+  settled(s);
+  s.clock.at = 1000;
+  s.frame();
+  s.type('\x1b');
+  s.type('\x1b');
+  s.type('/stop\r');
+  expect(channel(s)).toEqual([]);
+  expect(flowed(s).match(/Mica is not in the middle of anything: there is nothing to interrupt\./g)).toHaveLength(1);
+  expect(s.live()).not.toMatch(/interrupt/);
+  expect(typed(s)).toEqual(['›']);
+  expect(s.app.closed).toBe(false);
+});
+
+test('/stop does what Esc does, and is never sent as a line; a line of the owner\'s still on its way can be stopped too', () => {
+  const s = stage(90, 30);
+  working(s);
+  s.type('/stop\r');
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+  expect(s.live()).toMatch(/The agent is running bash · 0:02 · interrupting …/);
+  expect(typed(s)).toEqual(['›']);
+
+  const early = stage(90, 30);
+  settled(early);
+  early.clock.at = 1000;
+  early.type('do a great deal\r');
+  // Not in the journal yet, so the journal shows no turn: the line is on its way to start one.
+  early.type('\x1b');
+  expect(channel(early)).toEqual([['.txt', 'do a great deal'], ['.interrupt', '']]);
+});
+
+test('Esc is told from the keys that begin with its byte: an arrow, Alt with a key and a paste interrupt nothing, in one read or in two', async () => {
+  const s = stage(90, 30);
+  working(s);
+  // Up, Alt+Enter, Alt+b, a bracketed paste, Shift+Tab, Delete.
+  s.type('\x1b[A\x1b\r\x1bb\x1b[200~pasted\x1b[201~\x1b[Z\x1b[3~');
+  expect(channel(s)).toEqual([]);
+  // A sequence cut in two by the terminal: the ESC alone, and the rest a moment later, within the time a lone ESC is waited for.
+  s.term.type('\x1b');
+  s.term.type('[B');
+  await Bun.sleep(120);
+  expect(channel(s)).toEqual([]);
+  // A lone ESC with nothing after it is the key, once that time has passed.
+  s.term.type('\x1b');
+  expect(channel(s)).toEqual([]);
+  await Bun.sleep(120);
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+});
+
+test('where there is no turn to stop, Esc sends nothing and says why: a mutation being checked, between two runs, nobody running', () => {
+  const mutating = stage(90, 30);
+  working(mutating);
+  mutating.journal({ type: 'tool.result', callId: 'c1', ok: true, output: '' }, 4200);
+  mutating.journal({ type: 'molt.requested', commit: B, motive: 'better' }, 4300);
+  expect(mutating.live()).toMatch(new RegExp(`${SPIN} The agent is mutating · 0:02\\n`));
+  mutating.type('\x1b');
+  expect(channel(mutating)).toEqual([]);
+  expect(flowed(mutating)).toContain('The kernel is checking a mutation, and that is not interrupted from here.');
+
+  const between = stage(90, 30);
+  working(between);
+  between.alive.body = false;
+  expect(between.live()).toMatch(new RegExp(`${SPIN} The agent is starting · 0:02\\n`));
+  between.type('\x1b');
+  expect(channel(between)).toEqual([]);
+  expect(flowed(between)).toContain('The agent is between two runs: no body is there to interrupt at this moment.');
+
+  const down = stage(90, 30);
+  working(down);
+  down.alive.supervisor = false;
+  down.type('\x1b');
+  expect(channel(down)).toEqual([]);
+  expect(flowed(down)).toContain('Nobody is running here: there is nothing to interrupt.');
+});
+
+test('an interrupt that nothing answers is said to be unanswered after a few seconds, and can then be sent again; a turn that ends by itself needs no word', () => {
+  const s = stage(90, 30, { name: 'Mica' });
+  working(s);
+  s.type('\x1b');
+  taken(s);
+  s.clock.at = 8000;
+  expect(s.live()).toMatch(/Mica is running bash · 0:06 · interrupting …/);
+  s.clock.at = 9200;
+  expect(flowed(s)).toContain('Mica has not stopped. A body from before interruptions does not hear them. Esc asks again; ./box down stops it for certain.');
+  expect(s.live()).toMatch(/Mica is running bash · 0:07 · esc to interrupt/);
+  s.type('\x1b');
+  expect(channel(s)).toEqual([['.interrupt', '']]);
+
+  const late = stage(90, 30);
+  working(late);
+  late.type('\x1b');
+  // The reply was already on its way: the turn ends as any other, and the interrupt found nothing to stop.
+  late.journal({ type: 'tool.result', callId: 'c1', ok: true, output: '' }, 4200);
+  late.journal({ type: 'assistant', text: 'Done.', toolCalls: [] }, 4300);
+  late.clock.at = 12_000;
+  const all = late.all();
+  expect(all).toContain('● Done.');
+  expect(all).not.toMatch(/interrupt|has not stopped/);
+});
+
+test('an interruption made at another terminal, or found in the history on attaching, is shown the same way', () => {
+  const s = stage(90, 30, { open: false });
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'go on' }, -30_000);
+  s.journal({ type: 'turn.interrupted' }, -29_000);
+  s.app.open();
+  expect(s.all()).toContain('› go on\n\n  ◦ interrupted by you');
+  expect(s.live()).toMatch(/gpt-6\.1-sol · resting/);
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'typed elsewhere' }, 1000);
+  s.journal({ type: 'turn.interrupted' }, 2000);
+  s.clock.at = 3000;
+  expect(s.all().match(/◦ interrupted by you/g)).toHaveLength(2);
+  expect(channel(s)).toEqual([]);
 });

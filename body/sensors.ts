@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from '../kernel/envelope';
 import type { JournalEvent } from '../kernel/journal';
+import { INTERRUPT_SUFFIX } from '../kernel/owner';
 
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
@@ -42,8 +43,8 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
   const newest = events.findLastIndex((e) => e.type === 'stimulus');
   const e = events[newest];
   if (e?.type !== 'stimulus' || e.source !== 'clock') return true;
-  // A reply with tool calls is work in progress; one without is the answer.
-  return events.slice(newest + 1).some((later) => later.type === 'assistant' && !(later.toolCalls?.length > 0));
+  // A reply with tool calls is work in progress; one without is the answer. A turn the owner stopped is over as well.
+  return events.slice(newest + 1).some((later) => later.type === 'turn.interrupted' || (later.type === 'assistant' && !(later.toolCalls?.length > 0)));
 }
 
 /**
@@ -121,20 +122,35 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
  * Lines the owner typed somewhere else: `./box talk` leaves each as a plain-text file in `dir`
  * (see kernel/owner.ts). They are the owner's words exactly as typed lines are, so the source is
  * 'terminal'. A name starting with a dot is a line still being written.
+ *
+ * A file whose name ends in `.interrupt` is not a line: the owner asks for the turn in progress to
+ * be stopped, and `onInterrupt` is called. Only the name decides that, never what a file holds, and
+ * only this directory is looked at: nothing that arrives any other way can interrupt. An interrupt
+ * names no turn; it is for what was running when it was sent. So one that is already there when
+ * this starts was meant for a process that is gone, and is dropped.
  */
-export function owner(dir: string, intervalMs = 250): Sensor {
+export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = () => {}): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, a line that was journaled but cannot be removed would be said on every poll.
     const failed = new Set<string>();
     let listing = '';
+    let starting = true;
     // This runs in a timer, where anything thrown ends the process.
     const poll = () => {
+      const first = starting;
+      starting = false;
       try {
         if (!existsSync(dir)) return;
         for (const file of readdirSync(dir).filter((name) => !name.startsWith('.')).sort()) {
           if (failed.has(file)) continue;
           try {
+            if (file.endsWith(INTERRUPT_SUFFIX)) {
+              // Removed first: an interrupt that failed half-way is not one to act on again later.
+              rmSync(join(dir, file));
+              if (!first) onInterrupt();
+              continue;
+            }
             const text = readFileSync(join(dir, file), 'utf8').trim();
             // Journal first, remove second: a crash in between repeats the line rather than losing it.
             if (text !== '') emit({ source: 'terminal', text });

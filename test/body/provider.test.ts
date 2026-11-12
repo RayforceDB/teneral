@@ -158,6 +158,48 @@ test('every way a request can fail is a ProviderError that carries the status an
   expect(await caught(openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [] }) })([], []))).toBeInstanceOf(ProviderError);
 });
 
+test('both adapters propagate caller cancellation to fetch', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ for (const responses of [false, true]) {
+  const controller = new AbortController();
+  let entered!: () => void;
+  const started = new Promise<void>(r => { entered = r; });
+  const send = (async (_url: unknown, init?: RequestInit) => {
+   entered();
+   return await new Promise<Response>((_resolve, reject) => {
+    init!.signal!.addEventListener('abort', () => reject(new Error('aborted')), {once:true});
+   });
+  }) as unknown as typeof fetch;
+  const provider = responses
+   ? responsesProvider({baseUrl:()=>cfg.baseUrl, token:async()=> 'k', model:'m', fetch:send})
+   : openAiProvider({...cfg, fetch:send});
+  const pending = provider([], [], {signal:controller.signal});
+  await started; controller.abort();
+  await expect(pending).rejects.toThrow('cancelled');
+ }
+});
+
+test('Responses never posts after cancellation during token acquisition or refresh', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ for (const refresh of [false,true]) {
+  const controller = new AbortController(); let posts=0;
+  const provider = responsesProvider({baseUrl:()=>cfg.baseUrl, model:'m',
+   token:async rejected => { if (!refresh || rejected) controller.abort(); return rejected ? 'new' : 'old'; },
+   fetch:(async()=> {posts++; return new Response('{}',{status:401});}) as unknown as typeof fetch});
+  await expect(provider([],[],{signal:controller.signal})).rejects.toThrow();
+  expect(posts).toBe(refresh ? 1 : 0);
+ }
+});
+
+test('pre-aborted calls do not acquire credentials or fetch', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ let calls=0; const controller=new AbortController(); controller.abort();
+ const send=(async()=>{calls++;return new Response('{}');}) as unknown as typeof fetch;
+ const providers=[openAiProvider({...cfg,fetch:send}), responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=>{calls++;return 'k';},fetch:send})];
+ for(const provider of providers) await expect(provider([],[],{signal:controller.signal})).rejects.toThrow();
+ expect(calls).toBe(0);
+});
+
 // --- images, usage and reasoning ---
 
 const PICTURE = { name: `${'a'.repeat(64)}.png`, mime: 'image/png', data: 'AAAA' };
@@ -226,4 +268,87 @@ test('reasoning the endpoint shows with the message is returned, under either of
   for (const none of [{ content: 'ok' }, { content: 'ok', reasoning: '' }, { content: 'ok', reasoning_content: { effort: 'high' } }]) {
     expect('reasoning' in await answer(none)).toBe(false);
   }
+});
+
+// --- cancelled by the caller ---
+
+test('a cancelled call is always a ProviderError saying so, with no status: before it began, and while it waited', async () => {
+  const { responsesProvider } = await import('../../body/provider');
+  const hung = ((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)))) as unknown as typeof fetch;
+  const make = [
+    () => openAiProvider({ ...cfg, fetch: hung }),
+    () => responsesProvider({ baseUrl: () => cfg.baseUrl, token: async () => 'k', model: 'm', fetch: hung }),
+  ];
+  for (const provider of make) {
+    const before = new AbortController();
+    before.abort();
+    const during = new AbortController();
+    setTimeout(() => during.abort(), 20);
+    for (const controller of [before, during]) {
+      const err = await caught(provider()([], [], { signal: controller.signal }));
+      expect(err).toBeInstanceOf(ProviderError);
+      expect((err as ProviderError).message).toBe('provider request cancelled');
+      expect((err as ProviderError).status).toBeNull();
+    }
+  }
+});
+
+test('a body that stops arriving is cancelled as well, and a cancellation is not reported as a timeout', async () => {
+  const stalled = (async (_url: string, init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    text: () => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason))),
+  })) as unknown as typeof fetch;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+  await expect(openAiProvider({ ...cfg, fetch: stalled, timeoutMs: 5000 })([], [], { signal: controller.signal })).rejects.toThrow('provider request cancelled');
+});
+
+test('a call that is not cancelled is as it was: the option changes nothing, and a timeout is still a timeout', async () => {
+  const controller = new AbortController();
+  const ok = openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'hi' } }] }) });
+  expect(await ok([], [], { signal: controller.signal })).toEqual({ text: 'hi', toolCalls: [] });
+  expect(await ok([], [], {})).toEqual({ text: 'hi', toolCalls: [] });
+  const hung = ((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)))) as unknown as typeof fetch;
+  await expect(openAiProvider({ ...cfg, fetch: hung, timeoutMs: 30 })([], [], { signal: controller.signal })).rejects.toThrow(/timed out after 0\.03s/);
+});
+
+test('a request that carries images is cancelled like any other', async () => {
+  const { responsesProvider } = await import('../../body/provider');
+  const picture = { name: `${'a'.repeat(64)}.png`, mime: 'image/png', data: 'AAAA' };
+  const messages = [{ role: 'user' as const, content: 'look', images: [picture] }, { role: 'tool' as const, tool_call_id: 'c1', content: 'seen', images: [picture] }];
+  for (const responses of [false, true]) {
+    const controller = new AbortController();
+    const bodies: string[] = [];
+    const send = ((_url: unknown, init?: RequestInit) => {
+      bodies.push(String(init!.body));
+      setTimeout(() => controller.abort(), 5);
+      return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('aborted'))));
+    }) as unknown as typeof fetch;
+    const provider = responses ? responsesProvider({ baseUrl: () => cfg.baseUrl, token: async () => 'k', model: 'm', fetch: send }) : openAiProvider({ ...cfg, fetch: send });
+    await expect(provider(messages, [], { signal: controller.signal })).rejects.toThrow('cancelled');
+    // The images were on their way: it is that request which was cancelled.
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain('data:image/png;base64,AAAA');
+  }
+});
+
+test('Responses, refused a reasoning summary and then cancelled, does not ask again without one', async () => {
+  const { responsesProvider } = await import('../../body/provider');
+  const controller = new AbortController();
+  let posts = 0;
+  const refusal = (): Response => new Response(JSON.stringify({ error: { message: 'reasoning.summary is not supported', param: 'reasoning.summary' } }), { status: 400 });
+  const send = (async () => {
+    posts += 1;
+    // Cancelled while the refusal was on its way back.
+    controller.abort();
+    return refusal();
+  }) as unknown as typeof fetch;
+  const provider = responsesProvider({ baseUrl: () => cfg.baseUrl, token: async () => 'k', model: 'm', fetch: send });
+  await expect(provider([], [], { signal: controller.signal })).rejects.toThrow('provider request cancelled');
+  expect(posts).toBe(1);
+  // Uncancelled, the same refusal is answered by asking once more without the field.
+  const again = responsesProvider({ baseUrl: () => cfg.baseUrl, token: async () => 'k', model: 'm', fetch: (async () => { posts += 1; return refusal(); }) as unknown as typeof fetch });
+  await expect(again([], [], { signal: new AbortController().signal })).rejects.toThrow(/answered 400/);
+  expect(posts).toBe(3);
 });

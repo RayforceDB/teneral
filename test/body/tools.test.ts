@@ -395,3 +395,63 @@ test('look takes an image from memory by its absolute path, and refuses what is 
   const { readdirSync } = await import('node:fs');
   expect(readdirSync(join(root, 'memory', 'images'))).toHaveLength(1);
 });
+
+// --- interrupted by the owner ---
+
+const gone = async (pid: number): Promise<boolean> => {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await Bun.sleep(20);
+  }
+  return false;
+};
+
+test('bash stopped by its signal is killed at once with its children and theirs, and says what it had printed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const controller = new AbortController();
+  // bash, a child of it, and a child of that child: three processes in one group.
+  const command = 'echo started; (sleep 301 & echo $! > grandchild.pid; wait) & echo $! > child.pid; wait';
+  const began = Date.now();
+  const running = runBash(command, dir, 60_000, controller.signal);
+  const pid = async (name: string): Promise<number> => {
+    for (let i = 0; i < 200; i++) {
+      try {
+        const n = Number(readFileSync(join(dir, name), 'utf8'));
+        if (n > 0) return n;
+      } catch { /* not written yet */ }
+      await Bun.sleep(10);
+    }
+    throw new Error(`${name} was never written`);
+  };
+  const child = await pid('child.pid');
+  const grandchild = await pid('grandchild.pid');
+  expect(() => process.kill(grandchild, 0)).not.toThrow();
+  controller.abort();
+  const out = await running;
+  expect(Date.now() - began).toBeLessThan(5000);
+  expect(out).toBe('interrupted by your owner and killed, with everything it started\nstarted\n');
+  expect(await gone(child)).toBe(true);
+  expect(await gone(grandchild)).toBe(true);
+});
+
+test('bash is not started at all under a signal that has already aborted, and a signal that never aborts changes nothing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const controller = new AbortController();
+  controller.abort();
+  expect(await runBash('touch ran', dir, 5000, controller.signal)).toMatch(/^not run: interrupted by your owner/);
+  expect(() => readFileSync(join(dir, 'ran'))).toThrow();
+  expect(await runBash('echo hi', dir, 5000, new AbortController().signal)).toBe('exit 0\nhi\n');
+});
+
+test('the bash tool hands its signal on; the tools that are over in a moment take none', async () => {
+  const ctx = context(mkdtempSync(join(tmpdir(), 'teneral-ws-')));
+  const controller = new AbortController();
+  const running = tool('bash').run({ command: 'sleep 302' }, ctx, controller.signal);
+  setTimeout(() => controller.abort(), 100);
+  expect(await running).toMatch(/^interrupted by your owner and killed/);
+  expect(await tool('write').run({ path: 'a.txt', content: 'x' }, ctx, controller.signal)).toBe('wrote 1 characters to a.txt');
+});

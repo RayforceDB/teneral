@@ -48,7 +48,7 @@
 
   ▪ bash  command: ls -la body/ | sort              running
 
-⠴ Mica is running bash · 0:03
+⠴ Mica is running bash · 0:03 · esc to interrupt
 ╭─────────────────────────────────────────────────────────╮
 │ › half a line                                           │
 ╰─────────────────────────────────────────────────────────╯
