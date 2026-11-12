@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
+import { ownerCommand } from '../offer';
 import { interrupt, tell } from '../owner';
 import * as providers from '../providers';
 import { holder, readState, type Paths } from '../supervisor';
@@ -56,6 +57,8 @@ const HELP = [
   '  /tools         show or hide what each tool call returned (also Tab)',
   '  /generations   the generations this individual has lived in',
   '  /history       print the earlier conversation that was read from the journal',
+  '  /offers        what waits for your approval before it goes out to the species',
+  '  /approve <id>  let exactly that commit go out',
   '  /plain         how to get the plain text client',
   '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
   '',
@@ -558,7 +561,7 @@ export class TalkScreen {
     const text = this.edit.text.trim();
     if (text === '' && this.edit.chips.length === 0) return;
     const command = /^(\/[a-z]+)(?:[ \t]+(.*))?$/.exec(text);
-    if (command && (command[2] === undefined || command[1] === '/image')) {
+    if (command && (command[2] === undefined || command[1] === '/image' || command[1] === '/approve')) {
       this.edit = { ...this.edit, text: '', cursor: 0, at: null };
       return this.command(command[1]!, (command[2] ?? '').trim());
     }
@@ -674,6 +677,9 @@ export class TalkScreen {
         }
         return this.page('generations, oldest first', clean(list).split('\n'));
       }
+      case '/offers':
+      case '/approve':
+        return this.page(name === '/offers' ? 'waiting for your approval' : 'approval', clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n'));
       default:
         this.say(`${name} is not a command here, and was not sent. /help lists them.`);
     }

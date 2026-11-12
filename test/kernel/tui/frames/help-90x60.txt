@@ -52,6 +52,8 @@
     /tools         show or hide what each tool call returned (also Tab)
     /generations   the generations this individual has lived in
     /history       print the earlier conversation that was read from the journal
+    /offers        what waits for your approval before it goes out to the species
+    /approve <id>  let exactly that commit go out
     /plain         how to get the plain text client
     /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)
 
