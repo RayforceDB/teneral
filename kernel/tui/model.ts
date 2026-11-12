@@ -137,6 +137,8 @@ export function stand(s: Standing, event: JournalEvent): Standing {
       return { ...next, tool: { callId: asText(f.callId), name: cut(flat(clean(asText(f.name))), 40) } };
     case 'tool.result':
       return s.tool !== null && s.tool.callId === asText(f.callId) ? { ...next, tool: null } : next;
+    case 'turn.interrupted':
+      return { ...next, tool: null, asked: false };
     case 'molt.requested':
       return { ...next, molt: asText(f.commit) };
     case 'molt.rejected':
@@ -320,6 +322,10 @@ export class Transcript {
         });
         return;
       }
+      case 'turn.interrupted':
+        // The owner stopped the turn, from this terminal or another.
+        this.push({ kind: 'quiet', label: 'interrupted by you', text: '' });
+        return;
       case 'generation.started':
         // A new process: whatever was running in the last one will never report.
         for (const { entry } of this.tools.values()) Object.assign(entry, { status: 'cut short', rev: entry.rev + 1 });

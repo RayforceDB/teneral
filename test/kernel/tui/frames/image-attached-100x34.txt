@@ -29,5 +29,5 @@
 │ [image 1 · png · 1280×720 · 239 KB]                                                             │
 │ › what is wrong in this screenshot?                                                             │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol · resting · …/work/teneral · gen 1 a1b2c3d      Tab shows what the tool calls returned
+ gpt-6.1-sol · resting · …/work/teneral · gen 1 a1b2c3d           /help lists the keys and commands
  attached: image 1 · Backspace at the start removes the last

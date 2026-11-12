@@ -49,8 +49,8 @@
 ┃    212 pass
 ┃    1 fail
 
-⠇ The agent is thinking · 1:01
+⠇ The agent is thinking · 1:01 · esc to interrupt
 ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol · …/work/teneral · gen 1 a1b2c3d
+ gpt-6.1-sol · …/work/teneral · gen 1 a1b2c3d   Esc interrupts what it is doing

@@ -5,6 +5,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
+import { INTERRUPT_SUFFIX } from '../../kernel/owner';
 import {
   AT_REST, Follower, recent, render, talk, track, type Turn,
 } from '../../kernel/talk';
@@ -366,4 +367,112 @@ test('a banner is said once, first, to a person who is typing, and never to a sc
   expect(await talk({ ...piped.base, lines: from('/quit'), interactive: false, banner: 'Using ChatGPT plan.' })).toBe(0);
   expect(await talk({ ...piped.base, lines: from('/quit'), interactive: true, banner: null })).toBe(0);
   expect(piped.notes.join('\n')).not.toContain('ChatGPT');
+});
+
+// --- /stop: the owner interrupts ---
+
+const stopped = (at = 0) => ev({ type: 'turn.interrupted' }, at);
+
+test('a turn the owner interrupted prints as one line, and leaves the agent at rest until something else arrives', () => {
+  expect(render(stopped())).toBe('[interrupted by the owner]');
+  expect([said('go', 0), calling(10), stopped(20)].reduce(track, AT_REST)).toEqual(AT_REST);
+  expect([said('go', 0), said('more', 500), stopped(600)].reduce(track, AT_REST)).toEqual(AT_REST);
+  expect([said('go', 0), stopped(20), said('again', 1000)].reduce(track, AT_REST).busy).toBe(true);
+  expect(recent([said('go'), calling(), stopped()])).toEqual(['> go', '[interrupted by the owner]']);
+});
+
+/** Takes lines and interrupts the way the body does: a line starts a turn that never ends by itself, an interrupt ends it. */
+function stoppable(journal: string, owner: string) {
+  const poll = setInterval(() => {
+    if (!existsSync(owner)) return;
+    for (const name of readdirSync(owner).filter((n) => !n.startsWith('.')).sort()) {
+      const interrupt = name.endsWith(INTERRUPT_SUFFIX);
+      const text = readFileSync(join(owner, name), 'utf8').trim();
+      rmSync(join(owner, name));
+      if (interrupt) appendEvent(journal, A, { type: 'turn.interrupted' });
+      else appendEvent(journal, A, { type: 'stimulus', source: 'terminal', text });
+    }
+  }, 5);
+  return () => clearInterval(poll);
+}
+
+test('/stop typed while the agent works goes out as an interrupt, never as a line; typed while it rests it sends nothing and says so', async () => {
+  const s = setup();
+  const sent: string[][] = [];
+  const names = () => (existsSync(s.owner) ? readdirSync(s.owner).filter((n) => !n.startsWith('.')).sort() : []);
+  async function* typing() {
+    yield '/stop';
+    await Bun.sleep(30);
+    sent.push(names());
+    yield 'work on this';
+    await Bun.sleep(60);
+    yield ' /stop ';
+    sent.push(names());
+    await Bun.sleep(120);
+  }
+  // Nobody takes the first files, so that what was written can be seen.
+  const done = talk({ ...s.base, lines: typing(), interactive: true });
+  await Bun.sleep(60);
+  appendEvent(s.journal, A, { type: 'stimulus', source: 'terminal', text: 'work on this' });
+  expect(await done).toBe(0);
+  expect(sent[0]).toEqual([]);
+  expect(sent[1]!.map((name) => name.slice(name.lastIndexOf('.')))).toEqual(['.txt', INTERRUPT_SUFFIX]);
+  expect(readdirSync(s.owner).sort().map((name) => readFileSync(join(s.owner, name), 'utf8'))).toEqual(['work on this', '']);
+  expect(s.notes.filter((note) => note.includes('interrupt'))).toEqual([
+    expect.stringContaining('/stop interrupts what the agent is doing'),
+    '(the agent is not in the middle of a turn: nothing to interrupt)',
+    '(interrupt sent)',
+  ]);
+});
+
+test('a person who types /stop sees the turn end in the journal', async () => {
+  const s = setup();
+  const stop = stoppable(s.journal, s.owner);
+  async function* typing() {
+    yield 'work on this';
+    await Bun.sleep(60);
+    yield '/stop';
+    await Bun.sleep(120);
+  }
+  try {
+    expect(await talk({ ...s.base, lines: typing(), interactive: true })).toBe(0);
+  } finally {
+    stop();
+  }
+  expect(s.out.join('')).toBe('[interrupted by the owner]\n');
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'turn.interrupted']);
+});
+
+test('piped /stop interrupts the turn the agent is in when its place among the lines comes, and the next line waits for the agent to be at rest', async () => {
+  const s = setup();
+  appendEvent(s.journal, A, { type: 'stimulus', source: 'clock', text: 'tick' });
+  appendEvent(s.journal, A, { type: 'assistant', text: '', toolCalls: [{ id: 'c', name: 'bash', args: { command: 'sleep 999' } }] });
+  const stop = stoppable(s.journal, s.owner);
+  const done = talk({ ...s.base, lines: from('/stop', 'now this'), interactive: false, waitMs: 2000 });
+  await Bun.sleep(150);
+  // The line after it went out only once the interruption was journaled, and is still unanswered.
+  expect(readEvents(s.journal).slice(2).map((e) => (e.type === 'stimulus' ? e.text : e.type))).toEqual(['turn.interrupted', 'now this']);
+  appendEvent(s.journal, A, { type: 'assistant', text: 'this, then', toolCalls: [] });
+  try {
+    expect(await done).toBe(0);
+  } finally {
+    stop();
+  }
+  expect(s.out.join('')).toBe('[interrupted by the owner]\nthis, then\n\n');
+  expect(s.notes).toEqual(['(interrupt sent)']);
+});
+
+test('piped /stop with the agent at rest sends nothing, says so, and the lines after it go on as ever', async () => {
+  const s = setup();
+  appendEvent(s.journal, A, { type: 'stimulus', source: 'terminal', text: 'earlier' });
+  appendEvent(s.journal, A, { type: 'assistant', text: 'an earlier reply', toolCalls: [] });
+  const stop = standIn(s.journal, s.owner);
+  try {
+    expect(await talk({ ...s.base, lines: from('/stop', 'hello'), interactive: false })).toBe(0);
+  } finally {
+    stop();
+  }
+  expect(s.notes).toEqual(['(the agent is not in the middle of a turn: nothing to interrupt)']);
+  expect(s.out.join('')).toBe('  [echo] text: hello\nyou said: hello\n\n');
+  expect(readEvents(s.journal).map((e) => e.type)).not.toContain('turn.interrupted');
 });

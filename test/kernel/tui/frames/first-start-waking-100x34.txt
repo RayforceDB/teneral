@@ -28,7 +28,7 @@
 
   ▪ bash  command: wc -l body/*.ts && cat BACKLOG.md | head -50                             running
 
-⠦ The agent is waking · running bash · 0:08
+⠦ The agent is waking · running bash · 0:08 · esc to interrupt
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                               │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯

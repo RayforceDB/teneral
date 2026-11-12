@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
-import { tell } from '../owner';
+import { interrupt, tell } from '../owner';
 import * as providers from '../providers';
 import { holder, readState, type Paths } from '../supervisor';
 import { Follower } from '../talk';
@@ -21,7 +21,8 @@ import { contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcom
 // The talk client: `./box talk` at a terminal. The owner's lines go out through the owner channel
 // (kernel/owner.ts) and everything shown is read back from the journal, exactly as the plain
 // client does it, so any number of these can be attached and leaving one ends nothing else.
-// Nothing here can stop the agent or change it.
+// Esc asks the agent, over that same channel, to stop the turn it is in. Nothing else here can stop
+// the agent or change it.
 //
 // It does not take the screen. What is finished (the welcome panel, a line, a reply, a tool call
 // with its outcome, a notice) is printed once and scrolls away into the terminal's own
@@ -35,6 +36,8 @@ const SHOWN_ENTRIES = 40;
 const TICK_MS = 125;
 /** A lone ESC is the Escape key once this long has passed with nothing after it. */
 const ESCAPE_MS = 40;
+/** How long an interrupt sent from here may go unanswered before the client says so and lets it be sent again. */
+const INTERRUPT_MS = 5000;
 /** How long each tip stays in the footer. */
 const TIP_MS = 20_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
@@ -49,13 +52,16 @@ const HELP = [
   '',
   '  /help          this',
   '  /image <path>  attach an image file from your machine',
+  '  /stop          interrupt what the agent is doing now (also Esc)',
   '  /tools         show or hide what each tool call returned (also Tab)',
   '  /generations   the generations this individual has lived in',
   '  /history       print the earlier conversation that was read from the journal',
   '  /plain         how to get the plain text client',
   '  /quit          leave (also Ctrl-D on an empty line, and Ctrl-C)',
   '',
-  'Leaving ends this client only. Nothing here stops the agent or changes it.',
+  'Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model is cancelled, a command that is running is killed with everything it started, and the agent waits for what you say next. It is told that you interrupted it. When it is doing nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by it.',
+  '',
+  'Leaving ends this client only. Nothing else here stops the agent or changes it.',
   '',
   'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the kernel is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
 ];
@@ -224,6 +230,8 @@ export class TalkScreen {
   private stops: (() => void)[] = [];
   private finish: ((status: number) => void) | null = null;
   private escape: ReturnType<typeof setTimeout> | undefined;
+  /** When an interrupt was sent from here that the journal has not answered yet, by this client's clock; null otherwise. */
+  private interrupting: number | null = null;
   private readonly lifeline: Lifeline;
   closed = false;
 
@@ -432,8 +440,10 @@ export class TalkScreen {
     for (const e of this.follower.poll()) {
       if (this.shown.has(e.id)) continue;
       this.take(e, true);
+      if (e.type === 'turn.interrupted') this.interrupting = null;
       this.dirty = true;
     }
+    this.interrupted();
     this.answers();
     if (this.ticks % 8 === 1) this.readName();
     this.paint();
@@ -464,6 +474,11 @@ export class TalkScreen {
   /** Something this client says itself: printed at once, whatever else is still under way. */
   private say(text: string): void {
     this.print({ kind: 'note', text, id: 0, rev: 0 });
+  }
+
+  /** The same, unless it is what was said last: a key pressed again does not fill the scrollback. */
+  private sayOnce(text: string): void {
+    if (this.last?.kind !== 'note' || this.last.text !== text) this.say(text);
   }
 
   private page(title: string, text: string[], tools?: Extract<Entry, { kind: 'tool' }>[]): void {
@@ -521,6 +536,7 @@ export class TalkScreen {
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
     if (ctrl('c')) return this.close(0);
+    if (key.kind === 'key' && key.name === 'escape' && !key.ctrl && !key.alt && !key.shift) return this.interrupt();
     if (this.held !== null) {
       this.held.push(key);
       return;
@@ -566,6 +582,40 @@ export class TalkScreen {
     }
   }
 
+  /**
+   * Esc, or /stop: ask the agent to stop the turn it is in (kernel/owner.ts). Asked only when the
+   * journal shows a turn under way, or a line from here is still on its way to start one, and a
+   * body is there to hear it; otherwise the owner is told why nothing was done. Asked once: a
+   * second press while the first is unanswered does nothing.
+   */
+  private interrupt(): void {
+    const who = this.who === 'the agent' ? 'The agent' : this.who;
+    const word = stateWord(this.standing, this.alive());
+    if (!this.standing.turn.busy && !this.transcript.waiting) return this.sayOnce(`${who} is not in the middle of anything: there is nothing to interrupt.`);
+    if (word === 'not running') return this.sayOnce('Nobody is running here: there is nothing to interrupt.');
+    if (word === 'mutating') return this.sayOnce('The kernel is checking a mutation, and that is not interrupted from here. Its answer comes when the checks end.');
+    if (word === 'starting') return this.sayOnce(`${who} is between two runs: no body is there to interrupt at this moment.`);
+    if (this.interrupting !== null) return;
+    try {
+      interrupt(this.o.paths.owner);
+      this.interrupting = this.now();
+    } catch (err) {
+      this.say(`The interrupt could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** Whether an interrupt sent from here has been answered: by the journal, by the turn ending anyway, or by nothing in time. */
+  private interrupted(): void {
+    if (this.interrupting === null) return;
+    if (!this.standing.turn.busy && !this.transcript.waiting) {
+      this.interrupting = null;
+    } else if (this.now() - this.interrupting > INTERRUPT_MS) {
+      this.interrupting = null;
+      this.say(`${this.who === 'the agent' ? 'The agent' : this.who} has not stopped. A body from before interruptions does not hear them. Esc asks again; ./box down stops it for certain.`);
+    } else return;
+    this.dirty = true;
+  }
+
   private toggleTools(): void {
     this.tools = !this.tools;
     if (!this.tools) return this.say('What tool calls return is no longer shown. Tab or /tools shows it again.');
@@ -586,6 +636,8 @@ export class TalkScreen {
         return this.page('teneral talk', HELP);
       case '/tools':
         return this.toggleTools();
+      case '/stop':
+        return this.interrupt();
       case '/image': {
         if (arg === '') return this.say('/image <path> attaches an image file from your machine: /image ~/Pictures/plan.png');
         const paths = pathsIn(arg) ?? (arg.startsWith('/') || arg.startsWith('~/') ? [arg] : null);
@@ -773,7 +825,7 @@ export class TalkScreen {
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}`;
+    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -787,8 +839,11 @@ export class TalkScreen {
     }
     const doing = word === 'waking' && s.tool !== null ? `waking ${g.sep} running ${s.tool.name}`
       : s.tool !== null && isMutationTool(s.tool.name) && word.startsWith('running ') ? 'asking for a mutation' : word;
+    // What Esc would do now, where it would do anything: between two runs, or while the kernel checks a mutation, there is no turn to stop.
+    const stoppable = word === 'waking' || word === 'thinking' || word.startsWith('running ');
+    const esc = this.interrupting !== null ? `interrupting ${g.ellipsis}` : stoppable ? 'esc to interrupt' : '';
     const activity: Line | null = active
-      ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }]
+      ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 
     const model = clean(this.o.env.TENERAL_MODEL ?? '').slice(0, 40);
@@ -828,6 +883,7 @@ export class TalkScreen {
       '/help lists the keys and commands',
       'Alt+Enter starts a new line',
       'Tab shows what the tool calls returned',
+      'Esc interrupts what it is doing',
       ...(this.clip.there ? ['Ctrl+V attaches the clipboard\'s image', 'drag an image file in to attach it'] : []),
       '/image <path> attaches an image file',
       'Up brings back what you sent before',
