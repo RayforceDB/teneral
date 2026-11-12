@@ -25,6 +25,18 @@ export function isProtected(path: string): boolean {
   ));
 }
 
+/**
+ * Protected paths that no part of a running individual reads as code: the project's page, its documents and
+ * its CI. They are the species' like everything else outside the changeable paths, and must equal a species
+ * commit; but a change to them alone brings no other kernel, so it asks for no consent and no handover.
+ */
+export const INERT: readonly string[] = ['site/', 'docs/', '.github/', 'README.md', 'LICENSE'];
+
+export function isInert(path: string): boolean {
+  if (isSuspect(path)) return false;
+  return INERT.some((entry) => (entry.endsWith('/') ? path.startsWith(entry) && path.length > entry.length : path === entry));
+}
+
 export function protectedChanges(changed: readonly string[]): string[] {
   return changed.filter(isProtected);
 }

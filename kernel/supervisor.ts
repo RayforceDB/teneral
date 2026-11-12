@@ -12,6 +12,7 @@ import {
 import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
 import { cageNotice, takeAccepts } from './species';
+import { isInert } from './protected';
 
 /** The agent exits with this code to ask for a mutation. */
 export const MUTATION_EXIT = 75;
@@ -563,11 +564,12 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
 
     /**
      * Whether the kernel of `next` is another than the one of `gen`, which is the one running here:
-     * whether anything outside the changeable paths differs between the two commits.
+     * whether anything outside the changeable paths differs between the two commits, other than the
+     * species' page, documents and CI, which no kernel runs.
      */
     const otherKernel = (gen: string, next: string): boolean => {
       try {
-        return protectedDiff(p.root, gen, next).length > 0;
+        return protectedDiff(p.root, gen, next).some((path) => !isInert(path));
       } catch {
         // Not known: the launcher looks again, which costs a moment and can do no harm.
         return true;

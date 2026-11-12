@@ -583,3 +583,22 @@ test('with a SIGNERS file in the install, a species commit is stood on only when
     rmSync(keys, { recursive: true, force: true });
   }
 });
+
+// --- the page, the documents, the CI ---
+
+test('a species commit that changes only its page, documents or CI is taken without consent and without a launcher; with a kernel file beside them it is not', async () => {
+  const { root, work, seed } = local();
+  publish(root, { 'site/index.html': '<p>one</p>\n', 'docs/guide.md': 'one\n', '.github/workflows/x.yml': 'name: x\n', 'README.md': 'two\n', LICENSE: 'MIT\n' });
+  const inert = merge(work, 'main');
+  // Asked as an install that would otherwise have to consent, and with no launcher at all.
+  expect(await gate(work, seed, inert, { mode: 'ask', launcher: null })).toEqual({ ok: true, gate: 'all', output: '' });
+  expect(readConsent(root).asked).toBeUndefined();
+  // Still the species' word, byte for byte: the lineage may not write there itself.
+  writeFiles(work, { 'site/index.html': '<p>mine</p>\n' });
+  expect(await gate(work, inert, commitAll(work, 'my page'), { mode: 'ask' })).toMatchObject({ ok: false, gate: 'protected' });
+  git(work, 'reset', '-q', '--hard', inert);
+  publish(root, { 'site/index.html': '<p>two</p>\n', 'kernel/k.ts': 'export const k = 2;\n' });
+  const withKernel = merge(work, 'main');
+  const asked = await gate(work, inert, withKernel, { mode: 'ask' });
+  expect(asked).toMatchObject({ ok: false, gate: 'species', undecided: true });
+});

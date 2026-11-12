@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { gitPaths, runCheck, sh } from './gates';
 import { appendEvent } from './journal';
 import { ACCEPT_SUFFIX } from './owner';
-import { CHANGEABLE, protectedChanges } from './protected';
+import { CHANGEABLE, isInert, protectedChanges } from './protected';
 
 // The species: one git ref the owner trusts, the project's published line. A lineage is a branch
 // of its own that merges the species from time to time, and that is the only way anything outside
@@ -313,6 +313,8 @@ export async function judgeSpecies(
     return no(`the species commit ${on} does not carry a signature by a key this install trusts (the file ${SIGNERS} in your owner's checkout): ${signature}\n`
       + 'A mutation from the species is taken only from a commit its maintainer signed. There is nothing in your workspace to mend: tell your owner which commit it is and what git said.');
   }
+  // The species' page, documents and CI alone: the kernel that runs stays the one that ran, so there is nothing to consent to or to hand over.
+  if (forbidden.every(isInert)) return { ok: true, commit: on };
   const needs = launcherNeeded(root, to);
   if (typeof needs === 'object' && needs !== null) return no(`the species commit ${on} cannot be started here: ${needs.problem}, so ${UPDATE}.`);
   if (o.launcher === undefined || o.launcher === null) {
