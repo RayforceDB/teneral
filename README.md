@@ -78,7 +78,7 @@ The agent downloads an archive itself, with its own tools. The kernel never reac
 
 ## Notes, and what the body keeps outside the journal
 
-The journal has one event that is the body's own: `{ "type": "note", "kind": "...", "data": ... }`. The kernel stores it and never reads it; the talk clients do not show it, and it is neither a reply nor something that wakes the agent. `kind` is a short name the body chooses (`a-z`, `0-9`, `.`, `_`, `-`, at most 64 characters), `data` is anything that is JSON, at most 64 KB of it. A note that breaks this is refused when it is appended, with nothing written. The seed body writes none and passes them over when it builds a request.
+The journal has one event that is the body's own: `{ "type": "note", "kind": "...", "data": ... }`. The kernel stores it and never reads it; the talk clients do not show it, and it is neither a reply nor something that wakes the agent. `kind` is a short name the body chooses (`a-z`, `0-9`, `.`, `_`, `-`, at most 64 characters), `data` is anything that is JSON, of any size. A note that breaks this is refused when it is appended, with nothing written. The seed body writes none and passes them over when it builds a request.
 
 It is there for one rule: **anything the body keeps outside the journal must be rebuildable from the journal, and lies in a place named by its schema version, so that a rolled-back body finds data it understands.** An index, a database, a summary are derived: the journal is the record, and what a store was built from must be in it, as the conversation itself or as notes. A body that changes the shape of its store writes to a new place (`memory/store-v2/`, not `memory/store/` in a new shape) and builds it from the journal; the old place stays as it was. After a rollback the older body opens the place it knows, finds it as it left it, and replays what the journal gained since. A store that is lost or damaged is a store to build again, never a loss.
 
@@ -306,6 +306,8 @@ Settings, in `.env`:
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
+| `TENERAL_CHECK_MINUTES` | Minutes one check of a mutation (the type check, the kernel's tests, the body's tests) may run before the kernel stops it and refuses the mutation. Default 10; 0 for no limit. Raise it when the agent's own tests have grown past that. |
+| `TENERAL_SMOKE_SECONDS` | Seconds the smoke run has to become ready and reply. Default 30; 0 for no limit. Raise it for a body that takes long to start. |
 | `TENERAL_UPSTREAM` | Which ref is [the species](#the-species): `<remote>/<branch>` or a local branch. Default `origin/main` when there is a remote `origin`, else the branch this checkout is on. |
 | `TENERAL_SPECIES` | Whether the agent may take a mutation from the species: `ask` (the default: you accept each species commit first), `auto`, or `off`. |
 | `TENERAL_PUBLISH` | Whether the agent may offer changes to the species and report on others': `ask` (the default; you approve each commit), `auto` or `off`. See [Offering a change to the species](#offering-a-change-to-the-species). |

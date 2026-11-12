@@ -635,7 +635,7 @@ process.exit(0);
   expect(auth).toBe(p.auth);
   // The whole list of what the kernel itself sets: one place, bodyEnv, decides it. The names left out are the owner's
   // settings: where these tests are run in an install, Bun reads them from its .env and the body inherits them.
-  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH'];
+  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS'];
   expect(names!.split(' ').filter((name) => !owners.includes(name))).toEqual([
     'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER',
     'TENERAL_SOUL', 'TENERAL_WORKSPACE',
@@ -1320,4 +1320,14 @@ process.exit(75);
     'generation.ready seed', 'molt.requested seed', 'generation.promoted v2',
     'generation.ready v2', 'mutation.requested v2', 'mutation.rejected v2', 'generation.ready v2',
   ]);
+});
+
+test('the owner sets how long a gate may take: minutes or seconds, nothing usable leaves the default, and 0 is no limit', async () => {
+  const { allowance } = await import('../../kernel/supervisor');
+  expect(allowance('30', 60_000)).toBe(1_800_000);
+  expect(allowance(' 90 ', 1000)).toBe(90_000);
+  expect(allowance('0.5', 60_000)).toBe(30_000);
+  expect(allowance('0', 60_000)).toBe(2_147_483_647);
+  expect(allowance('99999999', 60_000)).toBe(2_147_483_647);
+  for (const none of [undefined, '', 'many', '-1']) expect(allowance(none, 60_000)).toBeUndefined();
 });

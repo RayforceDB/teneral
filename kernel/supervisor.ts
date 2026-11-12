@@ -260,6 +260,16 @@ export function excused(gen: string, all: JournalEvent[], lately: JournalEvent[]
   return owed === undefined || lately.some((e) => e.id === owed.id);
 }
 
+/**
+ * How long a gate may take, from the owner's setting `value` in `unit` milliseconds: undefined when it is not
+ * set or says nothing usable, so the gate's own default holds; 0 means no limit, which a timer takes as its longest wait.
+ */
+export function allowance(value: string | undefined, unit: number): number | undefined {
+  const n = Number((value ?? '').trim() || NaN);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return n === 0 ? 2_147_483_647 : Math.min(Math.round(n * unit), 2_147_483_647);
+}
+
 /** Locks this process holds, so a lock file naming our own pid can be told from one a dead process with the same pid left. */
 const heldLocks = new Set<string>();
 
@@ -481,6 +491,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
   const gates = opts.gates
     ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, {
       signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER,
+      checkTimeoutMs: allowance(process.env.TENERAL_CHECK_MINUTES, 60_000), smokeTimeoutMs: allowance(process.env.TENERAL_SMOKE_SECONDS, 1000),
       species: { upstream: process.env.TENERAL_UPSTREAM, mode: process.env.TENERAL_SPECIES, launcher: Number(process.env.TENERAL_LAUNCHER) || null },
     }));
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));

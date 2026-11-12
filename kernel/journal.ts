@@ -57,8 +57,6 @@ export type EventBody =
 
 /** What a note's `kind` may be: a short name the body chooses, such as `memory.fact` or `lesson.v2`. */
 const NOTE_KIND = /^[a-z0-9._-]{1,64}$/;
-/** Bytes of a note's `data` once it is JSON. A note is a record, not a store; larger things go in files it names. */
-export const NOTE_DATA_LIMIT = 64 * 1024;
 
 /** Why a note with this `kind` and `data` is not journaled, or null when it is. */
 export function noteProblem(kind: unknown, data: unknown): string | null {
@@ -73,8 +71,6 @@ export function noteProblem(kind: unknown, data: unknown): string | null {
   }
   // undefined, a function, a symbol: JSON has no way to write them, and the line would come back without `data`.
   if (json === undefined) return 'a note\'s data must be JSON, and this value has no JSON form';
-  const bytes = Buffer.byteLength(json, 'utf8');
-  if (bytes > NOTE_DATA_LIMIT) return `a note's data is ${bytes} bytes as JSON; the limit is ${NOTE_DATA_LIMIT}`;
   return null;
 }
 

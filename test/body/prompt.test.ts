@@ -218,7 +218,7 @@ test('it says the smoke run is made as the configured provider, with a key and w
 });
 
 // Organs and notes: what the kernel does with each is pinned against the kernel's own constants and parser.
-import { NOTE_DATA_LIMIT, noteProblem } from '../../kernel/journal';
+import { noteProblem } from '../../kernel/journal';
 import { MAX_ORGANS, ORGANS_FILE, parseOrgans } from '../../kernel/organs';
 
 test('it says what an organ is, how one is pinned, where its archive goes, and how the body finds it', () => {
@@ -241,7 +241,7 @@ test('it says what an organ is, how one is pinned, where its archive goes, and h
 
 test('it says what a note is and the rule it exists for', () => {
   expect(flat).toContain("`{ type: 'note', kind, data }`");
-  expect(flat).toContain(`at most ${NOTE_DATA_LIMIT / 1024} KB`);
+  expect(flat).toContain('`data` is any JSON, of any size');
   expect(flat).toContain('The kernel stores it and never reads it');
   expect(flat).toContain('must be rebuildable from the journal');
   expect(flat).toContain('in a place named by its schema version');

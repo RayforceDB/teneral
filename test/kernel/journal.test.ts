@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  appendEvent, eventName, isMutationRejection, isMutationRequest, journalSize, NOTE_DATA_LIMIT, noteProblem, readEvents, readEventsFrom, rejectionFor,
+  appendEvent, eventName, isMutationRejection, isMutationRequest, journalSize, noteProblem, readEvents, readEventsFrom, rejectionFor,
   SCHEMA_VERSION,
 } from '../../kernel/journal';
 
@@ -169,11 +169,8 @@ test('a note\'s kind is a short lowercase name', () => {
   }
 });
 
-test('a note\'s data must have a JSON form and stay under the limit, counted in bytes', () => {
-  expect(noteProblem('k', 'x'.repeat(NOTE_DATA_LIMIT - 2))).toBeNull();
-  expect(noteProblem('k', 'x'.repeat(NOTE_DATA_LIMIT - 1))).toContain(`the limit is ${NOTE_DATA_LIMIT}`);
-  // Two bytes each in UTF-8: half as many characters fill it.
-  expect(noteProblem('k', 'é'.repeat(NOTE_DATA_LIMIT / 2))).toContain('the limit is');
+test('a note\'s data must have a JSON form, and may be of any size', () => {
+  expect(noteProblem('k', 'x'.repeat(5_000_000))).toBeNull();
   expect(noteProblem('k', undefined)).toContain('no JSON form');
   expect(noteProblem('k', () => 1)).toContain('no JSON form');
   const loop: Record<string, unknown> = {};
@@ -187,7 +184,6 @@ test('a note that is refused throws and leaves the journal as it was', () => {
   appendEvent(path, 'g', { type: 'stimulus', source: 'terminal', text: 'a' });
   const size = journalSize(path);
   expect(() => appendEvent(path, 'g', { type: 'note', kind: 'Bad Kind', data: 1 })).toThrow('kind');
-  expect(() => appendEvent(path, 'g', { type: 'note', kind: 'k', data: 'x'.repeat(NOTE_DATA_LIMIT) })).toThrow('limit');
   expect(() => appendEvent(path, 'g', { type: 'note', kind: 'k', data: undefined })).toThrow('JSON');
   expect(journalSize(path)).toBe(size);
   // A journal that never saw a refused note: nothing is created for one either.
