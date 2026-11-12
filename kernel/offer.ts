@@ -276,10 +276,10 @@ export interface Report {
 export const SECTIONS = ['What it changes:', 'Why:', 'Evidence:', 'Not verified:'] as const;
 
 /** The gates of a mutation, in the order they run, as a fresh seed meets them. */
-const GATES = ['body', 'size', 'organs', 'types', 'tests-kernel', 'tests-body', 'smoke'] as const;
+const GATES = ['body', 'organs', 'types', 'tests-kernel', 'tests-body', 'smoke'] as const;
 
 /**
- * The full gates on `commit` as if it were a fresh seed: its size, its organs as it pins them, the
+ * The full gates on `commit` as if it were a fresh seed: its organs as it pins them, the
  * type check, the kernel's tests, the body's tests and the smoke run, in a checkout made for it.
  * The commit is compared with itself, so the rule about which paths a mutation may change, and any
  * rule about what the rest must be identical to, has nothing to say here: an offer may touch the

@@ -44,12 +44,11 @@ You may rewrite everything in `body/`. These rules you cannot change, and a body
 1. Your workspace is at the commit you named, with nothing uncommitted.
 2. Compared with the running generation, the commit changes only `body/`, `test/body/` and `BACKLOG.md`. Everything else is protected, including `kernel/`, `test/kernel/`, `BIRTH.md`, `README.md`, the project files, and any new file at the top level. The one way anything else changes is a mutation from the species, which this same gate judges by the rule under The species.
 3. `body/` holds only plain files: no symlinks, no nested repositories.
-4. The files in `body/` are at most 200000 bytes together.
-5. Gate `organs`: every organ pinned in `body/organs.json` is in the cache with exactly the pinned hash, unpacks safely, and its check exits with 0. Skipped when you pin none.
-6. The type check passes: `bun x tsc --noEmit`.
-7. The kernel's tests pass: `bun test test/kernel`.
-8. Your own tests pass: `bun test test/body`, with at least one test and no failure, ending in bun's own summary.
-9. Last, the smoke gate: the kernel starts the candidate against a throwaway journal holding one message, with a stub model on localhost, and requires `generation.ready` and then a reply within 30 seconds. The stub speaks both wire protocols, and the run is made as the provider your owner configured. A body that cannot start, hangs, or cannot answer over that provider's protocol at `TENERAL_BASE_URL` is rejected.
+4. Gate `organs`: every organ pinned in `body/organs.json` is in the cache with exactly the pinned hash, unpacks safely, and its check exits with 0. Skipped when you pin none.
+5. The type check passes: `bun x tsc --noEmit`.
+6. The kernel's tests pass: `bun test test/kernel`.
+7. Your own tests pass: `bun test test/body`, with at least one test and no failure, ending in bun's own summary.
+8. Last, the smoke gate: the kernel starts the candidate against a throwaway journal holding one message, with a stub model on localhost, and requires `generation.ready` and then a reply within 30 seconds. The stub speaks both wire protocols, and the run is made as the provider your owner configured. A body that cannot start, hangs, or cannot answer over that provider's protocol at `TENERAL_BASE_URL` is rejected.
 
 The checks run in a fresh checkout of the commit, not in your workspace, and with almost no environment: only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on, and `TMPDIR` points at a temporary directory made for that run. A test that depends on another variable or on a file that is not committed fails there. When the commit pins organs, `TENERAL_ORGANS` is set as well, to the commit's own. The smoke gate adds the variables listed under Start, with the three for the provider pointing at the stub and `TENERAL_HEARTBEAT_MINUTES` set to 0; nothing else your owner configured is there. `TENERAL_AUTH` is not set in that run even when your owner signed in: a body that is given a key in `TENERAL_API_KEY` must use that key at `TENERAL_BASE_URL` and never look for a sign-in. A rejection reaches you with the name of the gate and the end of its output. One at gate `interrupted` is the exception to the rule above: the kernel was stopped before it judged the commit, nothing was decided, and you call `mutate` again for the same commit.
 

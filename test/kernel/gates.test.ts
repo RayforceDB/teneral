@@ -4,7 +4,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
-  BODY_SIZE_LIMIT, DEFAULT_CHECKS, git, runGates, sh, startStubProvider, type GateOptions,
+  DEFAULT_CHECKS, git, runGates, sh, startStubProvider, type GateOptions,
 } from '../../kernel/gates';
 import { readResponsesStream } from '../../body/provider';
 import { PROVIDERS } from '../../kernel/providers';
@@ -76,11 +76,10 @@ test('a commit other than the checked-out one is rejected', async () => {
   expect((await runGates(dir, seed, '0'.repeat(40), NO_CHECKS)).gate).toBe('head');
 });
 
-test('an body/ larger than the limit is rejected', async () => {
+test('nothing limits the size of body/', async () => {
   const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
-  writeFiles(dir, { 'body/big.ts': 'x'.repeat(BODY_SIZE_LIMIT + 1) });
-  const next = commitAll(dir, 'grow');
-  expect((await runGates(dir, seed, next, NO_CHECKS)).gate).toBe('size');
+  writeFiles(dir, { 'body/big.ts': 'x'.repeat(2_000_000) });
+  expect(await runGates(dir, seed, commitAll(dir, 'grow'), NO_CHECKS)).toEqual(OK);
 });
 
 test('the first failing check is reported with its output', async () => {
@@ -184,15 +183,6 @@ test('a symlink committed under body/ is rejected and named', async () => {
   expect(result.gate).toBe('body');
   expect(result.output).toContain('body/link.ts');
   expect(result.output).not.toContain('body/a.ts');
-});
-
-test('body size is the size of the commit, not of what lies in the worktree', async () => {
-  const { dir, seed } = makeRepo({ 'body/a.ts': 'a\n' });
-  writeFiles(dir, { 'body/a.ts': 'small\n' });
-  const next = commitAll(dir, 'change');
-  git(dir, 'update-index', '--skip-worktree', 'body/a.ts');
-  writeFiles(dir, { 'body/a.ts': 'x'.repeat(BODY_SIZE_LIMIT + 1) });
-  expect(await runGates(dir, seed, next, NO_CHECKS)).toEqual(OK);
 });
 
 test('a check does not inherit the environment, only what it needs to run', async () => {

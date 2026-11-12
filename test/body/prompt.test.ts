@@ -19,7 +19,6 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 // "What the kernel requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
 // The numbers are checked against the kernel's own constants where it exports them.
 import { OWNER_REASON } from '../../kernel/back';
-import { BODY_SIZE_LIMIT } from '../../kernel/gates';
 import { CHANGEABLE } from '../../kernel/protected';
 import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
 import { ProviderError } from '../../body/provider';
@@ -75,7 +74,7 @@ test('it says how crashes are counted and that a rollback is the last step back'
 
 test('it lists what a mutation must pass, in the kernel\'s order', () => {
   const order = [
-    'nothing uncommitted', 'changes only', 'only plain files', `${BODY_SIZE_LIMIT} bytes`, '`bun x tsc --noEmit`',
+    'nothing uncommitted', 'changes only', 'only plain files', '`bun x tsc --noEmit`',
     '`bun test test/kernel`', '`bun test test/body`', 'at least one test and no failure', 'the smoke gate',
   ].map((phrase) => flat.indexOf(phrase));
   expect(order.every((at) => at !== -1)).toBe(true);

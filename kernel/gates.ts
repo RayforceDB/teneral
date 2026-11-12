@@ -9,9 +9,6 @@ import { ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parseOrgans, provideOrg
 import { protectedChanges } from './protected';
 import { judgeSpecies, type SpeciesOptions } from './species';
 
-/** Bytes of tracked files under body/. Roughly 50k tokens: small enough to read whole. */
-export const BODY_SIZE_LIMIT = 200_000;
-
 export interface GateResult {
   ok: boolean;
   gate: string;
@@ -589,8 +586,6 @@ export async function runGates(
     if (odd.length > 0) {
       return fail('body', `body/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
     }
-    const size = entries.reduce((total, entry) => total + entry.size, 0);
-    if (size > BODY_SIZE_LIMIT) return fail('size', `body/ is ${size} bytes; the limit is ${BODY_SIZE_LIMIT}`);
     pins = organsAt(dir, to);
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));

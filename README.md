@@ -11,7 +11,7 @@ A minimal agent that rewrites its own code, one measured generation at a time. T
 Two halves in one repository, and three directories that belong to one individual and are never committed.
 
 - `kernel/` is a small supervisor. It starts the agent, checks every new generation, and puts back the previous one when a new one fails. The agent cannot edit it; a newer kernel reaches an individual only from the project itself, as a mutation from [the species](#the-species).
-- `body/` is everything the agent may rewrite: how it calls the model, its tools, its sensors, how it builds its context. It is kept under 200,000 bytes so the agent can read all of itself.
+- `body/` is everything the agent may rewrite: how it calls the model, its tools, its sensors, how it builds its context. Nothing limits its size: how much of itself the agent can hold in mind is the agent's to manage.
 - `memory/journal.jsonl` is the agent's history, append-only. Every event carries the commit of the code that wrote it, so generations can be compared.
 - `soul/` holds a few Markdown files the agent writes about who it is and who it works with. They are part of every request to the model.
 - `inbox/` is where other programs leave messages for it.
@@ -22,7 +22,7 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 2. The agent calls its `mutate` tool. The tool commits the candidate, journals the request, and the process exits with code 75 when the turn ends.
 3. The kernel checks the commit:
    - compared with the running generation, it may change only `body/`, `test/body/` and `BACKLOG.md`. This is an allowlist: every other path, including any new file, is refused, unless the commit merges a later commit of [the species](#the-species) and holds outside those paths exactly what that commit holds;
-   - `body/` may hold only regular files, and no more than 200,000 bytes of them;
+   - `body/` may hold only regular files;
    - every organ the commit pins (see [Organs](#organs)) is in the cache with exactly the pinned hash, unpacks safely, and passes its own check. A body that pins none skips this;
    - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
    - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. The stand-in speaks both wire protocols, and the candidate is run as the provider you configured, with a dummy key: never with your key or your sign-in. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
@@ -359,7 +359,7 @@ A lineage also holds what is nobody else's business: sensors for its owner's thi
    - it descends from the species' head, so that it holds the offer and nothing older;
    - every commit on it is signed with this individual's key, and the last one describes the offer as above;
    - a scan of everything it would publish finds nothing that looks private (see below);
-   - the gates of a mutation pass on it as on a fresh seed: the size of `body/`, its organs as it pins them, the type check, the kernel's tests, the body's tests, the smoke run. The rule about which paths a mutation may change is not applied.
+   - the gates of a mutation pass on it as on a fresh seed: its organs as it pins them, the type check, the kernel's tests, the body's tests, the smoke run. The rule about which paths a mutation may change is not applied.
 
    It prints what would be published: the commits, each changed file with its size, the paths outside what a mutation may change, and the result of each check. The same is kept in `.teneral/offers/<commit>.json`.
 3. **Approve.** Publishing is public and cannot be taken back, so it is yours to allow. `TENERAL_PUBLISH` in `.env` says how:
