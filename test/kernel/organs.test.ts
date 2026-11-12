@@ -402,7 +402,8 @@ test('a check runs in its organ\'s directory with the checks\' bare environment,
 test('the candidate\'s checks and its smoke run are handed the candidate\'s organs, by name, in TENERAL_ORGANS', async () => {
   const bytes = tarGz(tool('from the candidate\'s pin'));
   const r = pinned({ ...pinOf('tool', sha(bytes), { dir: 'tool', check: ['bin/check'] }), ...pinOf('whole', sha(bytes)) }, {
-    'body/main.ts': "console.error('ENV=' + JSON.stringify(process.env));\nprocess.exit(1);\n",
+    // Only the one variable: the gate keeps the end of what a body printed, and a whole environment with long paths in it does not fit there.
+    'body/main.ts': "console.error('ENV=' + JSON.stringify({ TENERAL_ORGANS: process.env.TENERAL_ORGANS }));\nprocess.exit(1);\n",
   });
   stock(r.dir, bytes);
   // Fails on purpose, so what it saw comes back.
