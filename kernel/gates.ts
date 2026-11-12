@@ -5,6 +5,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEvent, readEvents } from './journal';
+import { ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parseOrgans, provideOrgans, type Organ } from './organs';
 import { protectedChanges } from './protected';
 
 /** Bytes of tracked files under body/. Roughly 50k tokens: small enough to read whole. */
@@ -47,6 +48,8 @@ export interface BodyPlaces {
   provider?: string;
   /** Where sign-in credentials are kept. Left out of a smoke run, which must not reach them. */
   auth?: string;
+  /** The directory that holds this generation's pinned organs, one entry per name (kernel/organs.ts). Left out when it pins none. */
+  organs?: string;
 }
 
 /** Everything the kernel itself sets for a body. The supervisor and the smoke gate both start one with exactly this. */
@@ -57,6 +60,7 @@ export function bodyEnv(at: BodyPlaces): Record<string, string> {
     TENERAL_SOUL: at.soul, TENERAL_OWNER: at.owner,
     ...(at.provider ? { TENERAL_PROVIDER: at.provider } : {}),
     ...(at.auth ? { TENERAL_AUTH: at.auth } : {}),
+    ...(at.organs ? { TENERAL_ORGANS: at.organs } : {}),
   };
 }
 
@@ -190,8 +194,14 @@ export function linkModules(root: string, dir: string): void {
   symlinkSync(source, target);
 }
 
+/** What `commit` pins as its organs: the text of its body/organs.json, or null when it has no such file. */
+export function organsAt(dir: string, commit: string): string | null {
+  if (gitPaths(dir, 'ls-tree', '-z', '--name-only', commit, '--', ORGANS_FILE).length === 0) return null;
+  return gitRaw(dir, 'show', `${commit}:${ORGANS_FILE}`);
+}
+
 /** The main checkout of the repo that `dir` (possibly one of its worktrees) belongs to. */
-function repoRoot(dir: string): string {
+export function repoRoot(dir: string): string {
   return dirname(git(dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
 }
 
@@ -360,6 +370,34 @@ async function runCheck(
   return { code, stdout, stderr, output: stdout + stderr + note, interrupted: first === 'abort' };
 }
 
+/**
+ * What the `organs` gate does, for pins already read: every archive is in the cache under its
+ * hash and is unpacked, and every check an organ names exits with 0. A check runs in its organ's
+ * root with what any check sees (`tmp` is its temp directory) and TENERAL_ORGANS, and nothing
+ * else. Returns the directory to hand on as TENERAL_ORGANS, null when nothing is pinned.
+ */
+export async function tryOrgans(
+  root: string, organs: readonly Organ[], tmp: string, o: { signal?: AbortSignal; graceMs?: number; timeoutMs?: number } = {},
+): Promise<{ dir: string | null; problem?: string; interrupted?: boolean }> {
+  const provided = await provideOrgans(root, organs, { verify: true });
+  if (provided.problem !== undefined) return { dir: null, problem: provided.problem };
+  if (provided.dir === null) return { dir: null };
+  const env = { ...checkEnv(tmp), TENERAL_ORGANS: provided.dir };
+  const timeoutMs = o.timeoutMs ?? ORGAN_CHECK_TIMEOUT_MS;
+  for (const organ of organs) {
+    if (!organ.check) continue;
+    const cwd = organRoot(root, organ);
+    const r = await runCheck([join(cwd, organ.check[0]!), ...organ.check.slice(1)], cwd, env, { signal: o.signal, graceMs: o.graceMs ?? 5_000, timeoutMs });
+    if (r.interrupted) return { dir: null, interrupted: true };
+    if (r.code !== 0) {
+      // The reason goes last: a gate's output is kept from its end.
+      return { dir: null, problem: `${r.output.trimEnd()}\norgan ${organ.name}: its check (${organ.check.join(' ')}), run in the organ's directory, `
+        + `did not exit with 0 within ${timeoutMs / 1000} s` };
+    }
+  }
+  return { dir: provided.dir };
+}
+
 /** What the stub endpoint says, whatever it is asked. Plain text and no tool calls, so a turn ends with it. */
 const STUB_REPLY = 'This is the kernel\'s stand-in for the model during a smoke test. Nothing to do.';
 
@@ -418,7 +456,8 @@ const SMOKE_STIMULUS = 'This is the kernel checking that a new generation can st
  * a body starts and can take a turn; this does. Returns null when it did, else what was missing.
  */
 async function smokeRun(
-  tree: string, commit: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number; provider?: string },
+  tree: string, commit: string, env: Record<string, string>,
+  o: { signal?: AbortSignal; graceMs: number; timeoutMs: number; provider?: string; organs?: string },
 ): Promise<{ problem: string | null; interrupted: boolean }> {
   const home = join(tree, GATE_SMOKE);
   const at: BodyPlaces = {
@@ -434,6 +473,8 @@ async function smokeRun(
     // The provider the owner configured, so the candidate is tried over the protocol it will really speak.
     // No `auth`: with the dummy key below a body has no reason to look for a sign-in, and is not told where one is.
     provider: o.provider,
+    // The candidate's own organs, which the gate before this one made ready.
+    organs: o.organs,
   };
   for (const dir of [at.inbox, at.soul, at.owner]) mkdirSync(dir, { recursive: true });
   appendEvent(at.journal, commit, { type: 'stimulus', source: 'terminal', text: SMOKE_STIMULUS });
@@ -499,6 +540,8 @@ export interface GateOptions {
   checkTimeoutMs?: number;
   /** The configured provider's id. The smoke run is made as that provider, against the stub, with a dummy key. */
   provider?: string;
+  /** How long the check of one organ may run. Default ORGAN_CHECK_TIMEOUT_MS. */
+  organTimeoutMs?: number;
 }
 
 /**
@@ -513,6 +556,7 @@ export async function runGates(
   const smoke = opts.smoke ?? checks === DEFAULT_CHECKS;
   const graceMs = opts.killGraceMs ?? 5_000;
   let root: string;
+  let pins: string | null;
   try {
     // These two say early, in the agent's own terms, why its worktree is not what it asked for.
     if (git(dir, 'rev-parse', 'HEAD') !== to) return fail('head', `the candidate is not at ${to}`);
@@ -530,10 +574,17 @@ export async function runGates(
     const size = entries.reduce((total, entry) => total + entry.size, 0);
     if (size > BODY_SIZE_LIMIT) return fail('size', `body/ is ${size} bytes; the limit is ${BODY_SIZE_LIMIT}`);
     root = repoRoot(dir);
+    pins = organsAt(dir, to);
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));
   }
-  if (checks.length === 0 && !smoke) return { ok: true, gate: 'all', output: '' };
+  let organs: Organ[];
+  try {
+    organs = parseOrgans(pins);
+  } catch (err) {
+    return fail('organs', err instanceof Error ? err.message : String(err));
+  }
+  if (checks.length === 0 && !smoke && organs.length === 0) return { ok: true, gate: 'all', output: '' };
   if (opts.signal?.aborted) return interrupted();
 
   let tree: string;
@@ -543,7 +594,13 @@ export async function runGates(
     return fail('git', err instanceof Error ? err.message : String(err));
   }
   try {
-    const env = checkEnv(join(tree, GATE_TMP));
+    let env = checkEnv(join(tree, GATE_TMP));
+    // Before anything of the candidate's runs, so its tests and its smoke run find the organs it pins.
+    // No network: an archive the agent did not put in the cache is a rejection, not a download.
+    const tried = await tryOrgans(root, organs, join(tree, GATE_TMP), { signal: opts.signal, graceMs, timeoutMs: opts.organTimeoutMs });
+    if (tried.interrupted) return interrupted();
+    if (tried.problem !== undefined) return fail('organs', tried.problem);
+    if (tried.dir !== null) env = { ...env, TENERAL_ORGANS: tried.dir };
     for (const check of checks) {
       const r = await runCheck(check.cmd, tree, env, { signal: opts.signal, graceMs, timeoutMs: opts.checkTimeoutMs ?? 600_000 });
       if (r.interrupted) return interrupted();
@@ -554,7 +611,7 @@ export async function runGates(
     }
     if (smoke) {
       // Last, so a body is only ever started once its types and tests are in order.
-      const r = await smokeRun(tree, to, env, { signal: opts.signal, graceMs, timeoutMs: opts.smokeTimeoutMs ?? 30_000, provider: opts.provider });
+      const r = await smokeRun(tree, to, env, { signal: opts.signal, graceMs, timeoutMs: opts.smokeTimeoutMs ?? 30_000, provider: opts.provider, organs: tried.dir ?? undefined });
       if (r.interrupted) return interrupted();
       if (r.problem !== null) return fail('smoke', r.problem);
     }

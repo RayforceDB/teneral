@@ -4,11 +4,12 @@ import {
 import { dirname, join } from 'node:path';
 import { identity } from './envelope';
 import {
-  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, runGates, sh, type GateResult,
+  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, runGates, sh, type GateResult,
 } from './gates';
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
 } from './journal';
+import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
 
 /** The agent exits with this code to ask for a molt. */
@@ -535,19 +536,36 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         return 'halted';
       }
       const gen = state.current;
+      // The organs this generation pins, from its own commit: after a rollback that is the older pin,
+      // whose tree is still in the cache. A tree that is gone is unpacked again from its archive. When
+      // that is gone too, nothing is started: a body without the organ it was gated with would only
+      // crash, and going back a generation would give up a sound one for a file the owner can put back.
+      let organs: string | null;
+      try {
+        const provided = await provideOrgans(p.root, parseOrgans(organsAt(p.root, gen)), { verify: false });
+        if (provided.problem !== undefined) throw new Error(provided.problem);
+        organs = provided.dir;
+      } catch (err) {
+        log(`cannot start generation ${gen}: ${reasonOf(err)}`);
+        log('nothing was changed, and no generation was given up: it starts once that is mended');
+        return 'halted';
+      }
+      if (stopping) return 'stopped';
       const mark = journalSize(p.journal);
       appendEvent(p.journal, gen, { type: 'generation.started', commit: gen });
       const since = () => readEventsFrom(p.journal, mark);
       const isReady = () => since().some((e) => e.type === 'generation.ready' && e.gen === gen);
 
+      // The organs are this generation's or nobody's: never a directory the supervisor's own environment happened to name.
+      const { TENERAL_ORGANS: _inherited, ...inherited } = process.env;
       const running = Bun.spawn(cmd, {
         cwd: p.live,
         env: {
-          ...process.env,
+          ...inherited,
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,
-            provider: process.env.TENERAL_PROVIDER, auth: p.auth,
+            provider: process.env.TENERAL_PROVIDER, auth: p.auth, organs: organs ?? undefined,
           }),
         },
         // stderr is passed on as it comes and its end kept, to say why if this generation has to be given up on.
