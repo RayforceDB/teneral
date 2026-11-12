@@ -1,9 +1,8 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { sh } from './gates';
 import { appendEvent, readEvents, type JournalEvent } from './journal';
 import {
-  dropLock, paths, readState, saveState, takeLock,
+  dropLock, installRoot, paths, readState, saveState, takeLock,
 } from './supervisor';
 
 // `./box back`: the owner sends the agent back to a generation it lived in before.
@@ -222,5 +221,5 @@ export function main(args: string[], root: string, out: (line: string) => void, 
 }
 
 if (import.meta.main) {
-  process.exit(main(process.argv.slice(2), join(import.meta.dir, '..'), (line) => console.log(line), (line) => console.error(line)));
+  process.exit(main(process.argv.slice(2), installRoot(import.meta.dir), (line) => console.log(line), (line) => console.error(line)));
 }

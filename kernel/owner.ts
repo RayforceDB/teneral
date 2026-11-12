@@ -10,9 +10,16 @@ import { join } from 'node:path';
 // is a file of its own kind, told apart by the end of its name and holding nothing. A line is
 // always written under a name ending in `.txt`, so no text, whatever it says, can be taken for an
 // interrupt. A body from before interrupts reads the file as an empty line and drops it.
+//
+// A third thing is left here for the kernel and not for the body: the owner's acceptance of a
+// species commit (kernel/species.ts). Its name ends in `.accept` and starts with a dot, and a
+// name that starts with a dot is one every body's reader passes over, so no body takes it for a
+// line. It holds the commit accepted. Here too the kind is in the name alone.
 
 /** What the name of an interrupt ends with. */
 export const INTERRUPT_SUFFIX = '.interrupt';
+/** What the name of an acceptance ends with. */
+export const ACCEPT_SUFFIX = '.accept';
 
 let lastMs = 0;
 let count = 0;
@@ -50,6 +57,21 @@ export function interrupt(dir: string): string {
   const name = nextName(INTERRUPT_SUFFIX);
   const tmp = join(dir, `.${name}.tmp`);
   writeFileSync(tmp, '');
+  renameSync(tmp, join(dir, name));
+  return name;
+}
+
+/**
+ * Say, as the owner, that the species commit `commit` is accepted. The supervisor takes the file
+ * in before it next judges a molt (`takeAccepts` in kernel/species.ts); the body never reads it.
+ * Returns the file's name.
+ */
+export function accept(dir: string, commit: string): string {
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('an acceptance names one commit by its full id');
+  mkdirSync(dir, { recursive: true });
+  const name = `.${nextName(ACCEPT_SUFFIX)}`;
+  const tmp = join(dir, `${name}.tmp`);
+  writeFileSync(tmp, commit);
   renameSync(tmp, join(dir, name));
   return name;
 }

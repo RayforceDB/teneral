@@ -1,8 +1,21 @@
-import { join } from 'node:path';
+import { RELAUNCH_EXIT } from './launcher';
 import { missingConfig } from './providers';
-import { supervise } from './supervisor';
+import { init, installRoot, supervise } from './supervisor';
 
-const root = join(import.meta.dir, '..');
+// The supervisor of one install. The launcher (kernel/launcher.ts) starts it, from the checkout of
+// the generation whose kernel this is, and says in TENERAL_ROOT which install it is for.
+const root = installRoot(import.meta.dir);
+if (process.argv[2] === '--prepare') {
+  // For the launcher, before any generation's kernel can be started: whatever is missing of the
+  // state file and the worktrees is made, and nothing is run.
+  try {
+    init(root);
+    process.exit(0);
+  } catch (err) {
+    console.error(`[teneral] cannot prepare ${root}: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
 // Said before anything starts: without these the agent would only fail later, in a way that reads like a crash.
 // What is needed depends on the provider: a key for most, a stored sign-in for some (kernel/providers.ts).
 const missing = missingConfig(process.env, root);
@@ -14,7 +27,8 @@ if (missing.length > 0) {
 
 try {
   const outcome = await supervise({ root });
-  process.exit(outcome === 'stopped' ? 0 : 1);
+  // RELAUNCH_EXIT: the generation is now one with another kernel, and the launcher starts that one.
+  process.exit(outcome === 'stopped' ? 0 : outcome === 'relaunch' ? RELAUNCH_EXIT : 1);
 } catch (err) {
   // Exit 2: the supervisor itself failed, as distinct from an agent that could not be kept running (1).
   console.error(`[teneral] the supervisor failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);

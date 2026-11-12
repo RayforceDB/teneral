@@ -4,8 +4,10 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
+import { accept } from '../../kernel/owner';
+import { readConsent } from '../../kernel/species';
 import {
-  CRASH_LIMIT, REJECTION_LIMIT, excused, init, paths, supervise, type Options,
+  CRASH_LIMIT, REJECTION_LIMIT, excused, init, installRoot, paths, supervise, type Options,
 } from '../../kernel/supervisor';
 import { git, runGates, type GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
@@ -1040,4 +1042,129 @@ process.exit(75);`)}` });
   expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
   expect(readEvents(p.journal).filter((e) => e.type === 'note')).toHaveLength(2);
+});
+
+// --- the species: a generation with another kernel, the owner's acceptance, a molt that was not judged ---
+
+/** An install on a first generation with a kernel file, and a second in the workspace that changes `files` as well as its body. */
+function withKernel(files: Record<string, string>, body = `${V1}\n// v2`) {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1, 'kernel/k.ts': 'export const k = 1;\n' });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': body, ...files });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  return { dir, p, seed, next };
+}
+
+test('promoting a generation with another kernel ends the supervisor, which asks for that kernel: the trial is named, the state and the journal are written, and its own checkout is left as it is', async () => {
+  const { dir, p, seed, next } = withKernel({ 'kernel/k.ts': 'export const k = 2;\n' });
+  const logs: string[] = [];
+  expect(await supervise({ root: dir, ...QUIET, log: (line) => { logs.push(line); } })).toBe('relaunch');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+  expect(JSON.parse(readFileSync(p.trial, 'utf8'))).toEqual({ generation: next, previous: seed });
+  const events = readEvents(p.journal);
+  expect(events.at(-1)).toMatchObject({ type: 'generation.promoted', commit: next, previous: seed, gen: next });
+  expect(started(events)).toBe(1);
+  // The kernel that judged it may be running from that checkout; the launcher makes it the new generation's.
+  expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
+  expect(logs.at(-1)).toContain('has a kernel of its own; handing over to it');
+  expect(existsSync(p.lock)).toBe(false);
+});
+
+test('a generation that changes its body alone is run by the kernel that promoted it, with no trial', async () => {
+  const { dir, p, seed, next } = withKernel({ 'BACKLOG.md': 'more\n', 'test/body/a.test.ts': 'x\n' });
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+  expect(existsSync(p.trial)).toBe(false);
+  expect(git(p.live, 'rev-parse', 'HEAD')).toBe(next);
+});
+
+test('rolling back to a generation with another kernel ends the supervisor the same way, and the next one runs that generation', async () => {
+  const { dir, p, seed, next } = withKernel({ 'kernel/k.ts': 'export const k = 2;\n' }, 'process.exit(1);\n');
+  expect(await supervise({ root: dir, ...QUIET })).toBe('relaunch');
+  // What the launcher does next: the new generation's kernel, here the same code, runs it. Its body cannot start.
+  const logs: string[] = [];
+  expect(await supervise({ root: dir, ...QUIET, log: (line) => { logs.push(line); } })).toBe('relaunch');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+  const events = readEvents(p.journal);
+  expect(events.at(-1)).toMatchObject({ type: 'generation.rolledback', commit: next, to: seed, gen: seed });
+  expect(logs.at(-1)).toContain(`generation ${seed} has a kernel of its own, which is not this one`);
+  // And the old one, told of the rollback, runs to its end.
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
+});
+
+test('a molt that was refused without a verdict may be asked for again, any number of times: the owner\'s word, or the species\' remote, is what is waited for', async () => {
+  const rounds = REJECTION_LIMIT + 3;
+  const r = await seedOnly(asksFor("'c'.repeat(40)", rounds), {
+    gates: () => ({ ok: false, gate: 'species', output: 'ask your owner', undecided: true }), restartDelayMs: 20,
+  });
+  expect(r.outcome).toBe('stopped');
+  expect(r.events.filter((e) => e.type === 'molt.rejected')).toHaveLength(rounds);
+  for (const line of r.logs.filter((l) => l.includes('rejected at gate'))) expect(line).toContain('restarting in 20 ms');
+  // The same answer with a verdict in it is counted as ever.
+  const counted = await seedOnly(asksFor("'c'.repeat(40)", rounds), { gates: () => ({ ok: false, gate: 'species', output: 'differs' }) });
+  expect(counted.outcome).toBe('halted');
+});
+
+test('what the owner accepted from a talk client is taken in at the start and before the gates judge: written down, journaled, and the file gone', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  // The second generation is asked for by a first whose owner accepts that very commit while it runs.
+  const saying = V1.replace("appendEvent(journal, gen, { type: 'molt.requested'", `
+require('node:fs').writeFileSync(require('node:path').join(process.env.TENERAL_OWNER, '.said-while-running.accept'), process.env.TEST_NEXT);
+appendEvent(journal, gen, { type: 'molt.requested'`);
+  expect(saying).not.toBe(V1);
+  writeFiles(dir, { 'body/main.ts': saying });
+  const first = commitAll(dir, 'the owner speaks while it runs');
+  writeFileSync(p.state, JSON.stringify({ current: first, previous: null }));
+  writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  // And one that was said before anything ran.
+  accept(p.owner, seed);
+  const seen: (string | undefined)[] = [];
+  const logs: string[] = [];
+  expect(await supervise({
+    root: dir, ...QUIET, log: (line) => { logs.push(line); },
+    gates: () => {
+      seen.push(readConsent(dir).accepted);
+      return PASS;
+    },
+  })).toBe('stopped');
+  expect(seen).toEqual([next]);
+  expect(readdirSync(p.owner)).toEqual([]);
+  expect(logs).toContain(`the owner accepted species commit ${seed}`);
+  expect(logs).toContain(`the owner accepted species commit ${next}`);
+  expect(readEvents(p.journal).filter((e) => e.type === 'species.accepted')).toMatchObject([
+    { commit: seed, route: 'talk', gen: first }, { commit: next, route: 'talk', gen: first },
+  ]);
+  expect(readConsent(dir)).toMatchObject({ accepted: next, route: 'talk' });
+});
+
+test('what the launcher tells a kernel about itself is not handed on to the body', async () => {
+  const saved = { root: process.env.TENERAL_ROOT, launcher: process.env.TENERAL_LAUNCHER };
+  const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'stimulus', source: 'env', text: String(process.env.TENERAL_ROOT) + ' ' + String(process.env.TENERAL_LAUNCHER) });
+process.exit(0);
+` });
+  process.env.TENERAL_ROOT = dir;
+  process.env.TENERAL_LAUNCHER = '1';
+  try {
+    expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  } finally {
+    if (saved.root === undefined) delete process.env.TENERAL_ROOT; else process.env.TENERAL_ROOT = saved.root;
+    if (saved.launcher === undefined) delete process.env.TENERAL_LAUNCHER; else process.env.TENERAL_LAUNCHER = saved.launcher;
+  }
+  expect(readEvents(paths(dir).journal).find((e) => e.type === 'stimulus')).toMatchObject({ text: 'undefined undefined' });
+});
+
+test('a kernel entry point acts on the install the launcher names, or the one its checkout belongs to', () => {
+  expect(installRoot('/srv/agent/kernel', {})).toBe('/srv/agent');
+  expect(installRoot('/srv/agent/.teneral/live/kernel', {})).toBe('/srv/agent');
+  expect(installRoot('/srv/agent/.teneral/candidate/kernel', {})).toBe('/srv/agent/.teneral/candidate');
+  expect(installRoot('/srv/agent/.teneral/live/kernel', { TENERAL_ROOT: '/elsewhere' })).toBe('/elsewhere');
 });

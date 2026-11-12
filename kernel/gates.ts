@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { appendEvent, readEvents } from './journal';
 import { ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parseOrgans, provideOrgans, type Organ } from './organs';
 import { protectedChanges } from './protected';
+import { judgeSpecies, type SpeciesOptions } from './species';
 
 /** Bytes of tracked files under body/. Roughly 50k tokens: small enough to read whole. */
 export const BODY_SIZE_LIMIT = 200_000;
@@ -15,6 +16,8 @@ export interface GateResult {
   ok: boolean;
   gate: string;
   output: string;
+  /** A rejection that judged nothing, so that the same commit may be asked for again: the owner has yet to accept a species commit, or the species could not be fetched. */
+  undecided?: boolean;
 }
 
 export interface Check {
@@ -145,7 +148,7 @@ export function git(dir: string, ...args: string[]): string {
  * The NUL-separated paths a `-z` git command prints, exactly as git gave them.
  * Never trimmed: ` body/x` is not `body/x`, and trimming would let it through the allowlist.
  */
-function gitPaths(dir: string, ...args: string[]): string[] {
+export function gitPaths(dir: string, ...args: string[]): string[] {
   return gitRaw(dir, ...args).split('\0').filter(Boolean);
 }
 
@@ -349,7 +352,7 @@ interface CheckRun extends ShResult {
   interrupted: boolean;
 }
 
-async function runCheck(
+export async function runCheck(
   cmd: readonly string[], cwd: string, env: Record<string, string>, o: { signal?: AbortSignal; graceMs: number; timeoutMs: number },
 ): Promise<CheckRun> {
   const running = start(cmd, cwd, env);
@@ -542,6 +545,15 @@ export interface GateOptions {
   provider?: string;
   /** How long the check of one organ may run. Default ORGAN_CHECK_TIMEOUT_MS. */
   organTimeoutMs?: number;
+  /** What the owner configured about the species, and the launcher this supervisor runs under (kernel/species.ts). */
+  species?: SpeciesOptions;
+}
+
+/** The paths outside the changeable ones in which commits `a` and `b` differ: empty when they have the same kernel, project files and all. */
+export function protectedDiff(dir: string, a: string, b: string): string[] {
+  // --no-renames lists both ends of a move, so moving a protected file out is caught.
+  // -z: without it git prints unusual names quoted and escaped, which would not match the allowlist.
+  return protectedChanges(gitPaths(dir, 'diff', '--name-only', '--no-renames', '-z', a, b));
 }
 
 /**
@@ -561,11 +573,17 @@ export async function runGates(
     // These two say early, in the agent's own terms, why its worktree is not what it asked for.
     if (git(dir, 'rev-parse', 'HEAD') !== to) return fail('head', `the candidate is not at ${to}`);
     if (git(dir, 'status', '--porcelain') !== '') return fail('head', 'the candidate has uncommitted changes');
-    // --no-renames lists both ends of a move, so moving a protected file out is caught.
-    // -z: without it git prints unusual names quoted and escaped, which would not match the allowlist.
-    const changed = gitPaths(dir, 'diff', '--name-only', '--no-renames', '-z', from, to);
-    const forbidden = protectedChanges(changed);
-    if (forbidden.length > 0) return fail('protected', `protected paths changed: ${forbidden.join(', ')}`);
+    root = repoRoot(dir);
+    const forbidden = protectedDiff(dir, from, to);
+    if (forbidden.length > 0) {
+      // Outside the changeable paths a lineage holds what the species holds, so this is a mutation from
+      // the species or it is refused. A molt that stays inside them never gets here, and needs no network.
+      const verdict = await judgeSpecies(dir, root, from, to, forbidden, opts.species, { signal: opts.signal, graceMs });
+      if (!verdict.ok) {
+        if (verdict.interrupted) return interrupted();
+        return { ...fail(verdict.gate, verdict.output), ...(verdict.undecided ? { undecided: true } : {}) };
+      }
+    }
     const entries = bodyEntries(dir, to);
     const odd = entries.filter((entry) => !PLAIN_MODES.has(entry.mode));
     if (odd.length > 0) {
@@ -573,7 +591,6 @@ export async function runGates(
     }
     const size = entries.reduce((total, entry) => total + entry.size, 0);
     if (size > BODY_SIZE_LIMIT) return fail('size', `body/ is ${size} bytes; the limit is ${BODY_SIZE_LIMIT}`);
-    root = repoRoot(dir);
     pins = organsAt(dir, to);
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));

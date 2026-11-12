@@ -14,7 +14,7 @@ import {
   provideOrgans, treePath, type Organ,
 } from '../../kernel/organs';
 import { init, paths, supervise } from '../../kernel/supervisor';
-import { commitAll, makeRepo, writeFiles } from './helpers';
+import { commitAll, makeLineage, makeRepo, writeFiles } from './helpers';
 
 const OK: GateResult = { ok: true, gate: 'all', output: '' };
 const NO_CHECKS: never[] = [];
@@ -88,7 +88,7 @@ const pinOf = (name: string, hash: string, more: Record<string, unknown> = {}) =
 
 /** A repo whose candidate commit pins `pins`; the seed pins nothing. */
 function pinned(pins: unknown, files: Record<string, string> = {}) {
-  const { dir, seed } = makeRepo({ 'body/a.ts': 'export const a = 1;\n' });
+  const { dir, seed } = makeLineage({ 'body/a.ts': 'export const a = 1;\n' });
   writeFiles(dir, { [ORGANS_FILE]: typeof pins === 'string' ? pins : JSON.stringify(pins, null, 2), ...files });
   return { dir, seed, next: commitAll(dir, 'pin') };
 }

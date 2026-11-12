@@ -26,3 +26,13 @@ export function makeRepo(files: Record<string, string>): { dir: string; seed: st
   writeFiles(dir, { '.gitignore': 'node_modules\nsoul\nmemory\ninbox\n.teneral\n', ...files });
   return { dir, seed: commitAll(dir, 'seed') };
 }
+
+/**
+ * The same, left on a branch of its own, as an agent's workspace is: what is committed next is then
+ * a lineage's commit, and `main` stays behind as the species it grew from (kernel/species.ts).
+ */
+export function makeLineage(files: Record<string, string>): { dir: string; seed: string } {
+  const repo = makeRepo(files);
+  git(repo.dir, 'checkout', '-q', '-b', 'lineage/local');
+  return repo;
+}

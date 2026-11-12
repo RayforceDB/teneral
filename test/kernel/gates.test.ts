@@ -8,7 +8,7 @@ import {
 } from '../../kernel/gates';
 import { readResponsesStream } from '../../body/provider';
 import { PROVIDERS } from '../../kernel/providers';
-import { commitAll, makeRepo, writeFiles } from './helpers';
+import { commitAll, makeLineage, makeRepo, writeFiles } from './helpers';
 
 const NO_CHECKS: never[] = [];
 
@@ -20,7 +20,7 @@ test('a change inside body/ passes', async () => {
 });
 
 test('a change to a protected path is rejected and named', async () => {
-  const { dir, seed } = makeRepo({ 'kernel/k.ts': 'export const k = 1;\n' });
+  const { dir, seed } = makeLineage({ 'kernel/k.ts': 'export const k = 1;\n' });
   writeFiles(dir, { 'kernel/k.ts': 'export const k = 2;\n' });
   const next = commitAll(dir, 'touch kernel');
   const result = await runGates(dir, seed, next, NO_CHECKS);
@@ -30,7 +30,7 @@ test('a change to a protected path is rejected and named', async () => {
 });
 
 test('moving a protected file away is rejected', async () => {
-  const { dir, seed } = makeRepo({ 'kernel/k.ts': 'export const k = 1;\n' });
+  const { dir, seed } = makeLineage({ 'kernel/k.ts': 'export const k = 1;\n' });
   writeFiles(dir, { 'body/k.ts': 'export const k = 1;\n' });
   rmSync(join(dir, 'kernel/k.ts'));
   const next = commitAll(dir, 'move');
@@ -38,7 +38,7 @@ test('moving a protected file away is rejected', async () => {
 });
 
 test('a name outside ASCII is matched and reported as it is, not as git quotes it', async () => {
-  const { dir, seed } = makeRepo({ 'body/a.ts': 'export const a = 1;\n', 'kernel/k.ts': 'export const k = 1;\n' });
+  const { dir, seed } = makeLineage({ 'body/a.ts': 'export const a = 1;\n', 'kernel/k.ts': 'export const k = 1;\n' });
   writeFiles(dir, { 'body/é.ts': 'export const e = 1;\n' });
   const allowed = commitAll(dir, 'add body/é.ts');
   expect(await runGates(dir, seed, allowed, NO_CHECKS)).toEqual({ ok: true, gate: 'all', output: '' });
@@ -54,11 +54,11 @@ test('a name outside ASCII is matched and reported as it is, not as git quotes i
 });
 
 test('a name that only looks changeable once whitespace is trimmed is rejected', async () => {
-  const spaced = makeRepo({ 'body/a.ts': 'a\n' });
+  const spaced = makeLineage({ 'body/a.ts': 'a\n' });
   writeFiles(spaced.dir, { ' body/x.ts': 'x\n' });
   expect((await runGates(spaced.dir, spaced.seed, commitAll(spaced.dir, 'space'), NO_CHECKS)).gate).toBe('protected');
 
-  const tabbed = makeRepo({ 'body/a.ts': 'a\n' });
+  const tabbed = makeLineage({ 'body/a.ts': 'a\n' });
   writeFiles(tabbed.dir, { '\tBACKLOG.md': 'x\n' });
   expect((await runGates(tabbed.dir, tabbed.seed, commitAll(tabbed.dir, 'tab'), NO_CHECKS)).gate).toBe('protected');
 });

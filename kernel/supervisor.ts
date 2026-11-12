@@ -4,13 +4,14 @@ import {
 import { dirname, join } from 'node:path';
 import { identity } from './envelope';
 import {
-  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, runGates, sh, type GateResult,
+  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, protectedDiff, runGates, sh, type GateResult,
 } from './gates';
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
 } from './journal';
 import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
+import { cageNotice, takeAccepts } from './species';
 
 /** The agent exits with this code to ask for a molt. */
 export const MOLT_EXIT = 75;
@@ -64,6 +65,8 @@ export interface Paths {
   owner: string;
   /** Where sign-in credentials are kept. See kernel/signin.ts. */
   auth: string;
+  /** Names a generation whose kernel is new and not yet proven, for the launcher. See kernel/launcher.ts. */
+  trial: string;
 }
 
 export function paths(root: string): Paths {
@@ -80,6 +83,7 @@ export function paths(root: string): Paths {
     soul: join(root, 'soul'),
     owner: join(root, '.teneral', 'owner'),
     auth: authDir(root),
+    trial: join(root, '.teneral', 'trial.json'),
   };
 }
 
@@ -87,6 +91,17 @@ export interface State {
   current: string;
   /** The generation to return to if `current` fails; null when there is none. */
   previous: string | null;
+}
+
+/**
+ * The install a kernel entry point acts on, given where its own kernel/ directory is. The launcher
+ * says it in TENERAL_ROOT. Without that, a kernel in a generation's checkout, `.teneral/live`,
+ * belongs to the install two directories up, and any other is the install's own.
+ */
+export function installRoot(kernelDir: string, env: Record<string, string | undefined> = process.env): string {
+  if (env.TENERAL_ROOT) return env.TENERAL_ROOT;
+  const home = dirname(kernelDir);
+  return home.endsWith(join('.teneral', 'live')) ? dirname(dirname(home)) : home;
 }
 
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -453,10 +468,12 @@ function lastOf<T extends JournalEvent['type']>(events: JournalEvent[], type: T)
 }
 
 /**
- * Run generations until the agent exits cleanly or the owner stops it ('stopped'),
- * or nothing can run ('halted').
+ * Run generations until the agent exits cleanly or the owner stops it ('stopped'), or nothing
+ * can run ('halted'), or the generation was changed to one whose kernel is not this one
+ * ('relaunch'): the kernel of a generation is the kernel that runs it, so this supervisor ends
+ * there and the launcher starts that generation's own (kernel/launcher.ts).
  */
-export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
+export async function supervise(opts: Options): Promise<'stopped' | 'halted' | 'relaunch'> {
   const p = paths(opts.root);
   const cmd = opts.agentCmd ?? [...BODY_CMD];
   const readyTimeoutMs = opts.readyTimeoutMs ?? 60_000;
@@ -467,7 +484,10 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
   const stableRunMs = opts.stableRunMs ?? 3_600_000;
   const showStderr = opts.stderr ?? ((chunk: Uint8Array) => { process.stderr.write(chunk); });
   const gates = opts.gates
-    ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, { signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER }));
+    ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, {
+      signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER,
+      species: { upstream: process.env.TENERAL_UPSTREAM, mode: process.env.TENERAL_SPECIES, launcher: Number(process.env.TENERAL_LAUNCHER) || null },
+    }));
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));
 
   try {
@@ -515,6 +535,18 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
     }
     const leftover = dropLeftoverGateTrees(p.root);
     if (leftover.length > 0) log(`removed gate checkouts left by an earlier run: ${leftover.join(', ')}`);
+    // The cage is the owner's and stays as it is, whatever the species has; the owner is only told.
+    const cage = cageNotice(p.root, dirname(import.meta.dir));
+    if (cage !== null) log(cage);
+    /** What the owner accepted from a talk client since this was last looked at; never throws. */
+    const accepts = (gen: string): void => {
+      try {
+        for (const commit of takeAccepts(p.root, p.owner, p.journal, gen, log)) log(`the owner accepted species commit ${commit}`);
+      } catch (err) {
+        log(`the owner's acceptances could not be read: ${reasonOf(err)}`);
+      }
+    };
+    accepts(state.current);
     /** Crashes in a row with no reply in between. */
     let crashes = 0;
     /** Restarts of this generation after a crash, in total. */
@@ -523,11 +555,27 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
     let rejected: { commit: string; times: number } | null = null;
     const delayAfter = (count: number) => Math.min(restartDelayMs * count, RESTART_DELAY_CAP_MS);
 
-    /** Write-ahead: the state first, then the checkout, and only then (by the caller) the journal. */
-    const moveTo = (next: State): boolean => {
+    /**
+     * Whether the kernel of `next` is another than the one of `gen`, which is the one running here:
+     * whether anything outside the changeable paths differs between the two commits.
+     */
+    const otherKernel = (gen: string, next: string): boolean => {
+      try {
+        return protectedDiff(p.root, gen, next).length > 0;
+      } catch {
+        // Not known: the launcher looks again, which costs a moment and can do no harm.
+        return true;
+      }
+    };
+    /**
+     * Write-ahead: the state first, then the checkout, and only then (by the caller) the journal.
+     * With `handover`, the checkout is left to the launcher: this kernel may be running from it, and
+     * its own files are not replaced under it.
+     */
+    const moveTo = (next: State, handover = false): boolean => {
       try {
         saveState(p, next);
-        syncLive(p, next.current);
+        if (!handover) syncLive(p, next.current);
       } catch (err) {
         log(`cannot switch to generation ${next.current}: ${reasonOf(err)}`);
         return false;
@@ -571,7 +619,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       const isReady = () => since().some((e) => e.type === 'generation.ready' && e.gen === gen);
 
       // The organs are this generation's or nobody's: never a directory the supervisor's own environment happened to name.
-      const { TENERAL_ORGANS: _inherited, ...inherited } = process.env;
+      // What the launcher told this kernel about itself is the kernel's to know, not something a body's tests should find set.
+      const { TENERAL_ORGANS: _inherited, TENERAL_ROOT: _root, TENERAL_LAUNCHER: _launcher, ...inherited } = process.env;
       const running = Bun.spawn(cmd, {
         cwd: p.live,
         env: {
@@ -683,9 +732,14 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         else if (ready) reason = `crashed ${CRASH_LIMIT} times without a reply`;
         // What it last wrote to stderr is usually the actual cause.
         if (lastWords !== '') reason += `. Its stderr ended with:\n${lastWords}`;
-        if (!moveTo({ current: to, previous: null })) return 'halted';
+        const handover = otherKernel(gen, to);
+        if (!moveTo({ current: to, previous: null }, handover)) return 'halted';
         appendEvent(p.journal, to, { type: 'generation.rolledback', commit: gen, to, reason });
         log(`rolled back ${gen} to ${to}: ${reason}`);
+        if (handover) {
+          log(`generation ${to} has a kernel of its own, which is not this one; handing over to it`);
+          return 'relaunch';
+        }
         continue;
       }
       // decision === 'gate', and the request exists or the decision would have been replaced above.
@@ -699,6 +753,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         // journal, and the next start answers it as interrupted.
         const abort = new AbortController();
         terminate = () => abort.abort();
+        accepts(gen);
         try {
           result = await gates(p.candidate, gen, request.commit, abort.signal);
         } finally {
@@ -712,7 +767,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         // waits one unit and is never stopped. Asking for the same rejected commit again is slowed more
         // each time and, at the limit, left to the owner. A run that was only interrupted judged nothing.
         const last = rejected as { commit: string; times: number } | null;
-        const times: number = result.gate === 'interrupted' ? 0 : (last?.commit === request.commit ? last.times : 0) + 1;
+        // Neither did one that waits for the owner's word on a species commit, or could not fetch the species.
+        const times: number = result.gate === 'interrupted' || result.undecided ? 0 : (last?.commit === request.commit ? last.times : 0) + 1;
         if (times > 0) rejected = { commit: request.commit, times };
         if (times >= REJECTION_LIMIT) {
           log(`molt to ${request.commit} rejected at gate ${result.gate}`);
@@ -724,9 +780,27 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         await pause(delay);
         continue;
       }
-      if (!moveTo({ current: request.commit, previous: gen })) return 'halted';
+      const handover = otherKernel(gen, request.commit);
+      if (handover) {
+        // A mutation from the species: the new generation comes with a kernel of its own, and this one judged it
+        // but will not run it. The launcher holds that kernel on trial, and goes back to `gen` by its own hand if
+        // it does not bring the generation to ready. Written before the state, so a state that names the new
+        // generation is never without it; one left by a kill before the state was saved names nothing current.
+        try {
+          writeFileSync(`${p.trial}.tmp`, `${JSON.stringify({ generation: request.commit, previous: gen })}\n`);
+          renameSync(`${p.trial}.tmp`, p.trial);
+        } catch (err) {
+          log(`cannot record that the kernel of ${request.commit} is on trial: ${reasonOf(err)}`);
+          return 'halted';
+        }
+      }
+      if (!moveTo({ current: request.commit, previous: gen }, handover)) return 'halted';
       appendEvent(p.journal, request.commit, { type: 'generation.promoted', commit: request.commit, previous: gen });
       log(`promoted ${request.commit}`);
+      if (handover) {
+        log(`generation ${request.commit} is a mutation from the species and has a kernel of its own; handing over to it`);
+        return 'relaunch';
+      }
     }
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
