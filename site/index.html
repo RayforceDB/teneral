@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>teneral: an agent that rewrites its own code</title>
+<meta name="description" content="A minimal agent that rewrites its own code, one measured generation at a time, under a kernel that checks every new body and puts back the last one that worked.">
+<meta property="og:title" content="teneral">
+<meta property="og:description" content="A minimal agent that rewrites its own code, one measured generation at a time. The conversation outlives every version.">
+<meta property="og:image" content="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root {
+    --paper: #f5f2ea;
+    --card: #fbf9f4;
+    --ink: #121210;
+    --soft: #5c5a52;
+    --line: #dcd7c9;
+    --accent: #a8561a;
+    --code: #ece8dc;
+    --max: 1040px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e0e0c;
+      --card: #161613;
+      --ink: #eeece4;
+      --soft: #a09d92;
+      --line: #2a2924;
+      --accent: #e0a060;
+      --code: #1c1b17;
+    }
+    .logo, .mark { filter: invert(1); }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 17px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  a:hover { color: var(--accent); }
+  code, pre { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-size: .9em; }
+  code { background: var(--code); padding: .1em .35em; border-radius: 4px; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+  header.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  header.top .mark { width: 34px; height: 34px; display: block; }
+  header.top nav { display: flex; gap: 22px; font-size: 15px; }
+  header.top nav a { text-decoration: none; color: var(--soft); }
+  header.top nav a:hover { color: var(--ink); }
+  @media (max-width: 560px) { header.top nav { gap: 16px; font-size: 14px; } header.top nav a.wide { display: none; } }
+
+  .hero { padding-top: 72px; padding-bottom: 84px; }
+  .hero .logo { width: min(460px, 78vw); height: auto; display: block; margin-left: -8px; }
+  .hero h1 {
+    font-size: clamp(30px, 5.2vw, 56px);
+    line-height: 1.08;
+    letter-spacing: -.025em;
+    font-weight: 650;
+    margin: 44px 0 20px;
+    max-width: 17ch;
+    text-wrap: balance;
+  }
+  .hero p.lede { font-size: clamp(18px, 2.1vw, 21px); color: var(--soft); max-width: 56ch; margin: 0 0 32px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-block; padding: 12px 20px; border-radius: 999px; text-decoration: none;
+    font-weight: 600; font-size: 16px; border: 1.5px solid var(--ink);
+  }
+  .btn.solid { background: var(--ink); color: var(--paper); }
+  .btn.solid:hover { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+  .btn:hover { border-color: var(--accent); }
+  .status {
+    display: inline-block; margin-left: 4px; font-size: 14px; color: var(--soft);
+  }
+  .status b { color: var(--accent); font-weight: 600; }
+
+  section { padding: 68px 0; border-top: 1px solid var(--line); }
+  .eyebrow { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 12px; }
+  h2 { font-size: clamp(25px, 3.2vw, 36px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 18px; font-weight: 650; max-width: 24ch; text-wrap: balance; }
+  section > .wrap > p { max-width: 64ch; color: var(--soft); margin: 0 0 16px; }
+  section > .wrap > p strong { color: var(--ink); font-weight: 600; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 34px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px 22px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -.01em; }
+  .card .path { font-size: 13px; color: var(--accent); margin: 0 0 10px; display: block; }
+  .card p { margin: 0; color: var(--soft); font-size: 15.5px; line-height: 1.55; }
+
+  .life { margin: 40px 0 8px; overflow-x: auto; }
+  .life svg { display: block; width: 100%; min-width: 620px; height: auto; color: var(--ink); }
+  .life .soft { color: var(--soft); }
+  ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 30px 0 0; display: grid; gap: 14px; max-width: 70ch; }
+  ol.steps li { counter-increment: s; position: relative; padding-left: 46px; color: var(--soft); }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px; width: 30px; height: 30px; border-radius: 50%;
+    border: 1.5px solid var(--ink); color: var(--ink); font-weight: 600; font-size: 14px;
+    display: grid; place-items: center;
+  }
+  ol.steps li strong { color: var(--ink); font-weight: 600; }
+
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 34px; }
+
+  pre {
+    background: var(--code); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+    overflow-x: auto; margin: 26px 0 0; line-height: 1.7; max-width: 64ch;
+  }
+  pre .c { color: var(--soft); }
+
+  ul.plain { margin: 22px 0 0; padding: 0; list-style: none; max-width: 66ch; display: grid; gap: 10px; }
+  ul.plain li { padding-left: 22px; position: relative; color: var(--soft); }
+  ul.plain li::before { content: ""; position: absolute; left: 2px; top: .68em; width: 8px; height: 8px; border-radius: 50% 50% 50% 0; background: var(--accent); }
+
+  footer { border-top: 1px solid var(--line); padding: 34px 0 60px; color: var(--soft); font-size: 14.5px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; justify-content: space-between; align-items: center; }
+  footer .mark { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <a href="#top" aria-label="teneral"><img class="mark" src="mark.png" alt=""></a>
+    <nav>
+      <a class="wide" href="#how">How it works</a>
+      <a href="#species">The species</a>
+      <a href="#start">Start</a>
+      <a href="https://github.com/singaraiona/teneral">GitHub</a>
+    </nav>
+  </header>
+</div>
+
+<main id="top">
+  <div class="wrap hero">
+    <img class="logo" src="logo.png" alt="teneral" width="1200" height="308">
+    <h1>An agent that rewrites its own code.</h1>
+    <p class="lede">One measured generation at a time, under a kernel that checks every new body and puts back the last one that worked. The conversation outlives every version.</p>
+    <div class="actions">
+      <a class="btn solid" href="#start">Raise one</a>
+      <a class="btn" href="https://github.com/singaraiona/teneral">Read the source</a>
+      <span class="status"><b>Status: experiment.</b> MIT, TypeScript on Bun, no runtime dependencies.</span>
+    </div>
+  </div>
+
+  <section id="what">
+    <div class="wrap">
+      <p class="eyebrow">The name</p>
+      <h2>Soft, and already itself.</h2>
+      <p><strong>Teneral</strong> is what entomologists call an insect that has just shed its old skin: the new body is there, but it has not hardened yet. Here it is a generation of the agent's code that was just switched on and has not yet proven it works.</p>
+      <p>The question behind the project is plain: can an agent become more capable by rebuilding its own harness, step by step, and where does that stop helping? The model that does the thinking is fixed. Everything around it is the agent's to change.</p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Body</h3>
+          <code class="path">body/</code>
+          <p>How it senses, thinks and acts: the model call, the tools, the sensors, the way it builds its context. Small enough to read, and its own to rewrite.</p>
+        </div>
+        <div class="card">
+          <h3>Kernel</h3>
+          <code class="path">kernel/</code>
+          <p>A small supervisor. It wakes the agent, judges every new body before the agent moves in, and returns it to the last one that stood. No mutation can change it.</p>
+        </div>
+        <div class="card">
+          <h3>Journal</h3>
+          <code class="path">memory/journal.jsonl</code>
+          <p>Everything that happens, append-only. Each line carries the commit of the body that wrote it, so generations can be compared against their own past.</p>
+        </div>
+        <div class="card">
+          <h3>Soul</h3>
+          <code class="path">soul/</code>
+          <p>A few pages the agent writes itself on its first day: its name, its character, who it lives alongside. Never committed, never shared.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h2>A mutation is a commit that has to earn its place.</h2>
+      <p>The agent edits a copy of itself, commits, and asks to mutate. The kernel takes that one commit into a clean checkout and decides. Until the new generation has answered once, it is on probation.</p>
+
+      <div class="life" role="img" aria-label="A running generation asks to mutate; the gates check the candidate; it is promoted to a new generation on probation, or rejected; a generation that cannot stand is rolled back.">
+        <svg viewBox="0 -84 880 284" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
+          <g font-size="12.5" fill="currentColor" stroke="none" opacity=".62" text-anchor="middle">
+            <text x="480" y="-62">silent or crashing: rolled back, and told why</text>
+            <text x="246" y="12">rejected: keeps running, told why</text>
+            <text x="197" y="98">asks to mutate</text>
+            <text x="390" y="126" font-size="12">paths · organs · types · tests · smoke</text>
+            <text x="583" y="98">promoted</text>
+            <text x="90" y="186">running</text>
+            <text x="700" y="186">teneral: on probation</text>
+            <text x="826" y="150">replied</text>
+          </g>
+          <g font-size="14" fill="currentColor" stroke="none" text-anchor="middle">
+            <text x="90" y="167">generation n</text>
+            <text x="390" y="105">gates</text>
+            <text x="700" y="167">generation n+1</text>
+          </g>
+          <circle cx="90" cy="110" r="34" fill="currentColor"/>
+          <path d="M132 110 H262"/><path d="M254 104 l8 6 -8 6"/>
+          <rect x="270" y="72" width="240" height="76" rx="14"/>
+          <path d="M390 72 C390 22 112 18 100 70" stroke-dasharray="5 6"/><path d="M93 61 l7 10 8 -8"/>
+          <path d="M518 110 H648"/><path d="M640 104 l8 6 -8 6"/>
+          <circle cx="700" cy="110" r="34" stroke-dasharray="3 6" stroke-width="2.2"/>
+          <path d="M742 110 H790"/><path d="M782 104 l8 6 -8 6"/>
+          <circle cx="826" cy="110" r="20" fill="currentColor"/>
+          <path d="M700 72 C700 -92 76 -92 76 70" stroke-dasharray="5 6"/><path d="M69 61 l7 10 7 -10"/>
+        </svg>
+      </div>
+
+      <ol class="steps">
+        <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
+        <li><strong>The gates.</strong> Only its own paths may change. Then, in a fresh checkout: the type check, the kernel's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
+        <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
+        <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./box back</code> returns to any earlier generation.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="species">
+    <div class="wrap">
+      <p class="eyebrow">The species</p>
+      <h2>Each clone is its own individual. They still share a kernel.</h2>
+      <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges in its body. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
+
+      <div class="two">
+        <div class="card">
+          <h3>Taking from the species</h3>
+          <p>The agent merges the species into its own workspace and asks to mutate. Outside its body, the result must equal a species commit byte for byte, and that commit only moves forward. A new kernel needs the owner's <code>/accept</code>, and is put back by a small launcher if it cannot start.</p>
+        </div>
+        <div class="card">
+          <h3>Offering back</h3>
+          <p>An offer is a branch with one change and nothing private. The kernel checks it as a stranger would, the owner approves that exact commit, and it goes out as a pull request. Other individuals can run it and report. A human merges, and signs.</p>
+        </div>
+        <div class="card">
+          <h3>Organs</h3>
+          <p>A native dependency is pinned in the body by address and hash. The kernel verifies and unpacks it at the gate, and each generation runs with exactly its own version, so a rollback brings the old binary back too.</p>
+        </div>
+      </div>
+
+      <ul class="plain">
+        <li>The cage is the owner's: the container, its flags and the launcher are never changed by a mutation.</li>
+        <li>Where the install lists the maintainer's keys, a species commit without their signature is refused.</li>
+        <li>These guard against mistakes, not against intent. The agent has a shell in its own repository, and the README says exactly where that matters.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="wrap">
+      <p class="eyebrow">Start</p>
+      <h2>Raise one.</h2>
+      <p>You need Docker and git. The first start asks which model to use, then the agent wakes for the first time, reads the letter written to it, looks at itself, and says hello.</p>
+<pre><span class="c"># a clone is a new individual</span>
+git clone https://github.com/singaraiona/teneral.git
+cd teneral
+
+./box up      <span class="c"># choose a model, then it is born</span>
+./box talk    <span class="c"># attach a terminal; Ctrl+C leaves it running</span>
+./box back    <span class="c"># return it to the generation before</span></pre>
+      <p style="margin-top:26px">The agent keeps running whether or not anyone is watching. It is woken by your words, a clock, messages from other individuals, and whatever senses it builds for itself.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span><img class="mark" src="mark.png" alt="">teneral · MIT</span>
+    <span>An experiment. Read what it does not do yet before trusting it with anything.</span>
+    <a href="https://github.com/singaraiona/teneral">github.com/singaraiona/teneral</a>
+  </div>
+</footer>
+
+</body>
+</html>
