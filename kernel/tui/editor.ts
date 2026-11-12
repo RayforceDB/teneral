@@ -178,13 +178,24 @@ export interface InputLayout {
   above: number;
 }
 
+/** The same, with where in the text each row shown begins: for whoever colours a part of the text. */
+export interface PlacedLayout extends InputLayout {
+  starts: number[];
+}
+
 /**
  * The text as rows of `max` columns: each of its lines cut where the row ends. When there are
  * more rows than `maxRows`, the ones around the cursor are shown.
  */
 export function layout(text: string, cursor: number, max: number, maxRows: number): InputLayout {
+  const { rows, row, col, above } = placed(text, cursor, max, maxRows);
+  return { rows, row, col, above };
+}
+
+export function placed(text: string, cursor: number, max: number, maxRows: number): PlacedLayout {
   const cols = Math.max(2, max);
   const rows: string[] = [];
+  const starts: number[] = [];
   let at = { row: 0, col: 0 };
   let offset = 0;
   for (const line of text.split('\n')) {
@@ -192,13 +203,15 @@ export function layout(text: string, cursor: number, max: number, maxRows: numbe
     let w = 0;
     let i = 0;
     const here = () => { if (offset + i === cursor) at = { row: rows.length, col: w }; };
+    const next = () => {
+      starts.push(offset + i - row.length);
+      rows.push(row);
+      row = '';
+      w = 0;
+    };
     for (const ch of line) {
       const cw = charWidth(ch.codePointAt(0)!);
-      if (w + cw > cols) {
-        rows.push(row);
-        row = '';
-        w = 0;
-      }
+      if (w + cw > cols) next();
       here();
       row += ch;
       w += cw;
@@ -207,14 +220,13 @@ export function layout(text: string, cursor: number, max: number, maxRows: numbe
     here();
     // A cursor after the last column of a full row belongs at the start of the next.
     if (offset + i === cursor && w >= cols) {
-      rows.push(row);
-      row = '';
+      next();
       at = { row: rows.length, col: 0 };
     }
-    rows.push(row);
+    next();
     offset += line.length + 1;
   }
   const shown = Math.max(1, maxRows);
   const above = Math.max(0, Math.min(at.row, rows.length - shown));
-  return { rows: rows.slice(above, above + shown), row: at.row - above, col: at.col, above };
+  return { rows: rows.slice(above, above + shown), row: at.row - above, col: at.col, above, starts: starts.slice(above, above + shown) };
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EMPTY, attach, edit, insert, layout, sent, type Edit } from '../../../kernel/tui/editor';
+import { EMPTY, attach, edit, insert, layout, placed, sent, type Edit } from '../../../kernel/tui/editor';
 import type { Attachment } from '../../../kernel/tui/images';
 import { KeyParser, type Key } from '../../../kernel/tui/keys';
 
@@ -256,4 +256,23 @@ test('a line carries at most four images, the same one only once, and sending it
   expect([after.text, after.chips.length, after.history]).toEqual(['', 0, ['earlier', 'earlier words']]);
   // A message of images only adds nothing to the history.
   expect(sent(attach({ ...EMPTY, history: ['x'] }, image(2)), '').history).toEqual(['x']);
+});
+
+test('each row shown is known by where in the text it begins, across line breaks, rows cut at the edge, wide characters and rows scrolled out of view', () => {
+  expect(placed('/help', 5, 20, 8).starts).toEqual([0]);
+  expect(placed('one\ntwo\n\nfour', 0, 20, 8).starts).toEqual([0, 4, 8, 9]);
+  // Cut at ten columns: five wide characters to a row.
+  const wide = '日本語日本語日本語';
+  expect(placed(wide, 0, 10, 8)).toEqual({ rows: ['日本語日本', '語日本語'], row: 0, col: 0, above: 0, starts: [0, 5] });
+  // A character outside the basic plane is two units of the text and one cell pair of the row.
+  expect(placed('🙂🙂🙂🙂', 8, 6, 8).starts).toEqual([0, 6]);
+  // The cursor after a full row is on a row of its own, which begins where the text ends.
+  expect(placed('abcdef', 6, 6, 8)).toEqual({ rows: ['abcdef', ''], row: 1, col: 0, above: 0, starts: [0, 6] });
+  // Only the rows around the cursor are shown, and the starts are theirs.
+  const many = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n');
+  const few = placed(many, many.length, 20, 3);
+  expect(few.rows).toEqual(['line 7', 'line 8', 'line 9']);
+  expect(few.starts.map((at) => many.slice(at, at + 6))).toEqual(few.rows);
+  // Without them it is the layout it always was.
+  expect(layout(many, many.length, 20, 3)).toEqual({ rows: few.rows, row: 2, col: 6, above: 7 });
 });
