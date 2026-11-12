@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { helpRows } from './commands';
 import { eventName, journalSize, readEventsFrom, type JournalEvent } from './journal';
 import { accept, interrupt, tell } from './owner';
 import { ownerCommand } from './offer';
@@ -260,7 +261,8 @@ export interface TalkOptions {
  * With a person typing: the last few exchanges are shown, every line goes to the agent the moment
  * it is entered, and everything journaled from then on is shown as it happens, except the lines
  * typed here. `/quit` or the end of input (Ctrl-D) ends this program, at once. The agent goes on.
- * `/stop` interrupts the turn the agent is in, and says so when it is in none.
+ * `/stop` interrupts the turn the agent is in, and says so when it is in none. `/help` lists the
+ * commands there are here.
  *
  * With piped input, the rule is made for scripts:
  * - Lines are sent one at a time. A line is sent when the agent is at rest; the next one, or the
@@ -369,6 +371,8 @@ export async function talk(o: TalkOptions): Promise<number> {
         if (text === '/accept' || text.startsWith('/accept ')) acceptCommit(text.slice(7).trim());
         else if (!o.interactive) queue.push(text);
         else if (text === '/stop') stop();
+        // The commands this client has, from the table both clients read (kernel/commands.ts).
+        else if (text === '/help') for (const row of ['The commands here; every other line goes to the agent as your words:', ...helpRows('plain')]) o.note(row);
         else if (!answered(text)) send(text);
         nudge();
       }
@@ -380,7 +384,7 @@ export async function talk(o: TalkOptions): Promise<number> {
 
   if (o.interactive) {
     history();
-    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /accept accepts the species commit it asked you about. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
+    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /accept accepts the species commit it asked you about. /help lists the commands. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
     if (turn.busy) o.note('(the agent is in the middle of a turn)');
   }
 

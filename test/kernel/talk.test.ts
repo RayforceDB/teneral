@@ -4,6 +4,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { helpRows } from '../../kernel/commands';
 import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
 import { ACCEPT_SUFFIX, INTERRUPT_SUFFIX } from '../../kernel/owner';
 import { git } from '../../kernel/gates';
@@ -339,6 +340,20 @@ test('with no journal and nobody answering, a piped line gives up after the wait
   expect(s.notes.join('\n')).toContain('giving up');
   // The line stays where the agent will find it when it starts.
   expect(readdirSync(s.owner)).toHaveLength(1);
+});
+
+test('/help typed by a person lists the commands this client has, from the table both clients read, and is never sent', async () => {
+  const s = setup();
+  expect(await talk({ ...s.base, lines: from(' /help ', '/quit'), interactive: true })).toBe(0);
+  const said = s.notes.join('\n');
+  expect(said).toContain('--- attached. Type to talk.');
+  expect(said).toContain('/help lists the commands.');
+  expect(said).toContain(['The commands here; every other line goes to the agent as your words:', ...helpRows('plain')].join('\n'));
+  for (const name of ['/help', '/stop', '/accept [commit]', '/offers', '/approve <commit>', '/quit']) expect(said).toContain(`\n  ${name} `);
+  // What only the screen client has is not offered here.
+  expect(said).not.toMatch(/\/image|\/tools|\/history|\/generations|\/plain|Esc|Tab/);
+  expect(existsSync(s.owner)).toBe(false);
+  expect(readEvents(s.journal)).toEqual([]);
 });
 
 test('/quit ends the client at once and is never sent', async () => {
