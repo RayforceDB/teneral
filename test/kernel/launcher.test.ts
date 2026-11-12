@@ -139,7 +139,7 @@ test('an install that was never started is prepared by the install\'s own kernel
 test('a kernel that stops with a status of its own, with nothing on trial, is simply what the launcher ends with', async () => {
   const { root, seed } = install(kernel('A', 'process.exit(1);'));
   // A generation before it is named, as it stays for as long as this one is current; that alone is no trial.
-  const earlier = git(root, 'commit-tree', '-m', 'earlier', `${seed}^{tree}`);
+  const earlier = git(root, '-c', 'user.name=test', '-c', 'user.email=test@localhost', 'commit-tree', '-m', 'earlier', `${seed}^{tree}`);
   writeFileSync(paths(root).state, JSON.stringify({ current: seed, previous: earlier }));
   const r = await run(root);
   expect(r.code).toBe(1);
