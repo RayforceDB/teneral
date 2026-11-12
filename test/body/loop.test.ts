@@ -344,6 +344,203 @@ test('a refusal that stays after the images are gone is passed on, and one about
   expect(asked).toBe(1);
 });
 
+// --- interrupted by the owner ---
+
+/** A provider that waits until its call is cancelled, as the real ones do, and counts how often it was asked. */
+function stalling() {
+  const state = { calls: 0, entered: () => {} };
+  const provider: Provider = (_messages, _tools, options) => {
+    state.calls += 1;
+    state.entered();
+    return new Promise<Reply>((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(new ProviderError('provider request cancelled', null)), { once: true });
+    });
+  };
+  return { state, provider };
+}
+
+/** Every call a reply made has exactly one result, and nothing else has one. */
+function paired(journal: string): boolean {
+  const events = readEvents(journal);
+  const calls = events.flatMap((e) => (e.type === 'assistant' ? e.toolCalls.map((c) => c.id) : [])).sort();
+  const results = events.flatMap((e) => (e.type === 'tool.result' ? [e.callId] : [])).sort();
+  return JSON.stringify(calls) === JSON.stringify(results);
+}
+
+test('interrupted while the model is asked: the request is cancelled, not tried again, and the turn ends with nothing owed', async () => {
+  const s = setup([]);
+  const { state, provider } = stalling();
+  const controller = new AbortController();
+  state.entered = () => setTimeout(() => controller.abort(), 10);
+  expect(await runTurn({ ...s.deps, provider, signal: controller.signal })).toBe('interrupted');
+  expect(state.calls).toBe(1);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'turn.interrupted']);
+  expect(needsTurn(readEvents(s.journal))).toBe(false);
+});
+
+test('whatever the provider throws once the owner interrupted, nothing is asked again: not at half the budget, not without the images', async () => {
+  for (const error of [new ProviderError('provider answered 400: maximum context length', 400, 'maximum context length'), new ProviderError('provider answered 400: image input is not supported', 400, 'image input is not supported'), new Error('socket closed')]) {
+    const s = setup([]);
+    appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: `see\n[image: memory/images/${'a'.repeat(64)}.png]` });
+    const controller = new AbortController();
+    let calls = 0;
+    const provider: Provider = async () => {
+      calls += 1;
+      controller.abort();
+      throw error;
+    };
+    const sight = { load: () => ({ name: 'a.png', mime: 'image/png', data: 'AAAA' }) };
+    expect(await runTurn({ ...s.deps, provider, sight, signal: controller.signal })).toBe('interrupted');
+    expect(calls).toBe(1);
+    expect(readEvents(s.journal).at(-1)!.type).toBe('turn.interrupted');
+  }
+});
+
+test('interrupted while a tool runs: the tool is told, its result says so, the calls after it are answered unrun, and no new request is made', async () => {
+  let told = false;
+  const slow: Tool = {
+    spec: { name: 'slow', description: '', parameters: {} },
+    run: (_args, _ctx, signal) => new Promise<string>((resolve) => {
+      signal!.addEventListener('abort', () => { told = true; resolve('stopped half-way'); }, { once: true });
+    }),
+  };
+  const s = setup([
+    { text: 'working', toolCalls: [{ id: 'c1', name: 'echo', args: {} }, { id: 'c2', name: 'slow', args: {} }, { id: 'c3', name: 'echo', args: {} }, { id: 'c4', name: 'slow', args: {} }] },
+    { text: 'never asked for', toolCalls: [] },
+  ], [echo, slow]);
+  const controller = new AbortController();
+  const started: string[] = [];
+  const done = runTurn({ ...s.deps, signal: controller.signal, onTool: (name) => { started.push(name); if (name === 'slow') setTimeout(() => controller.abort(), 10); } });
+  expect(await done).toBe('interrupted');
+  expect(told).toBe(true);
+  expect(started).toEqual(['echo', 'slow']);
+  expect(s.seen).toHaveLength(1);
+  const events = readEvents(s.journal);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'tool.intent', 'tool.result', 'tool.result', 'tool.result', 'turn.interrupted']);
+  const results = events.flatMap((e) => (e.type === 'tool.result' ? [e] : []));
+  expect(results[0]).toMatchObject({ callId: 'c1', ok: true, output: 'echo:{}' });
+  expect(results[1]).toMatchObject({ callId: 'c2', ok: false });
+  expect(results[1]!.output).toMatch(/^\[interrupted\] Your owner interrupted this turn while this tool was running\..*\nstopped half-way$/s);
+  for (const [i, id] of [[2, 'c3'], [3, 'c4']] as const) expect(results[i]).toMatchObject({ callId: id, ok: false, output: '[not started] Your owner interrupted this turn before this tool ran.' });
+  expect(paired(s.journal)).toBe(true);
+  expect(needsTurn(events)).toBe(false);
+});
+
+test('a tool that does not stop when asked is left behind after a moment, and what it does later disturbs nothing', async () => {
+  let finish: (text: string) => void = () => {};
+  let fail: (err: Error) => void = () => {};
+  const deaf: Tool = { spec: { name: 'deaf', description: '', parameters: {} }, run: () => new Promise<string>((resolve) => { finish = resolve; }) };
+  const doomed: Tool = { spec: { name: 'doomed', description: '', parameters: {} }, run: () => new Promise<string>((_resolve, reject) => { fail = reject; }) };
+  for (const name of ['deaf', 'doomed']) {
+    const s = setup([{ text: '', toolCalls: [{ id: 'c1', name, args: {} }] }], [deaf, doomed]);
+    const controller = new AbortController();
+    const began = Date.now();
+    const done = runTurn({ ...s.deps, signal: controller.signal, abandonMs: 30, onTool: () => setTimeout(() => controller.abort(), 10) });
+    expect(await done).toBe('interrupted');
+    expect(Date.now() - began).toBeLessThan(2000);
+    const result = readEvents(s.journal).find((e) => e.type === 'tool.result')!;
+    expect(result).toMatchObject({ callId: 'c1', ok: false });
+    expect((result as { output: string }).output).toMatch(/^\[interrupted\].*\nIt did not stop when asked and was left behind: it may still be running\.$/s);
+    const before = readEvents(s.journal).length;
+    // Late, and to nobody: no second result, and no rejection left unhandled to end the process.
+    finish('late');
+    fail(new Error('late'));
+    await Bun.sleep(20);
+    expect(readEvents(s.journal)).toHaveLength(before);
+    expect(paired(s.journal)).toBe(true);
+  }
+});
+
+test('a tool that throws because it was stopped is recorded as interrupted, with what it threw', async () => {
+  const thrower: Tool = {
+    spec: { name: 'thrower', description: '', parameters: {} },
+    run: (_args, _ctx, signal) => new Promise<string>((_resolve, reject) => { signal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }),
+  };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'thrower', args: {} }] }], [thrower]);
+  const controller = new AbortController();
+  expect(await runTurn({ ...s.deps, signal: controller.signal, onTool: () => setTimeout(() => controller.abort(), 10) })).toBe('interrupted');
+  const result = readEvents(s.journal).find((e) => e.type === 'tool.result') as { ok: boolean; output: string };
+  expect(result.ok).toBe(false);
+  expect(result.output).toMatch(/^\[interrupted\].*\nerror: aborted$/s);
+});
+
+test('a reply with tool calls that arrived as the owner interrupted is journaled, none of its calls is run, and each has its answer', async () => {
+  const controller = new AbortController();
+  const s = setup([], [echo]);
+  let ran = 0;
+  const counted: Tool = { ...echo, async run() { ran += 1; return 'ran'; } };
+  const provider: Provider = async () => {
+    // A provider that does not hear the signal: the reply comes all the same.
+    controller.abort();
+    return { text: 'on it', toolCalls: [{ id: 'c1', name: 'echo', args: {} }, { id: 'c2', name: 'echo', args: {} }] };
+  };
+  expect(await runTurn({ ...s.deps, provider, tools: [counted], signal: controller.signal })).toBe('interrupted');
+  expect(ran).toBe(0);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.result', 'tool.result', 'turn.interrupted']);
+  expect(paired(s.journal)).toBe(true);
+});
+
+test('a finished reply that had already arrived ends the turn as done: the interruption came too late and is dropped', async () => {
+  const controller = new AbortController();
+  const s = setup([]);
+  const provider: Provider = async () => {
+    controller.abort();
+    return { text: 'all done', toolCalls: [] };
+  };
+  expect(await runTurn({ ...s.deps, provider, signal: controller.signal })).toBe('done');
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant']);
+});
+
+test('a signal already aborted when the turn begins asks the model nothing', async () => {
+  const s = setup([{ text: 'never', toolCalls: [] }]);
+  const controller = new AbortController();
+  controller.abort();
+  expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('interrupted');
+  expect(s.seen).toHaveLength(0);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'turn.interrupted']);
+});
+
+test('a molt requested before the interruption stays requested: the turn ends as a molt, and the calls after it are not run', async () => {
+  const controller = new AbortController();
+  const molting: Tool = {
+    spec: { name: 'molt', description: '', parameters: {} },
+    async run(_args, ctx) {
+      appendEvent(ctx.journal, ctx.gen, { type: 'molt.requested', commit: 'c'.repeat(40), motive: 'm' });
+      ctx.moltCommit = 'c'.repeat(40);
+      controller.abort();
+      return 'requested';
+    },
+  };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'molt', args: {} }, { id: 'c2', name: 'echo', args: {} }] }], [molting, echo]);
+  expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('molt');
+  const events = readEvents(s.journal);
+  expect(events.map((e) => e.type)).not.toContain('turn.interrupted');
+  expect(events.at(-1)).toMatchObject({ type: 'tool.result', callId: 'c2', ok: false, output: 'error: not run, because a molt was requested earlier in this reply' });
+  expect(paired(s.journal)).toBe(true);
+});
+
+test('a turn that is not interrupted is as it was: the signal changes nothing, and the tools are handed it', async () => {
+  const handed: unknown[] = [];
+  const spy: Tool = { spec: { name: 'spy', description: '', parameters: {} }, async run(_args, _ctx, signal) { handed.push(signal); return 'ok'; } };
+  const controller = new AbortController();
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'spy', args: {} }] }, { text: 'done', toolCalls: [] }], [spy]);
+  expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('done');
+  expect(handed).toEqual([controller.signal]);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'assistant']);
+  expect(readEvents(s.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, output: 'ok' });
+});
+
+test('after an interruption the next thing said starts a turn that sees it', async () => {
+  const s = setup([{ text: 'I had not begun; what now?', toolCalls: [] }]);
+  appendEvent(s.journal, 'g1', { type: 'turn.interrupted' });
+  expect(needsTurn(readEvents(s.journal))).toBe(false);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'something else' });
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen[0]!.map((m) => m.content?.slice(0, 13))).toEqual(['SYS', 'go', '[interrupted]', 'something els']);
+});
+
+// --- images and length together ---
+
 test('an image refused and then a request too long: each is answered once, in turn', async () => {
   const seen: ChatMessage[][] = [];
   const s = withImage(async (messages) => {
