@@ -96,7 +96,8 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
   return out;
 }
 
-export type Provider = (messages: ChatMessage[], tools: ToolSpec[]) => Promise<Reply>;
+export interface ProviderCallOptions { signal?: AbortSignal }
+export type Provider = (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions) => Promise<Reply>;
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -126,6 +127,9 @@ export class ProviderError extends Error {
     this.body = body;
   }
 }
+
+/** What a call is rejected with when its caller cancelled it (`options.signal`). Not a failure of the provider: nothing is to be tried again. */
+const cancelled = (): ProviderError => new ProviderError('provider request cancelled', null);
 
 /** Some endpoints answer with a list of parts instead of a string; the text parts are the reply. */
 type WireContent = string | null | unknown[];
@@ -173,10 +177,13 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
   const send = cfg.fetch ?? fetch;
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  return async (messages, tools) => {
+  return async (messages, tools, options) => {
+    // Cancelled before it began: nothing is sent.
+    if (options?.signal?.aborted) throw cancelled();
     const body: Record<string, unknown> = { model: cfg.model, messages: toChatMessages(messages) };
     if (tools.length > 0) body.tools = tools.map((t) => ({ type: 'function', function: t }));
-    const signal = AbortSignal.timeout(timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     let res: Response;
     let text: string;
     try {
@@ -188,6 +195,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       });
       text = await res.text();
     } catch (err) {
+      if (options?.signal?.aborted) throw cancelled();
       // Without a limit, an endpoint that stops answering would hold the agent forever.
       if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
       throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
@@ -348,16 +356,21 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     }
   };
   let summaries = cfg.summaries !== false;
-  const once = async (messages: ChatMessage[], tools: ToolSpec[]): Promise<Reply> => {
+  const once = async (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions): Promise<Reply> => {
+    // Cancelled before it began, or between the two tries below: no token is asked for and nothing is sent.
+    if (options?.signal?.aborted) throw cancelled();
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
     if (instructions !== '') body.instructions = instructions;
     if (tools.length > 0) body.tools = toResponsesTools(tools, cfg.namespace);
     // Without this the reasoning comes back with no summary at all. `auto` is the most detailed one the model has.
     if (summaries) body.reasoning = { summary: 'auto' };
-    const signal = AbortSignal.timeout(timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     const post = async (bearer: string): Promise<{ res: Response; text: string }> => {
       try {
+        // Cancelled while the token was fetched or renewed: the request is not made.
+        if (options?.signal?.aborted) throw cancelled();
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
           // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
@@ -369,12 +382,14 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         return { res, text: await res.text() };
       } catch (err) {
         if (err instanceof ProviderError) throw err;
+        if (options?.signal?.aborted) throw cancelled();
         if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
         throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
       }
     };
     let bearer = await token();
     let { res, text } = await post(bearer);
+    if (options?.signal?.aborted) throw cancelled();
     if (res.status === 401) {
       // The token may have run out or been replaced by another process. One more, then the answer stands.
       const next = await token(bearer);
@@ -383,15 +398,15 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text);
     return readResponsesStream(text);
   };
-  return async (messages, tools) => {
+  return async (messages, tools, options) => {
     try {
-      return await once(messages, tools);
+      return await once(messages, tools, options);
     } catch (err) {
       // A model that does not reason, or an account that may not have summaries, refuses the field.
       // The owner's view of the reasoning is not worth a turn: asked again without, and not asked for after that.
       if (!summaries || !saysNoSummary(err)) throw err;
       summaries = false;
-      return once(messages, tools);
+      return once(messages, tools, options);
     }
   };
 }

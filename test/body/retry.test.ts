@@ -95,3 +95,12 @@ test('a refusal of the images in a request is told from other refusals', () => {
   ];
   for (const err of others) expect(saysNoImages(err)).toBe(false);
 });
+
+test('a call its caller cancelled is not read as too long or as a refusal of images, and never as this code\'s own fault', () => {
+  const cancelled = new ProviderError('provider request cancelled', null);
+  expect(saysTooLong(cancelled)).toBe(false);
+  expect(saysNoImages(cancelled)).toBe(false);
+  // Should one ever reach the patience loop, it is not counted towards an exit: the loop itself ends an interrupted turn before that (body/loop.ts).
+  expect(failureKind(cancelled)).toBe('passing');
+  expect(verdict(failureKind(cancelled), 100)).toBe('retry');
+});
