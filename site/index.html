@@ -109,7 +109,7 @@
 
   pre {
     background: var(--code); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
-    overflow-x: auto; margin: 26px 0 0; line-height: 1.7; max-width: 64ch;
+    overflow-x: auto; margin: 26px 0 0; line-height: 1.7; max-width: 100%; width: fit-content;
   }
   pre .c { color: var(--soft); }
 
@@ -130,6 +130,7 @@
     <nav>
       <a class="wide" href="#how">How it works</a>
       <a href="#species">The species</a>
+      <a class="wide" href="#memory">Memory</a>
       <a href="#start">Start</a>
       <a href="https://github.com/singaraiona/teneral">GitHub</a>
     </nav>
@@ -253,6 +254,45 @@
     </div>
   </section>
 
+  <section id="memory">
+    <div class="wrap">
+      <p class="eyebrow">Memory</p>
+      <h2>The journal is the record. What the agent remembers with is RayforceDB.</h2>
+      <p>The kernel keeps one thing: an append-only journal that the agent cannot rewrite. Everything the agent thinks with is its own to build, and to rebuild in every generation: what it stores, how it indexes, what it recalls into a request, what it lets fade.</p>
+      <p>The first living individual chose <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a> as the engine for that, and adopted it as an organ: a SIMD-accelerated columnar database in pure C with no dependencies, small enough to pin by hash and start in a moment.</p>
+
+      <div class="two">
+        <div class="card">
+          <h3>Why it fits</h3>
+          <p>One small binary, so a generation carries its exact version and a rollback brings the old one back. Tables partitioned by date for the raw events, queries and rules over facts and their sources, and a write-ahead log of its own under the store.</p>
+        </div>
+        <div class="card">
+          <h3>Rebuildable by rule</h3>
+          <p>Whatever the agent keeps outside the journal must be rebuildable from it, in a place named by its schema version. A mutation that changes the shape of memory writes to a new place; the body before it still finds data it understands.</p>
+        </div>
+        <div class="card">
+          <h3>Two projects, one loop</h3>
+          <p>teneral runs RayforceDB under a real workload every day. What an individual finds, it reports or patches upstream; what RayforceDB releases, an individual installs by changing one hash and asking to mutate.</p>
+        </div>
+      </div>
+
+<pre><span class="c">// body/organs.json: the whole installation</span>
+{
+  "rayforce": {
+    "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
+    "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
+    "dir": "rayforce-3.0.2-linux-x86_64",
+    "check": ["./rayforce", "--help"]
+  }
+}</pre>
+      <div class="actions" style="margin-top:26px">
+        <a class="btn solid" href="https://rayforcedb.com/">RayforceDB</a>
+        <a class="btn" href="https://github.com/RayforceDB/rayforce">Source and releases</a>
+      </div>
+      <p style="margin-top:22px">The seed body ships no memory beyond the journal: an organ is a choice each individual makes. This is the one ours made.</p>
+    </div>
+  </section>
+
   <section id="start">
     <div class="wrap">
       <p class="eyebrow">Start</p>
@@ -274,7 +314,7 @@ cd teneral
   <div class="wrap">
     <span><img class="mark" src="mark.png" alt="">teneral · MIT</span>
     <span>An experiment. Read what it does not do yet before trusting it with anything.</span>
-    <a href="https://github.com/singaraiona/teneral">github.com/singaraiona/teneral</a>
+    <span><a href="https://github.com/singaraiona/teneral">github.com/singaraiona/teneral</a> · memory on <a href="https://rayforcedb.com/">RayforceDB</a></span>
   </div>
 </footer>
 
