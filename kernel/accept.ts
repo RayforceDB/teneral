@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { acceptedLine, tell } from './owner';
 import { acceptSpecies, chooseAccept } from './species';
 import { installRoot, paths, readState } from './supervisor';
 
@@ -34,8 +35,9 @@ export function main(args: string[], root: string, out: (line: string) => void, 
       return 1;
     }
     acceptSpecies(root, p.journal, readState(p).current, chosen.commit, 'box');
+    tell(p.owner, acceptedLine(chosen.commit));
     out(`Accepted species commit ${chosen.commit.slice(0, 12)}${chosen.subject === '' ? '' : ` (${chosen.subject})`}, and every one before it.`);
-    out('A mutation that stands on it now goes on to the checks. Tell the agent to ask again.');
+    out('A mutation that stands on it now goes on to the checks. The agent was told to ask again.');
     return 0;
   } catch (e) {
     err(`Not done: ${e instanceof Error ? e.message : String(e)}.`);

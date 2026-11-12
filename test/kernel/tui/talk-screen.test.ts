@@ -1,3 +1,4 @@
+import { acceptedLine } from '../../../kernel/owner';
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -1353,7 +1354,7 @@ test('an interruption made at another terminal, or found in the history on attac
 
 // --- the species: /accept, the acceptance in the conversation, and what is said about the cage ---
 
-test('/accept leaves the owner\'s acceptance for the kernel, as a file of its own kind, and no line for the agent; once the kernel has taken it, a quiet line stands in the conversation', () => {
+test('/accept leaves the owner\'s acceptance for the kernel, as a file of its own kind, and tells the agent in one line to ask again; once the kernel has taken it, a quiet line stands in the conversation', () => {
   const s = stage(100, 40, { name: 'Mica' });
   settled(s);
   git(s.p.root, 'init', '-q', '-b', 'main');
@@ -1371,9 +1372,9 @@ test('/accept leaves the owner\'s acceptance for the kernel, as a file of its ow
   expect(hidden()).toHaveLength(1);
   expect(hidden()[0]!.startsWith('.')).toBe(true);
   expect(readFileSync(join(s.p.owner, hidden()[0]!), 'utf8')).toBe(commit);
-  expect(channel(s)).toEqual([]);
-  expect(sentFiles(s)).toEqual([]);
-  expect(flowed(s)).toContain(`Accepted species commit ${commit.slice(0, 7)}, "the second kernel", and every one before it. The kernel takes that in when Mica next asks for its mutation: tell it to ask again.`);
+  // The acceptance itself wakes nobody: the agent gets a line of the owner's, so it need not be nudged.
+  expect(readdirSync(s.p.owner).filter((name) => !name.startsWith('.')).map((name) => readFileSync(join(s.p.owner, name), 'utf8'))).toEqual([acceptedLine(commit)]);
+  expect(flowed(s)).toContain(`Accepted species commit ${commit.slice(0, 7)}, "the second kernel", and every one before it. The kernel takes that in when Mica next asks for its mutation, and it was told to ask again.`);
   // The kernel's record of it, whichever way it was given.
   s.journal({ type: 'species.accepted', commit, route: 'talk' }, 2000);
   expect(s.all()).toContain(`species commit ${commit.slice(0, 7)} accepted by you`);

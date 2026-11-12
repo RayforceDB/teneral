@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { helpRows } from '../../kernel/commands';
 import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
-import { ACCEPT_SUFFIX, INTERRUPT_SUFFIX } from '../../kernel/owner';
+import { ACCEPT_SUFFIX, INTERRUPT_SUFFIX, acceptedLine } from '../../kernel/owner';
 import { git } from '../../kernel/gates';
 import { readConsent } from '../../kernel/species';
 import { makeRepo } from './helpers';
@@ -571,7 +571,7 @@ test('an event of a kind this client has never heard of, as a later kernel may j
   expect(recent([said('one'), ...later, reply('to one')])).toEqual(['> one', 'to one\n']);
 });
 
-test('/accept goes to the kernel as a file of its own kind, never to the agent as a line: typed or piped, with a commit or for the one asked about', async () => {
+test('/accept goes to the kernel as a file of its own kind, and the agent gets one line saying it may ask again: typed or piped, with a commit or for the one asked about', async () => {
   const { dir: root, seed } = makeRepo({ 'body/a.ts': 'a\n' });
   const s = setup();
   const files = () => (existsSync(s.owner) ? readdirSync(s.owner).sort() : []);
@@ -582,17 +582,22 @@ test('/accept goes to the kernel as a file of its own kind, never to the agent a
   expect(s.notes.join('\n')).toContain('nothing is waiting for your acceptance');
   // A commit named, by a prefix.
   expect(await talk({ ...s.base, root, lines: from(` /accept ${seed.slice(0, 9)} `, '/quit'), interactive: true })).toBe(0);
-  expect(files()).toHaveLength(1);
-  expect(files()[0]!.startsWith('.')).toBe(true);
-  expect(files()[0]!.endsWith(ACCEPT_SUFFIX)).toBe(true);
-  expect(readFileSync(join(s.owner, files()[0]!), 'utf8')).toBe(seed);
-  expect(s.notes.at(-1)).toBe(`(accepted species commit ${seed.slice(0, 12)}, "seed", and every one before it. The kernel takes that in when the agent next asks to mutate: tell it to ask again)`);
-  rmSync(join(s.owner, files()[0]!));
+  const read = (name: string) => readFileSync(join(s.owner, name), 'utf8');
+  const accepts = () => files().filter((name) => name.startsWith('.'));
+  const told = () => files().filter((name) => !name.startsWith('.')).map(read);
+  expect(accepts()).toHaveLength(1);
+  expect(accepts()[0]!.endsWith(ACCEPT_SUFFIX)).toBe(true);
+  expect(read(accepts()[0]!)).toBe(seed);
+  // The acceptance itself wakes nobody, so the agent is told in a line of the owner's: it need not be nudged.
+  expect(told()).toEqual([acceptedLine(seed)]);
+  expect(s.notes.at(-1)).toBe(`(accepted species commit ${seed.slice(0, 12)}, "seed", and every one before it. The kernel takes that in when the agent next asks to mutate, and the agent was told to ask again)`);
+  for (const name of files()) rmSync(join(s.owner, name));
   // The one the gate asked about, from a pipe: taken at once, and not a line that waits for an answer.
   mkdirSync(join(root, '.teneral'), { recursive: true });
   writeFileSync(join(root, '.teneral', 'species.json'), JSON.stringify({ asked: seed }));
   expect(await talk({ ...s.base, root, lines: from('/accept'), interactive: false, waitMs: 200 })).toBe(0);
-  expect(files().map((name) => readFileSync(join(s.owner, name), 'utf8'))).toEqual([seed]);
+  expect(accepts().map(read)).toEqual([seed]);
+  expect(told()).toEqual([acceptedLine(seed)]);
   // The client only leaves the word; the kernel is what takes it in.
   expect(readConsent(root).accepted).toBeUndefined();
   // A client that was not told where its install is says so and sends nothing as a line either.

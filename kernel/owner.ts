@@ -112,3 +112,11 @@ export function approved(dir: string, commit: string): boolean {
 export function useApproval(dir: string, commit: string): void {
   rmSync(approvalFile(dir, commit), { force: true });
 }
+
+/**
+ * The line the agent gets when its owner has accepted a species commit. An acceptance is for the kernel and
+ * wakes nobody; without this the agent would sit waiting for an answer that had already been given.
+ */
+export function acceptedLine(commit: string): string {
+  return `I accepted species commit ${commit.slice(0, 12)}. Ask to mutate again for the same commit.`;
+}

@@ -2,7 +2,7 @@ import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { helpRows } from './commands';
 import { eventName, journalSize, readEventsFrom, type JournalEvent } from './journal';
-import { accept, interrupt, tell } from './owner';
+import { accept, acceptedLine, interrupt, tell } from './owner';
 import { ownerCommand } from './offer';
 import { planNotice } from './providers';
 import { cageNotice, chooseAccept } from './species';
@@ -338,7 +338,8 @@ export async function talk(o: TalkOptions): Promise<number> {
       const chosen = chooseAccept(o.root, wanted);
       if ('why' in chosen) return o.note(`(not accepted: ${chosen.why})`);
       accept(o.owner, chosen.commit);
-      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to mutate: tell it to ask again)`);
+      tell(o.owner, acceptedLine(chosen.commit));
+      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to mutate, and the agent was told to ask again)`);
     } catch (err) {
       o.note(`could not accept that: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -4,7 +4,7 @@ import { formatList, generations } from '../back';
 import { helpRows, takes, type Command } from '../commands';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
 import { ownerCommand } from '../offer';
-import { accept, interrupt, tell } from '../owner';
+import { accept, acceptedLine, interrupt, tell } from '../owner';
 import * as providers from '../providers';
 import { chooseAccept } from '../species';
 import { holder, readState, type Paths } from '../supervisor';
@@ -697,7 +697,8 @@ export class TalkScreen {
           const chosen = chooseAccept(this.o.paths.root, arg);
           if ('why' in chosen) return this.say(`Not accepted: ${chosen.why}.`);
           accept(this.o.paths.owner, chosen.commit);
-          return this.say(`Accepted species commit ${shortSha(chosen.commit)}${chosen.subject === '' ? '' : `, "${clean(chosen.subject).slice(0, 80)}"`}, and every one before it. The kernel takes that in when ${this.who} next asks for its mutation: tell it to ask again.`);
+          tell(this.o.paths.owner, acceptedLine(chosen.commit));
+          return this.say(`Accepted species commit ${shortSha(chosen.commit)}${chosen.subject === '' ? '' : `, "${clean(chosen.subject).slice(0, 80)}"`}, and every one before it. The kernel takes that in when ${this.who} next asks for its mutation, and it was told to ask again.`);
         } catch (err) {
           return this.say(`That could not be accepted: ${err instanceof Error ? err.message : String(err)}`);
         }
