@@ -43,13 +43,17 @@ const NOTICE_CHARS = 6_000;
 export const ENTRY_LIMIT = 2_000;
 
 export type Entry = { id: number; rev: number } & (
-  /** The owner's words. `pending`: sent from here and not in the journal yet. `elsewhere`: typed at another terminal. */
+  /**
+   * The owner's words. `pending`: sent from here and not in the journal yet. `queued`: in the
+   * journal, but the request the agent is in the middle of was sent before it arrived, so it has
+   * not been read yet. `elsewhere`: typed at another terminal.
+   */
   /** `images`: the kept images the line named, as paths under `memory/images/`; `text` is the line without them. */
-  | { kind: 'owner'; text: string; images: string[]; pending?: boolean; elsewhere?: boolean }
+  | { kind: 'owner'; text: string; images: string[]; pending?: boolean; queued?: boolean; elsewhere?: boolean }
   /** A summary of the model's reasoning before a reply or a tool call, when the body journals one. */
   | { kind: 'reasoning'; text: string }
-  /** `first`: the first words this individual ever said. `early`: written before the line above it had arrived. */
-  | { kind: 'reply'; text: string; first: boolean; early: boolean }
+  /** `first`: the first words this individual ever said. */
+  | { kind: 'reply'; text: string; first: boolean }
   | { kind: 'tool'; callId: string; name: string; args: string; status: 'running' | 'ok' | 'failed' | 'cut short'; ms: number | null; output: string }
   /**
    * What the kernel did. `move`: the generation left and the one arrived in. `lead` is shown whole;
@@ -194,8 +198,11 @@ function ends(text: string, each: number): string {
 
 const tailOf = (text: string, limit: number): string => (text.length > limit ? text.slice(-limit).replace(/^[^\n]*\n/, '') : text);
 
-/** Whether an entry may still change: a line not yet in the journal, a tool call without its result. */
-export const unfinished = (e: Entry): boolean => (e.kind === 'owner' && e.pending === true) || (e.kind === 'tool' && e.status === 'running');
+/** Whether an owner's line still waits: to be journaled, or to be read by the agent. */
+export const inQueue = (e: Entry): boolean => e.kind === 'owner' && (e.pending === true || e.queued === true);
+
+/** Whether an entry may still change: a line the agent has not read yet, a tool call without its result. */
+export const unfinished = (e: Entry): boolean => inQueue(e) || (e.kind === 'tool' && e.status === 'running');
 
 export class Transcript {
   readonly entries: Entry[] = [];
@@ -205,6 +212,8 @@ export class Transcript {
   private readonly tools = new Map<string, { entry: Extract<Entry, { kind: 'tool' }>; at: number }>();
   /** Lines sent from this screen and not seen in the journal yet. */
   private readonly mine: Extract<Entry, { kind: 'owner' }>[] = [];
+  /** Lines in the journal that the request in progress did not see, in the order they arrived. */
+  private readonly held: Extract<Entry, { kind: 'owner' }>[] = [];
 
   push<K extends Entry['kind']>(body: Body<K> & { kind: K }): Extract<Entry, { kind: K }> {
     this.serial += 1;
@@ -216,8 +225,10 @@ export class Transcript {
       for (const e of gone) {
         if (e.kind === 'tool') this.tools.delete(e.callId);
         if (e.kind === 'owner') {
-          const at = this.mine.indexOf(e);
-          if (at !== -1) this.mine.splice(at, 1);
+          for (const list of [this.mine, this.held]) {
+            const at = list.indexOf(e);
+            if (at !== -1) list.splice(at, 1);
+          }
         }
       }
     }
@@ -247,6 +258,16 @@ export class Transcript {
     try {
       this.take(e, before, live);
     } catch { /* an event of a shape nobody foresaw is not shown, and nothing else is disturbed */ }
+    // The next request will see everything journaled so far: what waited has now been read, and
+    // stands in the transcript from here on, after what was written without it.
+    if (this.held.length > 0 && track(before.turn, e).late === 0) {
+      for (const line of this.held.splice(0)) {
+        const index = this.entries.indexOf(line);
+        if (index !== -1) this.entries.splice(index, 1);
+        const { id: _id, rev: _rev, queued: _queued, ...rest } = line;
+        this.push(rest);
+      }
+    }
   }
 
   private take(e: JournalEvent, before: Standing, live: boolean): void {
@@ -258,16 +279,19 @@ export class Transcript {
         if (source === 'terminal') {
           // Only the owner's lines name images: what anyone else wrote in that form is text.
           const said = splitMarkers(text);
+          let own = false;
           const at = this.mine.findIndex((m) => m.text === said.text && m.images.join() === said.paths.join());
           if (at !== -1) {
             // This client's own line: it moves to where the journal has it.
-            const [own] = this.mine.splice(at, 1);
-            const index = this.entries.indexOf(own!);
+            const [sent] = this.mine.splice(at, 1);
+            const index = this.entries.indexOf(sent!);
             if (index !== -1) this.entries.splice(index, 1);
-            this.push({ kind: 'owner', text: said.text, images: said.paths });
-          } else {
-            this.push({ kind: 'owner', text: said.text, images: said.paths, ...(live ? { elsewhere: true } : {}) });
+            own = true;
           }
+          // Arrived in the middle of a request: the reply being written will not have seen it.
+          const queued = track(before.turn, e).late > 0;
+          const line = this.push({ kind: 'owner', text: said.text, images: said.paths, ...(queued ? { queued } : {}), ...(live && !own ? { elsewhere: true } : {}) });
+          if (queued) this.held.push(line);
         } else if (source === 'birth') {
           this.push({ kind: 'quiet', label: 'the birth letter', text: '' });
         } else if (source.startsWith('agent:')) {
@@ -289,8 +313,7 @@ export class Transcript {
           return;
         }
         const shown = text.length > REPLY_CHARS ? `${text.slice(0, REPLY_CHARS)}\n\n[... ${text.length - REPLY_CHARS} more characters are in the journal]` : text;
-        const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
-        this.push({ kind: 'reply', text: shown, first: !before.spoke, early: calls === 0 && before.turn.late > 0 });
+        this.push({ kind: 'reply', text: shown, first: !before.spoke });
         return;
       }
       case 'tool.intent': {

@@ -255,7 +255,7 @@ test('every kind of entry fits the width it is given, and none throws at a width
     { kind: 'owner', text: 'привет, как дела\nвторая строка 日本語', images: [PNG.path, 'memory/images/gone.png'], pending: true },
     { kind: 'owner', text: '', images: [PNG.path] },
     { kind: 'reasoning', text: 'The owner greets me. I should answer briefly, in the same language.\n\nThen ask.' },
-    { kind: 'reply', text: '# H\n\n- список **жирный** `code`\n\n```\nlong code line here\n```\n> q', first: true, early: true },
+    { kind: 'reply', text: '# H\n\n- список **жирный** `code`\n\n```\nlong code line here\n```\n> q', first: true },
     { kind: 'tool', callId: 'c', name: 'bash', args: 'command: ls -la /a/long/path', status: 'failed', ms: 1234, output: 'line one\nline two 日本語\n\tindented' },
     { kind: 'notice', tone: 'warn', title: 'rolled back', move: ['aaaaaaa', 'bbbbbbb'], lead: 'crashed 3 times without a reply.', body: 'TypeError: x\n    at y' },
     { kind: 'quiet', label: 'from alice', text: 'a message that is long enough to be cut' },
@@ -278,7 +278,7 @@ test('each kind of entry has its own mark in the first two columns, and what oth
   expect(rows({ kind: 'owner', text: 'look at this', images: [PNG.path, 'memory/images/gone.webp'] })).toEqual(['› look at this', '  [image 1 · png · 1280×720 · 240 KB]', '  [image 2 · webp · not in memory/images]']);
   expect(rows({ kind: 'owner', text: '', images: [PNG.path], elsewhere: true })).toEqual(['› [image 1 · png · 1280×720 · 240 KB]  from another terminal']);
   expect(rows({ kind: 'reasoning', text: 'The owner asks what is in body/. I should list it rather than answer from memory.' })).toEqual(['○ The owner asks what is in body/. I should list it rather', '  than answer from memory.']);
-  expect(rows({ kind: 'reply', text: 'Ten files.\n\n- one\n- two', first: false, early: false })).toEqual(['● Ten files.', '', '  • one', '  • two']);
+  expect(rows({ kind: 'reply', text: 'Ten files.\n\n- one\n- two', first: false })).toEqual(['● Ten files.', '', '  • one', '  • two']);
   expect(rows({ kind: 'tool', callId: 'c', name: 'bash', args: 'command: ls', status: 'ok', ms: 250, output: '' })).toEqual([`${'  ▪ bash  command: ls'.padEnd(53)}✓ 250ms`]);
   expect(rows({ kind: 'tool', callId: 'c', name: 'read', args: 'path: x', status: 'failed', ms: 12_000, output: 'ENOENT' })).toEqual([`${'  ▪ read  path: x'.padEnd(48)}✗ failed 12s`, '      ENOENT']);
   expect(rows({ kind: 'tool', callId: 'c', name: 'bash', args: '', status: 'running', ms: null, output: '' })).toEqual([`${'  ▪ bash'.padEnd(53)}running`]);

@@ -133,7 +133,7 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
       if (rows.length === 0 && chips.length > 0) chips[0] = [...mark, ...chips[0]!.slice(1)];
       rows.push(...chips);
       if (rows.length === 0) rows.push(mark);
-      const tag = e.pending ? 'on its way' : e.elsewhere ? 'from another terminal' : '';
+      const tag = e.pending ? 'on its way' : e.queued ? 'queued' : e.elsewhere ? 'from another terminal' : '';
       if (tag !== '') {
         const last = rows.at(-1)!;
         if (lineWidth(last) + tag.length + 2 <= max) last.push({ text: `  ${tag}`, style: DIM });
@@ -152,7 +152,6 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
       if (rows.length > 0 && rows[0]!.length > 0) rows[0] = [{ text: `${g.reply} `, style: { bold: true } }, ...rows[0]!.slice(1)];
       // The first words this individual ever said get a line of their own before them. Once.
       if (e.first) rows.unshift([{ text: '  ' }, { text: g.rule.repeat(Math.max(1, Math.min(24, max - 2))), style: BRAND }], []);
-      if (e.early) rows.push(...block('(written before the line above had arrived)', max, DIM, 2));
       return rows;
     }
     case 'tool':

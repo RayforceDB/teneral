@@ -15,7 +15,7 @@ import {
   type Attachment,
 } from './images';
 import { KeyParser, type Key } from './keys';
-import { Transcript, UNBORN, isMutationTool, shortSha, stand, stateWord, unfinished, type Alive, type Entry, type Standing } from './model';
+import { Transcript, UNBORN, isMutationTool, shortSha, stand, stateWord, inQueue, unfinished, type Alive, type Entry, type Standing } from './model';
 import { Inline, Lifeline, terminal, type Term } from './screen';
 import { complete, entered, offer, type Typed } from './slash';
 import { clean, type Line, type Span } from './text';
@@ -63,6 +63,8 @@ const HELP = [
   '/accept is your word to the kernel, not to the agent. A mutation from the species brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel lets none through until you have accepted the species commit it stands on, or a later one. The agent asks you; /accept answers for the commit it asked about, /accept <commit> for another. Then tell the agent to ask for its mutation again.',
   '',
   'Leaving ends this client only. Nothing else here stops the agent or changes it.',
+  '',
+  'A line you send stands over the input box until the agent has read it. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "queued": the agent has it, but was in the middle of a step when it came, and reads it with its next one. When the mark is gone and the line has moved up into the conversation, the agent has read it.',
   '',
   'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the kernel is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
 ];
@@ -495,14 +497,14 @@ export class TalkScreen {
 
   /**
    * Print every entry that will not change any more, in the journal's order, and return the rest:
-   * from the first tool call still without its result on, and the owner's lines not yet journaled.
+   * from the first tool call still without its result on, and the owner's lines the agent has not read yet.
    */
   private settle(): Entry[] {
     const pending: Entry[] = [];
     const mine: Entry[] = [];
     let blocked = false;
     for (const e of this.transcript.entries) {
-      if (e.kind === 'owner' && e.pending) {
+      if (inQueue(e)) {
         mine.push(e);
       } else if (e.id <= this.printed) {
         continue;

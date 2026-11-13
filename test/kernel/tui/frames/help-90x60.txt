@@ -81,6 +81,12 @@
 
   Leaving ends this client only. Nothing else here stops the agent or changes it.
 
+  A line you send stands over the input box until the agent has read it. "on its way":
+  sent, and not taken by the agent yet; when nobody is running, it waits for the next
+  start. "queued": the agent has it, but was in the middle of a step when it came, and
+  reads it with its next one. When the mark is gone and the line has moved up into the
+  conversation, the agent has read it.
+
   While the agent is doing something, the line over the input box says what: waking (its
   first start, before its first words), thinking, running <tool>, mutating (it proposed a
   change to its own body and the kernel is checking it), starting (between two runs). At

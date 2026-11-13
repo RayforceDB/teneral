@@ -252,14 +252,19 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   // The result arrives: the call is printed with its outcome, then what waited, in the journal's order.
   s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'a\nb' }, 5300);
   s.journal({ type: 'stimulus', source: 'terminal', text: 'and then?' }, 5400);
+  // Journaled, but the request under way was sent before it: it stays over the box, queued.
+  expect(s.live()).toMatch(/^\n› and then\? {2}queued\n\n/);
+  expect(s.all()).not.toContain('on its way');
   s.journal({ type: 'assistant', text: 'Two files.', toolCalls: [] }, 9000);
+  // The reply written without it is printed first; the line follows it, read now.
+  expect(s.live()).not.toContain('queued');
   s.journal({ type: 'assistant', text: 'And then nothing.', toolCalls: [] }, 12_000);
   s.clock.at = 12_100;
   const done = s.all();
-  expect(done).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n› and then\?\n\n● Two files\.\n {2}\(written before the line above had arrived\)\n\n● And then nothing\.\n\n╭/);
+  expect(done).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
   expect(done.match(/▪ bash/g)).toHaveLength(1);
   expect(done.match(/and then\?/g)).toHaveLength(1);
-  expect(done).not.toMatch(/running|on its way/);
+  expect(done).not.toMatch(/running|on its way|queued/);
   expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
 });
 

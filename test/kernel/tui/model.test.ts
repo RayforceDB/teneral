@@ -224,11 +224,15 @@ test('the first words ever said are marked as such, once', () => {
   expect(kinds(t)).toEqual(['quiet', 'tool', 'reply', 'owner', 'reply']);
 });
 
-test('a reply written before the owner\'s latest line arrived says so', () => {
+test('a line that arrives in the middle of a request is queued, and stands after the reply written without it once it is read', () => {
+  const texts = (t: Transcript): string[] => t.entries.filter((e) => e.kind === 'owner' || e.kind === 'reply').map((e) => (e.kind === 'owner' && e.queued ? `${e.text} (queued)` : (e as { text: string }).text));
+  expect(texts(built([said('one', 0), said('two', 500)]).t)).toEqual(['one', 'two (queued)']);
+  expect(texts(built([said('one', 0), said('two', 500), said('three', 700)]).t)).toEqual(['one', 'two (queued)', 'three (queued)']);
   const { t } = built([said('one', 0), said('two', 500), reply('to one', 900), reply('to two', 1800)]);
-  expect(of(t, 'reply').map((e) => [e.text, e.early])).toEqual([['to one', true], ['to two', false]]);
+  expect(texts(t)).toEqual(['one', 'to one', 'two', 'to two']);
+  expect(t.entries.some(unfinished)).toBe(false);
   // Lines journaled together were read together: the reply saw both.
-  expect(of(built([said('one', 0), said('two', 8), reply('to both', 900)]).t, 'reply')[0]!.early).toBe(false);
+  expect(texts(built([said('one', 0), said('two', 8), reply('to both', 900)]).t)).toEqual(['one', 'two', 'to both']);
 });
 
 test('a line sent from this screen is shown at once, and moves to its place when the journal has it', () => {
