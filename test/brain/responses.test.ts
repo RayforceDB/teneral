@@ -441,3 +441,20 @@ test('a refusal that is not about the summary, or a second one, is passed on; an
   await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', summaries: false, fetch: recorder([okStream], sent) })([{ role: 'user', content: 'x' }], []);
   expect('reasoning' in sent[0]!.body).toBe(false);
 });
+
+test('while the answer arrives the pulse says where the request stands, and that it is over when it is, also when it failed', async () => {
+  const said: (string | null)[] = [];
+  const pulse = (p: { step: string } | null): void => { said.push(p === null ? null : p.step); };
+  const stream = () => new Response(sse(
+    CREATED, { type: 'response.reasoning_summary_text.delta', delta: 'Thinking it over.' }, { type: 'response.output_text.delta', delta: 'hi' }, completed([message('hi')]),
+  ), { headers: { 'content-type': 'text/event-stream' } });
+  const reply = await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([stream], []), pulse })([{ role: 'user', content: 'x' }], []);
+  expect(reply.text).toBe('hi');
+  expect(said[0]).toBe('asked');
+  expect(said.at(-1)).toBeNull();
+  expect(said).toContain('writing');
+  said.length = 0;
+  const refused = () => new Response('{"error":"no"}', { status: 500 });
+  await expect(responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([refused], []), pulse })([{ role: 'user', content: 'x' }], [])).rejects.toThrow();
+  expect(said).toEqual(['asked', null]);
+});

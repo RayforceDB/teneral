@@ -68,6 +68,8 @@ export interface Paths {
   owner: string;
   /** Where sign-in credentials are kept. See brain/signin.ts. */
   auth: string;
+  /** What the brain is doing with the model right now, for the owner's terminal. See brain/pulse.ts. */
+  pulse: string;
   /** Names a generation whose stem is new and not yet proven, for the launcher. See stem/launcher.ts. */
   trial: string;
 }
@@ -87,6 +89,7 @@ export function paths(root: string): Paths {
     owner: join(root, '.teneral', 'owner'),
     auth: authDir(root),
     trial: join(root, '.teneral', 'trial.json'),
+    pulse: join(root, '.teneral', 'pulse.json'),
   };
 }
 
@@ -636,7 +639,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,
-            provider: process.env.TENERAL_PROVIDER, auth: p.auth, organs: organs ?? undefined,
+            provider: process.env.TENERAL_PROVIDER, auth: p.auth, organs: organs ?? undefined, pulse: p.pulse,
           }),
         },
         // stderr is passed on as it comes and its end kept, to say why if this generation has to be given up on.

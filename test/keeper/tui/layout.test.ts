@@ -1,3 +1,4 @@
+import { SILENT_MS, TAIL_SHOWN, beatOf, beatWords } from '../../../keeper/tui/view';
 import { expect, test } from 'bun:test';
 import { COMMANDS } from '../../../keeper/commands';
 import { EMPTY, type Edit } from '../../../keeper/tui/editor';
@@ -305,4 +306,17 @@ test('how full the context is: a share and both counts when the window is known,
   expect(shortDir('/teneral', G)).toBe('/teneral');
   expect(shortDir('/a/b', G)).toBe('/a/b');
   expect(shortDir('/a/b/c', glyphs(false))).toBe('.../b/c');
+});
+
+test('a request under way is put into words: what is arriving, with its end, how long the first word is waited for, and for how long nothing new has come', () => {
+  const at = Date.parse('2026-11-13T10:00:00.000Z');
+  const b = (step: string, more: Record<string, unknown> = {}) => beatOf(JSON.stringify({ at: new Date(at).toISOString(), asked: new Date(at - 30_000).toISOString(), step, received: 3400, ...more }))!;
+  expect(beatWords(b('asked'), at + 12_000, '…')).toBe('waiting for the model\'s first word, 0:42');
+  expect(beatWords(b('reasoning', { tail: 'then  the\ntests' }), at, '…')).toBe('the model is reasoning: …then the tests');
+  expect(beatWords(b('writing', { tail: 'x'.repeat(300) }), at, '…')).toBe(`the model is writing: …${'x'.repeat(TAIL_SHOWN)}`);
+  expect(beatWords(b('calling'), at, '…')).toBe('the model is preparing a tool call, 3.4k characters so far');
+  expect(beatWords(b('receiving', { received: 120 }), at, '…')).toBe('the model is answering, 120 characters so far');
+  expect(beatWords(b('writing', { tail: 'so' }), at + SILENT_MS + 15_000, '…')).toBe('the model is writing: …so (nothing new for 1:00)');
+  // The file is the body's: anything that is not a pulse is none.
+  for (const text of ['', 'null', '[]', '{}', '{"at":"soon","asked":"x","step":"asked"}', '{"at":"2026-11-13T10:00:00.000Z","asked":"2026-11-13T10:00:00.000Z"}']) expect(beatOf(text)).toBeNull();
 });

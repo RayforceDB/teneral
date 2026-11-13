@@ -45,6 +45,39 @@ export function elapsed(ms: number): string {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}` : `${Math.floor(s / 60)}:${two(s % 60)}`;
 }
 
+/** What the brain last said of a request under way (brain/pulse.ts), as far as this client can read it. */
+export interface Beat { at: number; asked: number; step: string; received: number; tail: string }
+
+/** Read a pulse file's text. Null for anything that is not one: the file is the body's, and is not trusted to be well formed. */
+export function beatOf(text: string): Beat | null {
+  let p: Record<string, unknown> | null = null;
+  try { p = JSON.parse(text) as Record<string, unknown>; } catch { return null; }
+  if (typeof p !== 'object' || p === null) return null;
+  const at = Date.parse(typeof p.at === 'string' ? p.at : '');
+  const asked = Date.parse(typeof p.asked === 'string' ? p.asked : '');
+  if (Number.isNaN(at) || Number.isNaN(asked) || typeof p.step !== 'string') return null;
+  return { at, asked, step: p.step.slice(0, 20), received: typeof p.received === 'number' && p.received >= 0 ? p.received : 0, tail: typeof p.tail === 'string' ? p.tail.slice(-200) : '' };
+}
+
+/** How long a request may send nothing new before the line says so. */
+export const SILENT_MS = 45_000;
+/** Characters of what is arriving that are shown: its end, so that the line moves as the model goes on. */
+export const TAIL_SHOWN = 64;
+
+/**
+ * One request to the model in words, for the line over the input box: what is arriving and how
+ * much, with the end of it; and, when nothing new has come for a while, for how long.
+ */
+export function beatWords(b: Beat, now: number, ellipsis: string): string {
+  const count = b.received < 1000 ? `${b.received}` : `${(b.received / 1000).toFixed(1)}k`;
+  const tail = b.tail === '' ? '' : `: ${ellipsis}${b.tail.replace(/\s+/g, ' ').trim().slice(-TAIL_SHOWN)}`;
+  if (b.step === 'asked') return `waiting for the model's first word, ${elapsed(Math.max(0, now - b.asked))}`;
+  const what = b.step === 'reasoning' ? `the model is reasoning${tail}` : b.step === 'writing' ? `the model is writing${tail}`
+    : b.step === 'calling' ? `the model is preparing a tool call, ${count} characters so far` : `the model is answering, ${count} characters so far`;
+  const quiet = now - b.at;
+  return quiet > SILENT_MS ? `${what} (nothing new for ${elapsed(quiet)})` : what;
+}
+
 /** A count of tokens in a few characters: 840, 71.9k, 500k, 1.05M. */
 export function tokens(n: number): string {
   if (n < 1000) return String(Math.round(n));

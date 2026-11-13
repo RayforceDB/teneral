@@ -1447,3 +1447,23 @@ test('a turn that failed and waits to be tried again is said so over the box, wi
   s.journal({ type: 'assistant', text: 'Here now.', toolCalls: [] }, s.clock.at);
   expect(s.live()).not.toMatch(/cannot get an answer|thinking/);
 });
+
+test('while the agent is thinking, the line over the input box says what the model is doing, as the pulse has it, and stops saying it when the pulse is gone', () => {
+  const s = stage(110, 30, { name: 'Mica' });
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'go on' }, 1000);
+  const line = (): string => rows(s.live()).find((row) => row.includes('is thinking')) ?? '';
+  expect(line()).toContain('Mica is thinking');
+  expect(line()).not.toContain('the model');
+  const now = s.clock.at;
+  mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
+  writeFileSync(s.p.pulse, JSON.stringify({ at: new Date(now).toISOString(), asked: new Date(now - 5000).toISOString(), step: 'reasoning', received: 900, tail: 'First I will read the failing test' }));
+  s.clock.at += 400;
+  expect(line()).toContain('the model is reasoning: …First I will read the failing test');
+  writeFileSync(s.p.pulse, '\x1b[31mnot a pulse');
+  s.clock.at += 400;
+  expect(line()).not.toContain('the model');
+  unlinkSync(s.p.pulse);
+  s.clock.at += 400;
+  expect(line()).toContain('Mica is thinking');
+});

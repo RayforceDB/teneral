@@ -51,6 +51,8 @@ export interface BodyPlaces {
   auth?: string;
   /** The directory that holds this generation's pinned organs, one entry per name (immune/organs.ts). Left out when it pins none. */
   organs?: string;
+  /** The file the brain says in what it is doing with the model right now (brain/pulse.ts). Left out where nobody would read it. */
+  pulse?: string;
 }
 
 /** Everything the stem itself sets for a body. The supervisor and the smoke gate both start one with exactly this. */
@@ -62,6 +64,7 @@ export function bodyEnv(at: BodyPlaces): Record<string, string> {
     ...(at.provider ? { TENERAL_PROVIDER: at.provider } : {}),
     ...(at.auth ? { TENERAL_AUTH: at.auth } : {}),
     ...(at.organs ? { TENERAL_ORGANS: at.organs } : {}),
+    ...(at.pulse ? { TENERAL_PULSE: at.pulse } : {}),
   };
 }
 

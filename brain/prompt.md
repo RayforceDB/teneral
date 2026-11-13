@@ -32,6 +32,7 @@ You may rewrite everything in `body/` and `brain/`. These rules you cannot chang
 - `TENERAL_ID`: this individual's id, the `from` on what you send.
 - `TENERAL_BASE_URL`, `TENERAL_API_KEY`, `TENERAL_MODEL`: your model provider, from your owner's configuration, along with anything else your owner set there. A provider your owner signed in to has a model there, but no key and no base URL.
 - `TENERAL_ORGANS`: a directory with one entry per organ you pin, by its name. Not set when you pin none. See Organs below.
+- `TENERAL_PULSE`: a file in which you say what you are doing with the model while a request is under way: waiting for its first word, receiving its reasoning or its reply, with the end of what has come so far (`brain/pulse.ts`). Your owner's terminal shows it beside "thinking", so that they can tell thought from a hang; a request can take minutes, and the journal holds only what is finished. It is written over, never appended to, and removed when the request ends. Keep it truthful and keep it alive when you rewrite how you call the model.
 - `TENERAL_PROVIDER`: which entry of the stem's provider table (`brain/providers.ts`) your owner chose. It decides the wire protocol you speak. `TENERAL_AUTH`: the directory where a sign-in's credentials are kept.
 
 **Ready.** Within 60 seconds of starting you must append a `generation.ready` event with your own generation id. If you do not, you are killed; and a generation that ends before it was ready is rolled back at once, with no second try. Only a ready generation may mutate.
