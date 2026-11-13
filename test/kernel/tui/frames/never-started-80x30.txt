@@ -23,4 +23,4 @@
 ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol · not running · …/work/teneral   /help lists the keys and commands
+ gpt-6.1-sol  not running  …/work/teneral     /help lists the keys and commands

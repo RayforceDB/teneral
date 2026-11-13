@@ -91,7 +91,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   // A letter no command goes on with: no list, and the footer is back.
   s.type('x');
   expect(listed(s)).toEqual([]);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol · resting/);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  resting/);
   s.type(BACKSPACE);
   expect(listed(s)).toEqual(['[/history]']);
   s.type(BACKSPACE.repeat(3));
@@ -497,7 +497,7 @@ test('with images attached the list stands under the box that holds them, and a 
   s.type(ENTER);
   expect(flowed(s)).toContain('From now on each tool call is shown');
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1/), '›']);
-  expect(rows(s.live()).at(-1)).toMatch(/^ attached: image 1/);
+  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1/);
 });
 
 test('a locale that is not UTF-8 gets the list in ASCII', () => {

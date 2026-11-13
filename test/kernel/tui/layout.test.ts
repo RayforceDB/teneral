@@ -26,15 +26,14 @@ test('the live region: a blank row, the input in its box across the width, and t
     '╭─────────────────────────────────────────────────────────────────────────────╮',
     '│ ›                                                                           │',
     '╰─────────────────────────────────────────────────────────────────────────────╯',
-    ' gpt-6.1-sol · resting · …/data/work/teneral · generation 3 a1b2c3d',
-    '                                                       context 8% (71.9k/1.05M)',
+    ' gpt-6.1-sol  resting  …/data/work/teneral            context 8% (71.9k/1.05M)',
   ]);
-  // With room, the tip stands at the right of the first footer row.
-  expect(text(liveRows(live(120, 24))).at(-2)).toBe(' gpt-6.1-sol · resting · …/data/work/teneral · generation 3 a1b2c3d                   /help lists the keys and commands');
+  // With room, the generation is there too, and the tip stands before the context.
+  expect(text(liveRows(live(140, 24))).at(-1)).toMatch(/^ gpt-6\.1-sol {2}resting {2}…\/data\/work\/teneral {2}generation 3 a1b2c3d {3,}\/help lists the keys and commands {2}context 8% \(71\.9k\/1\.05M\)$/);
   // Nothing known of the context, nothing attached: the footer is one row. Reasoning effort, when known, is beside the model.
   const bare = text(liveRows(live(100, 24, { context: '', about: ['gpt-6.1-sol', 'effort high', 'resting'] })));
   expect(bare).toHaveLength(5);
-  expect(bare.at(-1)).toMatch(/^ gpt-6\.1-sol · effort high · resting {20,}\/help lists the keys and commands$/);
+  expect(bare.at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting {20,}\/help lists the keys and commands$/);
   expect(bare.at(-1)).toHaveLength(99);
 });
 
@@ -56,10 +55,9 @@ test('the input grows with its text to eight rows and shows the ones around the 
     `│ ${'› a'.padEnd(95)} │`,
     `│ ${'  b'.padEnd(95)} │`,
   ]);
-  expect(rows.at(-1)).toMatch(/^ attached: image 1, image 2 · Backspace at the start removes the last {3,}context 8% \(71\.9k\/1\.05M\)$/);
-  expect(rows.at(-1)).toHaveLength(99);
+  expect(rows.at(-1)).toMatch(/^ gpt-6\.1-sol {2}resting {3,}attached: image 1, image 2 · Backspace at the start removes the last$/);
   // Where both do not fit, what is attached is said and the context gives way.
-  expect(text(liveRows(live(80, 30, { edit, hint: 'attached: image 1, image 2 · Backspace at the start removes the last' }))).at(-1)).toBe(' attached: image 1, image 2 · Backspace at the start removes the last');
+  expect(text(liveRows(live(80, 30, { edit, hint: 'attached: image 1, image 2 · Backspace at the start removes the last' }))).at(-1)).toMatch(/ attached: image 1, image 2 · Backspace at the start removes the last$/);
   const many = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n');
   const tall = text(liveRows(live(80, 30, { edit: { ...EMPTY, text: many, cursor: many.length } })));
   expect(tall.filter((row) => row.startsWith('│'))).toHaveLength(8);
@@ -123,7 +121,7 @@ test('the commands offered stand under the box, the chosen one marked, each with
     ' Tab completes · Enter runs · Esc closes · Up/Down choose',
   ]);
   // The footer, with its tip, the context and what is attached, is back when nothing is offered.
-  expect(text(liveRows(live(80, 24, { edit: typing('/h'), list: null }))).at(-1)).toBe(`${' '.repeat(55)}context 8% (71.9k/1.05M)`);
+  expect(text(liveRows(live(80, 24, { edit: typing('/h'), list: null }))).at(-1)).toBe(' gpt-6.1-sol  resting  …/data/work/teneral            context 8% (71.9k/1.05M)');
   // What is under way and what the agent is doing stay over the box.
   const busy = text(liveRows(live(80, 30, { edit: typing('/a'), list: offered('/a', 1), pending: [[{ text: '  ▪ bash  sleep 9' }]], activity: [{ text: '⠹ The agent is running bash' }] })));
   expect(busy).toEqual([

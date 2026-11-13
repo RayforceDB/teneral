@@ -45,5 +45,4 @@
 | [image 1 | png | 64x48 | 29 B]                                              |
 | >                                                                           |
 +-----------------------------------------------------------------------------+
- gpt-6.1-sol | .../work/teneral | gen 2 e5f6a7b
- attached: image 1 | Backspace at the start removes the last
+ gpt-6.1-sol        attached: image 1 | Backspace at the start removes the last

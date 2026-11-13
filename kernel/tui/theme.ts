@@ -21,6 +21,11 @@ export const PALETTE = {
   faint: [[108, 105, 100], 242, '2'],
   /** Code, inline and in blocks. */
   code: [[104, 160, 200], 74, '35'],
+  /** The footer's segments: text on a ground of its own, so these three do not depend on the terminal's colours. */
+  ink: [[22, 22, 20], 233, '30'],
+  paper: [[232, 229, 220], 254, '37'],
+  slab: [[78, 76, 71], 240, '90'],
+  deep: [[104, 101, 95], 242, '90'],
   good: [[110, 180, 104], 71, '32'],
   warn: [[222, 110, 88], 167, '31'],
 } as const satisfies Record<string, Colour>;
@@ -29,6 +34,8 @@ export type ColourName = keyof typeof PALETTE;
 
 export interface Style {
   fg?: ColourName;
+  /** The ground under the text: the segments of the footer. */
+  bg?: ColourName;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
@@ -51,6 +58,13 @@ export function sgr(style: Style | undefined, depth: Depth): string {
     else if (depth === '16') codes.push(basic);
     // Without colour, what was dim is still set back, by weight.
     else if (basic === '2') codes.push('2');
+  }
+  if (style.bg !== undefined && depth !== 'none') {
+    const [rgb, indexed, basic] = PALETTE[style.bg];
+    if (depth === 'true') codes.push(`48;2;${rgb[0]};${rgb[1]};${rgb[2]}`);
+    else if (depth === '256') codes.push(`48;5;${indexed}`);
+    // With 16 colours the ground is the same colour's own code, ten higher; the faint attribute has none.
+    else if (basic !== '2') codes.push(String(Number(basic) + 10));
   }
   return codes.join(';');
 }
@@ -81,6 +95,9 @@ const UTF8 = {
   times: '×',
   hidden: '•',
   warn: '!',
+  /** Between two segments of the footer. Empty: the grounds meet. `glyphs` puts the Powerline arrows here when the owner's font has them. */
+  seg: '',
+  segBack: '',
   /** The corners of a panel: top left, top right, bottom left, bottom right. */
   corners: ['╭', '╮', '╰', '╯'],
   /**
@@ -115,12 +132,15 @@ const ASCII: Glyphs = {
   times: 'x',
   hidden: '*',
   warn: '!',
+  seg: '',
+  segBack: '',
   corners: ['+', '+', '+', '+'],
   mark: ['\\\\  //', ' (oo) ', ' \'::\' '],
   spinner: ['|', '/', '-', '\\'],
 };
 
-export const glyphs = (utf8: boolean): Glyphs => (utf8 ? UTF8 : ASCII);
+/** `powerline`: the owner's font has the Powerline arrows (TENERAL_POWERLINE=1); no terminal says so itself. */
+export const glyphs = (utf8: boolean, powerline = false): Glyphs => (utf8 ? (powerline ? { ...UTF8, seg: '\ue0b0', segBack: '\ue0b2' } : UTF8) : ASCII);
 
 /** Milliseconds each spinner frame is shown. */
 export const SPIN_MS = 120;

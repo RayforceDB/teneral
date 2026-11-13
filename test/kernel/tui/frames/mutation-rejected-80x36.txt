@@ -53,4 +53,4 @@
 ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol · …/work/teneral · gen 1 a1b2c3d   Esc interrupts what it is doing
+ gpt-6.1-sol  …/work/teneral  gen 1 a1b2c3d     Esc interrupts what it is doing

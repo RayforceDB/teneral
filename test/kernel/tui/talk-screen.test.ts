@@ -96,7 +96,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `╭${'─'.repeat(97)}╮`,
     `│ ›${' '.repeat(95)}│`,
     `╰${'─'.repeat(97)}╯`,
-    expect.stringMatching(/^ gpt-6\.1-sol · waiting for you · …\/work\/teneral · gen 2 e5f6a7b( {3,}\S.*)?$/),
+    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
   ]);
   // The terminal's own cursor is hidden at the top of the live region; the one the owner sees is drawn in the box.
   expect(s.term.vt.cursorVisible).toBe(false);
@@ -163,7 +163,7 @@ test('first words: they arrive under a rule of their own, once, and the footer s
   const all = s.all();
   expectFrame('first-words-100x34', all);
   expect(all).toMatch(/▪ bash {2}command: wc -l body\/\*\.ts && cat BACKLOG\.md \| head -50 +✓ 1\.9s\n\n {2}─{24}\n\n● Hello\.\n/);
-  expect(s.live()).toMatch(/\n gpt-6\.1-sol · waiting for you · /);
+  expect(s.live()).toMatch(/\n gpt-6\.1-sol  waiting for you  /);
   expect(s.live()).not.toMatch(new RegExp(SPIN));
   // The rule is for the first words only.
   s.say('Anton', 20_000);
@@ -217,7 +217,7 @@ test('a long reply, taller than the screen: all of it goes into the scrollback i
   expect(all).not.toMatch(/\*\*|```|^ {2}#/m);
   // Every row of the reply is there once, the last of them right over the live region.
   for (let i = 1; i <= 30; i++) expect(all.match(new RegExp(`^ {2}Строка ${i}\\.$`, 'gm'))).toHaveLength(1);
-  expect(s.frame()).toMatch(/ {2}Строка 30\.\n\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
+  expect(s.frame()).toMatch(/ {2}Строка 30\.\n\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol  resting/);
   // No row reaches the last column, wide characters counted as two.
   expect(rows(all).every((row) => [...row].length <= 79)).toBe(true);
 });
@@ -249,7 +249,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   s.type('and thn?\r');
   s.journal({ type: 'stimulus', source: 'clock', text: 'tick' }, 4500);
   expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\? {2}queued\n\n/);
-  expect(s.live()).toContain('1 queued · Up in an empty box takes the last one back');
+  expect(s.live()).toContain('1 queued · Up takes the last back');
   expect(sentFiles(s)).toEqual(['look around']);
   // Up in the empty box takes it back to be put right; Enter queues it again.
   s.type('\x1b[A');
@@ -276,7 +276,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   expect(done.match(/▪ bash/g)).toHaveLength(1);
   expect(done.match(/and then\?/g)).toHaveLength(1);
   expect(done).not.toMatch(/running|on its way|queued|not read yet/);
-  expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
+  expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol  resting/);
 });
 
 test('reasoning and context use are shown when the body journals them, and nothing stands in their place when it does not', () => {
@@ -300,13 +300,13 @@ test('reasoning and context use are shown when the body journals them, and nothi
   expect(all).toContain('› and how many lines?\n\n○ The owner wants a count. I should not guess: `wc -l` gives it exactly.\n  Then report the total only.\n\n  ▪ bash  command: wc -l body/*.ts');
   expect(all).toContain('○ Report the total.\n\n● About 1,400.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
-  expect(rows(s.live()).at(-1)).toMatch(/^ {60,}context 9% \(90\.3k\/1\.05M\)$/);
-  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol · effort high · resting · /);
+  expect(rows(s.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 9% \(90\.3k\/1\.05M\)$/);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
   // A model whose window is not known: the count alone.
   const other = stage(100, 30, { env: { TENERAL_MODEL: 'some-local-model' } });
   settled(other);
   other.journal(more({ type: 'assistant', text: 'Hm.', toolCalls: [], usage: { input: 12_345, output: 55 } }), 0);
-  expect(rows(other.live()).at(-1)).toMatch(/^ {60,}context 12\.4k$/);
+  expect(rows(other.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 12\.4k$/);
 });
 
 // --- resizing ---
@@ -376,7 +376,7 @@ test('a mutation accepted: mutating while the kernel checks, then a notice with 
   s.alive.body = false;
   s.clock.at = 30_000;
   expect(s.live()).toMatch(new RegExp(`\\n${SPIN} The agent is mutating · 0:30\\n╭`));
-  expect(s.live()).toMatch(/ · gen 1 a1b2c3d( {3}|$)/m);
+  expect(s.live()).toMatch(/  gen 1 a1b2c3d( {3}|$)/m);
   // The tool line names the tool as it was called.
   expect(s.all()).toMatch(/▪ mutate {2}motive: remember names +✓ 200ms/);
 
@@ -384,7 +384,7 @@ test('a mutation accepted: mutating while the kernel checks, then a notice with 
   s.journal({ type: 'generation.started', commit: B }, 95_100, B);
   s.clock.at = 95_200;
   expect(s.live()).toMatch(/The agent is starting · 1:35\n/);
-  expect(s.live()).toMatch(/ · gen 2 e5f6a7b( {3}|$)/m);
+  expect(s.live()).toMatch(/  gen 2 e5f6a7b( {3}|$)/m);
   s.alive.body = true;
   s.journal({ type: 'generation.ready', commit: B }, 95_600, B);
   s.journal({ type: 'assistant', text: 'I am in the new body. Names stay with me now.', toolCalls: [] }, 99_000, B);
@@ -392,7 +392,7 @@ test('a mutation accepted: mutating while the kernel checks, then a notice with 
   const all = s.all();
   expectFrame('mutation-accepted-80x30', all);
   expect(all).toContain('┃ mutation accepted  a1b2c3d → e5f6a7b\n\n● I am in the new body. Names stay with me now.');
-  expect(s.live()).toMatch(/ gpt-6\.1-sol · resting · …\/work\/teneral · gen 2 e5f6a7b/);
+  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  …\/work\/teneral  gen 2 e5f6a7b/);
 });
 
 test('a mutation rejected: the gate by name, and the end of its output as several readable rows behind the notice\'s edge', () => {
@@ -442,7 +442,7 @@ test('a rollback: the reason, then the end of what the generation last printed, 
   expect(all).toContain('\n┃ rolled back  e5f6a7b → a1b2c3d\n┃   crashed 3 times without a reply. Its stderr ended with:\n');
   expect(all).toContain('┃   [turn failed] TypeError: undefined is not an object (evaluating');
   expect(all).toContain('┃       at runTurn (/teneral/.teneral/live/body/loop.ts:52:15)');
-  expect(s.live()).toMatch(/ · gen 1 a1b2c3d( {3}|$)/m);
+  expect(s.live()).toMatch(/  gen 1 a1b2c3d( {3}|$)/m);
 
   s.journal({ type: 'generation.rolledback', commit: A, to: B, reason: OWNER_REASON }, 20_000, B);
   expect(s.all()).toContain('\n┃ sent back by you  a1b2c3d → e5f6a7b\n');
@@ -547,13 +547,13 @@ test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the 
   s.type('what is wrong in this screenshot?');
   s.type('\x16');
   // Asked, not answered: the footer says what is being waited for; nothing is typed into the line.
-  expect(rows(s.live()).at(-1)).toBe(' asking your machine for the clipboard\'s image …');
+  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the clipboard's image …$/);
   expect(typed(s)).toEqual(['› what is wrong in this screenshot?']);
   const shot = png(1280, 720, 245_000);
   expect(helper(s, () => ({ first: 'ok', data: shot }))).toEqual(['clipboard']);
   const live = s.live();
   expect(typed(s)).toEqual([`[image 1 · png · 1280×720 · ${Math.round(shot.length / 1024)} KB]`, '› what is wrong in this screenshot?']);
-  expect(rows(live).at(-1)).toBe(' attached: image 1 · Backspace at the start removes the last');
+  expect(rows(live).at(-1)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
   expect(stored(s)).toEqual([`${sha(shot)}.png`]);
   expect(readFileSync(join(s.p.root, 'memory', 'images', `${sha(shot)}.png`)).equals(shot)).toBe(true);
   expectFrame('image-attached-100x34', s.all());
@@ -592,7 +592,7 @@ test('a file dragged in, pasted as its path or named with /image becomes a chip 
   // Dragged: the terminal pastes the path, quoted, with a space after it.
   s.type(PASTE('\'/home/owner/My Pictures/photo 1.jpg\' '));
   expect(typed(s)).toEqual(['›']);
-  expect(rows(s.live()).at(-1)).toBe(' asking your machine for the file …');
+  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the file …$/);
   expect(helper(s, answer)).toEqual(['file /home/owner/My Pictures/photo 1.jpg']);
   expect(typed(s)).toEqual([`[image 1 · jpg · 4032×3024 · ${photo.length} B]`, '›']);
   // A file address, as some terminals paste it; and /image with a path from the home directory.
@@ -671,7 +671,7 @@ test('limits: at most four images in a message, 10 MB each, and each refusal say
     s.frame();
   }
   expect(typed(s).join(' ').match(/\[image \d/g)).toHaveLength(4);
-  expect(rows(s.live()).at(-1)).toBe(' attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last');
+  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last$/);
   s.type('\x16');
   expect(helper(s, () => ({ first: 'ok', data: png(99, 99) }))).toEqual([]);
   expect(s.all()).toContain('  A message carries at most 4 images. Backspace at the start of the line removes the last one.');
@@ -750,7 +750,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
 
   // The client is whole: its own panel at the top, its own box and footer at the bottom, still on the normal screen.
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(77)}╮`);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol · /);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  /);
   expect(s.term.vt.alt).toBe(false);
   expect(all).toContain('● Beforeafter.');
   expect(all).toContain('◦ from mallory  hi there [image: memory/images/');
@@ -812,7 +812,7 @@ test('/quit, Ctrl-D on an empty line and Ctrl-C each leave the client only: the 
     // What was on the terminal before is still there, then the conversation, then one line saying what leaving meant. No box, no footer.
     expect(left.startsWith('$ ./box talk\n╭')).toBe(true);
     expect(left.endsWith('› hello again\n\n● Hello. Still here.\n\n  You left. Mica goes on; ./box talk attaches again.')).toBe(true);
-    expect(left).not.toMatch(/^│ ›|gpt-6\.1-sol · resting|\/quit/m);
+    expect(left).not.toMatch(/^│ ›|gpt-6\.1-sol  resting|\/quit/m);
     expect(left.match(/╭/g)).toHaveLength(1);
     // The cursor is on the row under the last one, where the shell's prompt goes.
     expect(s.term.vt.cursor).toEqual({ row: rows(s.term.vt.text().trimEnd()).length, col: 0 });
@@ -888,7 +888,7 @@ test('the individual is named once its soul names it, whatever the file is calle
   s.alive.supervisor = false;
   s.alive.body = false;
   s.journal({ type: 'assistant', text: 'ok', toolCalls: [] }, 100);
-  expect(s.live()).toMatch(/ gpt-6\.1-sol · not running · /);
+  expect(s.live()).toMatch(/ gpt-6\.1-sol  not running  /);
   // A line sent now waits in the owner directory until someone is there to take it.
   s.type('are you there?\r');
   expect(s.live()).toContain('› are you there?  on its way');
@@ -920,7 +920,7 @@ test('lines from another terminal, clock ticks and messages are shown as they co
   expect(all).toContain('› typed in the other window  from another terminal');
   expect(all).toContain('  ◦ clock  It is 12:00. Nothing has arrived since 11:30.\n  ◦ from alice  (message m1) can you hear me?');
   expect(all).toContain('! not from the model\n  The provider refused the request 3 times in a row with status 400: context\n  too long');
-  expect(s.live()).toMatch(/ gpt-6\.1-sol · resting · /);
+  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  /);
 });
 
 test('Tab and /tools: what is printed stays as it is; the last calls are shown once more with what they returned, and later calls carry it', () => {
@@ -1016,11 +1016,11 @@ test('the footer turns through tips, each naming a real key or command, and give
   ]);
   s.clock.at = 0;
   s.term.resize(70, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol · resting · …/work/teneral · gen 1 a1b2c3d');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d');
   s.term.resize(50, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol · resting · …/work/teneral');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  …/work/teneral');
   s.term.resize(30, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol · resting');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
 });
 
 // --- the terminal's limits ---
@@ -1041,7 +1041,7 @@ test('NO_COLOR: the same client, and not one colour code; weight, slant and the 
 });
 
 test('with 256 or 16 colours the same client is drawn with the colours there are', () => {
-  for (const [depth, pattern] of [['256', /^\x1b\[(?:[0-47];)*(?:38;5;\d+)?m$|^\x1b\[[0-47](?:;[1-47])*m$/], ['16', /^\x1b\[(?:\d{1,2})(?:;\d{1,2})*m$/]] as const) {
+  for (const [depth, pattern] of [['256', /^\x1b\[(?:[0-47];)*(?:38;5;\d+)?(?:;?48;5;\d+)?m$|^\x1b\[[0-47](?:;[1-47])*m$/], ['16', /^\x1b\[(?:\d{1,3})(?:;\d{1,3})*m$/]] as const) {
     const s = stage(80, 30, { caps: { depth } });
     settled(s);
     s.journal({ type: 'stimulus', source: 'terminal', text: 'hello' }, 0);
@@ -1070,7 +1070,7 @@ test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, mar
   expect(all).toContain('| mutation accepted  a1b2c3d -> e5f6a7b');
   expect(all).toContain('|   \\\\  //   Talking with your teneral agent');
   expect(all).toContain(`| [image 1 | png | 64x48 | ${png(64, 48).length} B]`);
-  expect(all).toContain(' gpt-6.1-sol | .../work/teneral | gen 2 e5f6a7b');
+  expect(all).toMatch(/\n gpt-6\.1-sol {3,}attached: image 1 \| Backspace at the start removes the last/);
   expect(all).toMatch(/^[|/\\-] The agent is thinking \| 0:01 \| esc to interrupt$/m);
 });
 
@@ -1243,7 +1243,7 @@ test('Esc while the agent works sends one interrupt and no line; the line over t
   expect(all).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
   expect(all.match(/interrupted by you/g)).toHaveLength(1);
   expect(all).not.toMatch(/interrupting|esc to interrupt|running/);
-  expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
+  expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol  resting/);
   // What is said next starts a turn like any other, which can be interrupted in its turn.
   s.say('something else', 6000);
   s.clock.at = 7000;
@@ -1360,7 +1360,7 @@ test('an interruption made at another terminal, or found in the history on attac
   s.journal({ type: 'turn.interrupted' }, -29_000);
   s.app.open();
   expect(s.all()).toContain('› go on\n\n  ◦ interrupted by you');
-  expect(s.live()).toMatch(/gpt-6\.1-sol · resting/);
+  expect(s.live()).toMatch(/gpt-6\.1-sol  resting/);
   s.journal({ type: 'stimulus', source: 'terminal', text: 'typed elsewhere' }, 1000);
   s.journal({ type: 'turn.interrupted' }, 2000);
   s.clock.at = 3000;

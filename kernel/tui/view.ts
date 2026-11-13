@@ -358,6 +358,56 @@ function offeredRows(list: Offered, max: number, rows: number, g: Glyphs): Line[
  * next frame can erase all of it. Wrapped beyond the height of the screen, by a window made much
  * narrower and lower in one step, its first rows scroll away, and are then out of reach.
  */
+/** The grounds of the footer's left segments, in order: the first is teneral's own, the rest alternate. */
+const GROUNDS: Style[] = [{ fg: 'ink', bg: 'brand', bold: true }, { fg: 'paper', bg: 'slab' }, { fg: 'paper', bg: 'deep' }];
+const groundOf = (i: number): Style => GROUNDS[i === 0 ? 0 : 1 + ((i - 1) % 2)]!;
+
+/** The ground of a segment at the right: how much came from the cache is green when nearly all did, red when nearly none. */
+function contextGround(text: string): Style {
+  const cached = /^cached (\d+)%$/.exec(text);
+  if (cached === null) return { fg: 'paper', bg: 'slab' };
+  const share = Number(cached[1]);
+  return { fg: 'ink', bg: share >= 70 ? 'good' : share < 30 ? 'warn' : 'accent', bold: true };
+}
+
+/** Segments side by side, each on its ground; where the font has them, an arrow of the left one's colour leads into the next. */
+function segments(parts: { text: string; style: Style }[], g: Glyphs, side: 'left' | 'right'): Line {
+  const out: Line = [];
+  parts.forEach((part, i) => {
+    if (side === 'right' && g.segBack !== '') out.push({ text: g.segBack, style: { fg: part.style.bg, ...(i > 0 ? { bg: parts[i - 1]!.style.bg } : {}) } });
+    out.push({ text: ` ${part.text} `, style: part.style });
+    if (side === 'left' && g.seg !== '') out.push({ text: g.seg, style: { fg: part.style.bg, ...(i + 1 < parts.length ? { bg: parts[i + 1]!.style.bg } : {}) } });
+  });
+  return out;
+}
+
+/**
+ * The footer, in one row. At the left, segments: the model, the state, the directory, the
+ * generation. At the right: what is attached or waited for, else a tip, and the context. What
+ * does not fit gives way in this order: the tip, the segments from the last down to two, the
+ * context, the second segment; what is attached or waited for is said to the end.
+ */
+function footerRow(v: Live, max: number): Line {
+  const { g } = v;
+  let about = v.about.filter((part) => part !== '');
+  let tip = v.hint === '' ? v.tip : '';
+  let context = v.context;
+  const build = (): { left: Line; right: Line } => {
+    const left = segments(about.map((text, i) => ({ text, style: groundOf(i) })), g, 'left');
+    const gap = context === '' ? '' : ' ';
+    const said: Line = v.hint !== '' ? [{ text: `${v.hint}${gap}`, style: BRAND }] : tip !== '' ? [{ text: `${tip}${gap}`, style: FAINT }] : [];
+    return { left, right: [...said, ...(context === '' ? [] : segments(context.split(` ${g.sep} `).map((text) => ({ text, style: contextGround(text) })), g, 'right'))] };
+  };
+  const fits = (): boolean => { const { left, right } = build(); return lineWidth(left) + (right.length > 0 ? 3 : 0) + lineWidth(right) <= max; };
+  if (!fits()) tip = '';
+  while (!fits() && about.length > 2) about = about.slice(0, -1);
+  if (!fits()) context = '';
+  while (!fits() && about.length > 1) about = about.slice(0, -1);
+  if (!fits() && v.hint !== '') about = [];
+  const { left, right } = build();
+  return ends(left, right, max);
+}
+
 export function liveRows(v: Live): Line[] {
   const { g } = v;
   const max = Math.max(8, v.cols - 1);
@@ -374,9 +424,6 @@ export function liveRows(v: Live): Line[] {
   const bare = panel(typed, max, g, FAINT);
 
   const sep = ` ${g.sep} `;
-  let about = v.about.filter((part) => part !== '');
-  while (about.length > 1 && width(about.join(sep)) + 1 > max) about = about.slice(0, -1);
-  const left: Line = [{ text: ` ${about.join(sep)}`, style: DIM }];
   const list = v.list ?? null;
   let listed = list === null ? 0 : Math.min(list.matches.length, LIST_ROWS);
   /** Under the commands: the keys, as many as fit, and at the right which of how many is chosen, when not all are shown. */
@@ -385,14 +432,10 @@ export function liveRows(v: Live): Line[] {
     while (parts.length > 1 && width(parts.join(sep)) + 1 > max) parts = parts.slice(0, -1);
     return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
   };
-  const footer: Line[] = [ends(left, v.tip === '' ? [] : [{ text: v.tip, style: FAINT }], max)];
-  if (list !== null) footer.length = 0;
-  else if (v.hint !== '' || v.context !== '') footer.push(ends([{ text: v.hint === '' ? '' : ` ${v.hint}`, style: BRAND }], v.context === '' ? [] : [{ text: v.context, style: DIM }], max));
-
+  const footer: Line[] = list !== null ? [] : [footerRow(v, max)];
   // What a small screen gives up, in this order, until the region fits.
   let pending = v.pending;
   let blank = true;
-  let second = footer.length > 1;
   let first = true;
   let activity = v.activity;
   let framed = true;
@@ -403,10 +446,9 @@ export function liveRows(v: Live): Line[] {
     ...(pending.length > 0 && blank ? [[]] : []),
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
-    ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer.slice(0, second ? 2 : 1) : []),
+    ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer : []),
   ];
   const fits = (): boolean => build().length <= room;
-  if (!fits()) second = false;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   if (!fits()) blank = false;
   while (!fits() && listed > 3) listed -= 1;

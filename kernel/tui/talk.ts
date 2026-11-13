@@ -249,7 +249,7 @@ export class TalkScreen {
 
   constructor(private readonly o: TalkScreenOptions) {
     this.inline = new Inline(o.term);
-    this.g = glyphs(o.term.caps.utf8);
+    this.g = glyphs(o.term.caps.utf8, /^(1|true|yes|on)$/i.test(o.env.TENERAL_POWERLINE ?? ''));
     // A terminal that went away without a word: the client ends, as if the owner had left.
     this.lifeline = new Lifeline(o.term, () => this.close(0), o.lifelineMs);
     this.now = o.now ?? Date.now;
@@ -983,7 +983,7 @@ export class TalkScreen {
     const chips = this.edit.chips.length;
     const hint = waiting !== '' ? `${waiting} ${g.ellipsis}`
       : chips > 0 ? `attached: ${this.edit.chips.map((_, i) => `image ${i + 1}`).join(', ')} ${g.sep} Backspace at the start removes the last`
-      : this.queue.length > 0 ? `${this.queue.length} queued ${g.sep} Up in an empty box takes the last one back` : '';
+      : this.queue.length > 0 ? `${this.queue.length} queued ${g.sep} Up takes the last back` : '';
     let context = '';
     if (s.usage !== null) {
       const window = (providers as { contextWindow?: unknown }).contextWindow;

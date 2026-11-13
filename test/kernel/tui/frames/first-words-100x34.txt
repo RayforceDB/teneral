@@ -42,4 +42,4 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                               │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol · waiting for you · …/work/teneral · gen 1 a1b2c3d   /help lists the keys and commands
+ gpt-6.1-sol  waiting for you  …/work/teneral  gen 1 a1b2c3d      /help lists the keys and commands
