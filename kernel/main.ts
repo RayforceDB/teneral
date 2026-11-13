@@ -1,5 +1,7 @@
 import { RELAUNCH_EXIT } from './launcher';
 import { missingConfig } from './providers';
+import { pinsAt } from './gates';
+import { fetchMissing, parsePins } from './organs';
 import { init, installRoot, supervise } from './supervisor';
 
 // The supervisor of one install. The launcher (kernel/launcher.ts) starts it, from the checkout of
@@ -9,7 +11,14 @@ if (process.argv[2] === '--prepare') {
   // For the launcher, before any generation's kernel can be started: whatever is missing of the
   // state file and the worktrees is made, and nothing is run.
   try {
-    init(root);
+    const state = init(root);
+    // What the generation pins and the cache does not hold is fetched, so that a fresh clone has what its
+    // seed pins. A failure here is said and stops nothing: the start says again what is missing, and waits.
+    try {
+      for (const problem of await fetchMissing(root, parsePins(pinsAt(root, state.current)), { log: (line) => console.error(`[teneral] ${line}`) })) console.error(`[teneral] ${problem}`);
+    } catch (err) {
+      console.error(`[teneral] the pins of ${state.current} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    }
     process.exit(0);
   } catch (err) {
     console.error(`[teneral] cannot prepare ${root}: ${err instanceof Error ? err.message : String(err)}`);

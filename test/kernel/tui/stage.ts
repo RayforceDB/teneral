@@ -2,7 +2,7 @@ import { expect } from 'bun:test';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { EventBody } from '../../../kernel/journal';
+import type { EventBody } from '../../../brain/journal';
 import { paths, type Paths } from '../../../kernel/supervisor';
 import type { Alive } from '../../../kernel/tui/model';
 import { TalkScreen } from '../../../kernel/tui/talk';

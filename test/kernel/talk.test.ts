@@ -5,7 +5,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { helpRows } from '../../kernel/commands';
-import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
+import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { INTERRUPT_SUFFIX, MUTATION_SUFFIX, approvedLine } from '../../kernel/owner';
 import { git } from '../../kernel/gates';
 import { readApproval } from '../../kernel/approval';

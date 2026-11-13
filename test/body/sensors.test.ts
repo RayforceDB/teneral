@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
-import { appendEvent, readEvents } from '../../kernel/journal';
+import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../kernel/envelope';
 import { interrupt, tell } from '../../kernel/owner';
 

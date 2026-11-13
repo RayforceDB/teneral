@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { bodyEnv, git, organsAt, pinsAt, runGates, tryOrgans, type GateResult } from '../../kernel/gates';
-import { readEvents } from '../../kernel/journal';
+import { readEvents } from '../../brain/journal';
 import {
-  ENGINES_FILE, MAX_ARCHIVE_BYTES, MAX_ENTRIES, MAX_ORGANS, MAX_UNPACKED_BYTES, ORGANS_FILE, archivePath, organCache, parseOrgans,
+  ENGINES_FILE, fetchMissing, MAX_ARCHIVE_BYTES, MAX_ENTRIES, MAX_ORGANS, MAX_UNPACKED_BYTES, ORGANS_FILE, archivePath, organCache, parseOrgans,
   parsePins, provideOrgans, treePath, type Organ,
 } from '../../kernel/organs';
 import { init, paths, supervise } from '../../kernel/supervisor';
@@ -493,7 +493,7 @@ test('an archive written by tar itself unpacks: long names, links, modes, in the
 
 // --- what a generation is handed ---
 
-const JOURNAL_MODULE = join(import.meta.dir, '../../kernel/journal.ts');
+const JOURNAL_MODULE = join(import.meta.dir, '../../brain/journal.ts');
 /** Journals what it finds in its organs, as a stimulus, then becomes ready. */
 const REPORT = `
 import { appendEvent, readEvents } from ${JSON.stringify(JOURNAL_MODULE)};
@@ -730,3 +730,35 @@ test('an engine pinned by the brain is judged, unpacked and handed over as an or
   expect(readFileSync(join(provided.dir!, 'rayforce', 'hello.txt'), 'utf8')).toBe('engine\n');
   expect(readFileSync(join(provided.dir!, 'tool', 'hello.txt'), 'utf8')).toBe('organ\n');
 }, SLOW);
+
+test('an install that starts fetches the pinned archives its cache lacks, keeps only what has the pinned hash, and says what it could not have', async () => {
+  const { dir } = makeLineage({ 'body/a.ts': 'export const a = 1;\n' });
+  const good = tarGz(tool('good'));
+  const there = tarGz(tool('there'));
+  stock(dir, there);
+  const pins = parsePins({ organs: JSON.stringify({ ...pinOf('good', sha(good)), ...pinOf('there', sha(there)), ...pinOf('wrong', 'c'.repeat(64)), ...pinOf('gone', 'd'.repeat(64)) }), engines: null });
+  const asked: string[] = [];
+  const get = (async (url: string | URL | Request) => {
+    asked.push(String(url));
+    if (String(url) === URL_OF('gone')) return new Response('no', { status: 404 });
+    return new Response(new Uint8Array(String(url) === URL_OF('good') ? good : tarGz(tool('other'))));
+  }) as typeof fetch;
+  const problems = await fetchMissing(dir, pins, { get });
+  // What is in the cache already is not asked for again.
+  expect(asked).toEqual([URL_OF('good'), URL_OF('wrong'), URL_OF('gone')]);
+  expect(sha(readFileSync(archivePath(dir, sha(good))))).toBe(sha(good));
+  expect(problems).toHaveLength(2);
+  expect(problems[0]).toContain(`wrong: ${URL_OF('wrong')} could not be fetched: what came has sha256`);
+  expect(problems[1]).toContain('the address answered 404');
+  expect(readdirSync(organCache(dir).archives).sort()).toEqual([`${sha(good)}.tar.gz`, `${sha(there)}.tar.gz`].sort());
+  // Asked again, only what is still missing is.
+  asked.length = 0;
+  await fetchMissing(dir, pins, { get });
+  expect(asked).toEqual([URL_OF('wrong'), URL_OF('gone')]);
+});
+
+test('the seed pins the engine of its memory in its brain, by a pin the kernel reads', () => {
+  const pins = parsePins({ organs: null, engines: readFileSync(join(import.meta.dir, '..', '..', ENGINES_FILE), 'utf8') });
+  expect(pins.map((pin) => pin.name)).toEqual(['rayforce']);
+  expect(pins[0]!.url).toMatch(/^https:\/\/github\.com\/RayforceDB\/rayforce\/releases\/download\/v[\d.]+\/rayforce-[\d.]+-linux-x86_64\.tar\.gz$/);
+});

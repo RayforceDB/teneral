@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SOUL_CAP, birth, composeSystem, loadSoul } from '../../brain/soul';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 
 function soulDir(files: Record<string, string> = {}): string {
   const dir = join(mkdtempSync(join(tmpdir(), 'teneral-soul-')), 'soul');

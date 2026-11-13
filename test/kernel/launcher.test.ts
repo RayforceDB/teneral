@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../../kernel/gates';
-import { readEvents } from '../../kernel/journal';
+import { readEvents } from '../../brain/journal';
 import { LAUNCHER, OUTDATED_EXIT, RELAUNCH_EXIT, kernelOf, launch } from '../../kernel/launcher';
 import { init, paths, readState } from '../../kernel/supervisor';
 import { commitAll, makeRepo, writeFiles } from './helpers';

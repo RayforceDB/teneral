@@ -1,5 +1,5 @@
 import { OWNER_REASON } from '../back';
-import { eventName, type JournalEvent } from '../journal';
+import { eventName, type JournalEvent } from '../../brain/journal';
 import { AT_REST, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
@@ -11,7 +11,7 @@ import { clean } from './text';
 //
 // A change the agent proposes to its own body is a mutation. Journals and bodies from before it
 // had that name say `molt.requested`, `molt.rejected` and the tool `molt`; every event is read
-// here by the name `eventName` gives it (kernel/journal.ts), so both are the same thing.
+// here by the name `eventName` gives it (brain/journal.ts), so both are the same thing.
 
 /** Whether a tool's name is the one that asks for a mutation, under either of its names. */
 export const isMutationTool = (name: string): boolean => name === 'molt' || name === 'mutate';

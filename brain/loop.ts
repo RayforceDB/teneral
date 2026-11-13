@@ -1,4 +1,4 @@
-import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
+import { appendEvent, readEvents, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';

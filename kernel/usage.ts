@@ -1,7 +1,7 @@
 // What the model was asked for, as the journal has it: the body journals with each reply what the
 // provider said the request cost. Nothing here asks anyone anything; it only adds up.
 import { tokens } from './tui/view';
-import type { JournalEvent } from './journal';
+import type { JournalEvent } from '../brain/journal';
 
 export interface Spent {
   requests: number;

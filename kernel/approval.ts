@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { gitPaths, sh } from './gates';
-import { appendEvent } from './journal';
+import { appendEvent } from '../brain/journal';
 import { MUTATION_SUFFIX } from './owner';
 import { FREE, isInert, protectedChanges } from './protected';
 

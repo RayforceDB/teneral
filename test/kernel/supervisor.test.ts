@@ -3,7 +3,7 @@ import {
   existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { appendEvent, readEvents } from '../../kernel/journal';
+import { appendEvent, readEvents } from '../../brain/journal';
 import { leaveApproval } from '../../kernel/owner';
 import { readApproval } from '../../kernel/approval';
 import {
@@ -12,7 +12,7 @@ import {
 import { git, runGates, type GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
-const JOURNAL_MODULE = join(import.meta.dir, '../../kernel/journal.ts');
+const JOURNAL_MODULE = join(import.meta.dir, '../../brain/journal.ts');
 
 const V1 = `
 import { appendEvent, readEvents } from ${JSON.stringify(JOURNAL_MODULE)};

@@ -1,4 +1,4 @@
-import { isMutationRejection, type JournalEvent } from '../kernel/journal';
+import { isMutationRejection, type JournalEvent } from './journal';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';

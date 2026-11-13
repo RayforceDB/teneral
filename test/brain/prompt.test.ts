@@ -117,9 +117,10 @@ test('it says the kernel speaks only through three events, and what rewriting th
   expect(flat).toMatch(/you stop hearing the kernel/);
 });
 
-test('it says the journal\'s event types are the kernel\'s and how to append', () => {
-  expect(flat).toMatch(/defined in `kernel\/journal\.ts`, and a mutation cannot add one/);
-  expect(flat).toMatch(/only through the kernel's `appendEvent`/);
+test('it says the journal is part of the brain, how to append, and that its file waits for the owner', () => {
+  expect(flat).toMatch(/It is part of your brain: `brain\/journal\.ts` holds its event types and the functions that write and read it/);
+  expect(flat).toMatch(/Append to it only through `appendEvent`/);
+  expect(flat).toMatch(/a commit that changes that file waits for your owner's approval like a change to the kernel/);
 });
 
 test('it says how to reproduce a start failure by hand', () => {
@@ -218,7 +219,7 @@ test('it says the smoke run is made as the configured provider, with a key and w
 });
 
 // Organs and notes: what the kernel does with each is pinned against the kernel's own constants and parser.
-import { noteProblem } from '../../kernel/journal';
+import { noteProblem } from '../../brain/journal';
 import { MAX_ORGANS, ORGANS_FILE, parseOrgans } from '../../kernel/organs';
 
 test('it says what an organ is, how one is pinned, where its archive goes, and how the body finds it', () => {

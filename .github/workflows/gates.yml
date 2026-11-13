@@ -33,6 +33,9 @@ jobs:
         run: bun test test/body test/brain
       # Once more as the kernel itself runs them on a candidate, in a fresh checkout with a bare
       # environment, ending with the smoke run: the body is started against a stand-in for the model.
+      # What the seed pins, fetched into the cache and kept only with the pinned hash, as an install does when it starts.
+      - name: the pinned archives
+        run: bun kernel/organs.ts fetch
       - name: the gates as the kernel runs them, smoke run included
         run: bun kernel/offer.ts gates HEAD
 

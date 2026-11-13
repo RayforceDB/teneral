@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
-import { appendEvent, readEvents, type JournalEvent } from '../../kernel/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
 import { interrupt, tell } from '../../kernel/owner';
 
 // The body as the kernel starts it, `bun body/main.ts`, with a stand-in for the model on a local

@@ -8,7 +8,7 @@ import {
 } from './gates';
 import {
   appendEvent, isMutationRejection, isMutationRequest, journalSize, readEvents, readEventsFrom, rejectionFor, type JournalEvent,
-} from './journal';
+} from '../brain/journal';
 import { parsePins, provideOrgans } from './organs';
 import { authDir } from './providers';
 import { cageNotice, takeApprovals } from './approval';

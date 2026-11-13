@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { OWNER_REASON } from '../../../kernel/back';
-import type { EventBody, JournalEvent } from '../../../kernel/journal';
+import type { EventBody, JournalEvent } from '../../../brain/journal';
 import { ENTRY_LIMIT, Transcript, UNBORN, endsWithQuestion, isMutationTool, stand, stateWord, unfinished, type Entry, type Standing } from '../../../kernel/tui/model';
 import { soulName, soulNameIn } from '../../../kernel/tui/talk';
 

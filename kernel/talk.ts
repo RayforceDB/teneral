@@ -1,7 +1,7 @@
 import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { helpRows } from './commands';
-import { eventName, journalSize, readEventsFrom, type JournalEvent } from './journal';
+import { eventName, journalSize, readEventsFrom, type JournalEvent } from '../brain/journal';
 import { interrupt, tell } from './owner';
 import { ownerCommand } from './offer';
 import { planNotice } from './providers';

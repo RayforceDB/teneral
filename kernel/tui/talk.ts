@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
-import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
+import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
 import { ownerCommand } from '../offer';
 import { interrupt, tell } from '../owner';
 import * as providers from '../providers';

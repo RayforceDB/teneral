@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync, createReadStream, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync,
-  readSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeSync,
+  readSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
@@ -519,6 +519,41 @@ export async function provideOrgans(root: string, organs: readonly Organ[], o: {
   }
 }
 
+/**
+ * For an install that is being started: bring into the cache every pinned archive that is neither
+ * there nor unpacked, from the address its pin gives. This is how a fresh clone comes by what the
+ * seed pins, before there is an agent to fetch anything. What arrives is trusted no more than what
+ * an agent puts there: it is kept only when it has the pinned hash, and the gate and the start
+ * verify it again. Returns what could not be had, in words for the owner; never throws.
+ */
+export async function fetchMissing(
+  root: string, organs: readonly Organ[], o: { get?: typeof fetch; timeoutMs?: number; log?: (line: string) => void } = {},
+): Promise<string[]> {
+  const get = o.get ?? fetch;
+  const problems: string[] = [];
+  for (const organ of organs) {
+    const path = archivePath(root, organ.sha256);
+    if (existsSync(path) || existsSync(treePath(root, organ.sha256))) continue;
+    const tmp = `${path}.${process.pid}.tmp`;
+    try {
+      o.log?.(`fetching ${organ.name} from ${organ.url}`);
+      const response = await get(organ.url, { redirect: 'follow', signal: AbortSignal.timeout(o.timeoutMs ?? 300_000) });
+      if (!response.ok) throw new Error(`the address answered ${response.status}`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > MAX_ARCHIVE_BYTES) throw new Error(`it is ${bytes.length} bytes; the limit is ${MAX_ARCHIVE_BYTES}`);
+      const actual = createHash('sha256').update(bytes).digest('hex');
+      if (actual !== organ.sha256) throw new Error(`what came has sha256 ${actual}, not the pinned ${organ.sha256}`);
+      mkdirSync(organCache(root).archives, { recursive: true });
+      writeFileSync(tmp, bytes);
+      renameSync(tmp, path);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      problems.push(`${organ.name}: ${organ.url} could not be fetched: ${reasonOf(err)}. Download it to ${path} by hand, or start again when the address can be reached`);
+    }
+  }
+  return problems;
+}
+
 // `bun kernel/organs.ts`, run in a checkout: does for the pins in its body/organs.json and brain/engines.json,
 // as the files stand there, what the gate will do for the commit, and prints the directory to use as TENERAL_ORGANS.
 if (import.meta.main) {
@@ -530,6 +565,10 @@ if (import.meta.main) {
   let status = 1;
   try {
     const root = repoRoot(process.cwd());
+    // `bun kernel/organs.ts fetch`: first bring what is pinned and missing into the cache, as an install does when it starts.
+    if (process.argv[2] === 'fetch') {
+      for (const problem of await fetchMissing(root, parsePins({ organs: read(ORGANS_FILE), engines: read(ENGINES_FILE) }), { log: (line) => console.error(line) })) console.error(problem);
+    }
     const tried = await tryOrgans(root, parsePins({ organs: read(ORGANS_FILE), engines: read(ENGINES_FILE) }), tmp);
     if (tried.problem !== undefined) console.error(tried.problem);
     else if (tried.dir === null) console.error(`${file} pins no organs, and ${ENGINES_FILE} no engines. Archives go to ${organCache(root).archives}/<sha256>.tar.gz`);

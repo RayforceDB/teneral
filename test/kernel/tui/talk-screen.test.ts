@@ -5,8 +5,8 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { join } from 'node:path';
 import { OWNER_REASON } from '../../../kernel/back';
 import { git } from '../../../kernel/gates';
-import type { EventBody } from '../../../kernel/journal';
-import { readEvents } from '../../../kernel/journal';
+import type { EventBody } from '../../../brain/journal';
+import { readEvents } from '../../../brain/journal';
 import { IMAGE_MAX_BYTES } from '../../../kernel/tui/images';
 import { ENTRY_LIMIT } from '../../../kernel/tui/model';
 import { ago, lineage } from '../../../kernel/tui/talk';

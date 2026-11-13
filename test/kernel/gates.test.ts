@@ -630,12 +630,12 @@ function ownRepo(): { dir: string; seed: string } {
   // A lineage that pins organs runs these tests too, in its gates. Its body is smoked here with the organs the
   // gate run was given: the copy is shown the same cache. Run by hand with nothing given, it is smoked without them.
   const given = process.env.TENERAL_ORGANS;
-  if (given && existsSync(join(dir, 'body', 'organs.json'))) {
+  if (given && (existsSync(join(dir, 'body', 'organs.json')) || existsSync(join(dir, 'brain', 'engines.json')))) {
     mkdirSync(join(dir, '.teneral'), { recursive: true });
     symlinkSync(resolve(given, '..', '..'), join(dir, '.teneral', 'organs'));
     mkdirSync(join(dir, '.git', 'info'), { recursive: true });
     appendFileSync(join(dir, '.git', 'info', 'exclude'), '.teneral\n');
-  } else rmSync(join(dir, 'body', 'organs.json'), { force: true });
+  } else for (const pins of [join('body', 'organs.json'), join('brain', 'engines.json')]) rmSync(join(dir, pins), { force: true });
   return { dir, seed: commitAll(dir, 'own') };
 }
 

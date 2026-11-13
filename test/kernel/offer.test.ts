@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { deliver } from '../../kernel/envelope';
 import { git, type GateResult } from '../../kernel/gates';
 import { TOKEN_FILE, api, githubRemote, saveToken, GitHubError } from '../../kernel/github';
-import { readEvents } from '../../kernel/journal';
+import { readEvents } from '../../brain/journal';
 import {
   SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, ownSecrets, ownerCommand, pending, publish, readReport, readWitness,
   scan, settings, sign, slugOf, speciesHead, speciesRef, witness,

@@ -4,7 +4,7 @@ import {
   existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { appendEvent, readEvents } from './journal';
+import { appendEvent, readEvents } from '../brain/journal';
 import { ENGINES_FILE, ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parsePins, provideOrgans, type Organ, type Pins } from './organs';
 import { protectedChanges } from './protected';
 import { judgeApproval, type ApprovalOptions } from './approval';

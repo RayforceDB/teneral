@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 import { cacheUse } from '../../kernel/tui/view';
 import { formatUsage, share, usageReport } from '../../kernel/usage';
 

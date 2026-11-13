@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { identity } from './envelope';
 import { DEFAULT_CHECKS, repoRoot, runGates, type Check, type GateResult } from './gates';
 import { DEFAULT_API, GitHubError, TOKEN_FILE, TOKEN_NEEDS, api, gitRemote, githubRemote, hasToken, remoteFailure, saveToken, type Hub } from './github';
-import { appendEvent } from './journal';
+import { appendEvent } from '../brain/journal';
 import { GIT_NAMESPACE, KEY_FILE, WITNESS_NAMESPACE, commitSigner, ensureKey, run, signCommits, signText, signerOf, type Key } from './offerkey';
 import { approvedSummary, chooseApproval } from './approval';
 import { approve, approved, approvedLine, leaveApproval, tell, useApproval } from './owner';

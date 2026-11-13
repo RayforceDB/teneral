@@ -6,7 +6,7 @@ import {
 } from '../../kernel/approval';
 import { main as approveMain } from '../../kernel/approve';
 import { git, runGates, type GateOptions, type GateResult } from '../../kernel/gates';
-import { readEvents } from '../../kernel/journal';
+import { readEvents } from '../../brain/journal';
 import { INTERRUPT_SUFFIX, MUTATION_SUFFIX, leaveApproval, tell } from '../../kernel/owner';
 import { init, paths } from '../../kernel/supervisor';
 import { commitAll, makeRepo, writeFiles } from './helpers';

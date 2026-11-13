@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from '../kernel/envelope';
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 import { INTERRUPT_SUFFIX } from '../kernel/owner';
 
 export interface Stimulus {

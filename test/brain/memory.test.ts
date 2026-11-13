@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMessages, needsTurn } from '../../brain/memory';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 
 let n = 0;
 function ev(body: EventBody, gen = 'g1'): JournalEvent {

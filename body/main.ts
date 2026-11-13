@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendEvent, readEvents } from '../kernel/journal';
+import { appendEvent, readEvents } from '../brain/journal';
 import { needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
 import { runTurn } from '../brain/loop';

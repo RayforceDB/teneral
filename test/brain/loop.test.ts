@@ -6,7 +6,7 @@ import { runTurn } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
-import { appendEvent, readEvents } from '../../kernel/journal';
+import { appendEvent, readEvents } from '../../brain/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');

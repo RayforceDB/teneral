@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { cpSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { git, sh, type GateResult } from '../../kernel/gates';
-import { readEvents, type JournalEvent } from '../../kernel/journal';
+import { readEvents, type JournalEvent } from '../../brain/journal';
 import { init, paths, supervise } from '../../kernel/supervisor';
 import { commitAll, makeRepo } from './helpers';
 
@@ -22,7 +22,8 @@ const reachable = sh(['git', 'cat-file', '-e', `${FORMER}^{commit}`], HERE).code
 /** An install with this checkout's kernel and the body of `rev`, committed as its first generation. */
 function installWith(rev: string): { dir: string; seed: string } {
   const { dir } = makeRepo({});
-  for (const name of ['kernel', 'package.json', 'tsconfig.json']) cpSync(join(HERE, name), join(dir, name), { recursive: true });
+  // The kernel, and the one file of the brain it is built on: the journal. A former body finds that under its old name, kernel/journal.ts.
+  for (const name of ['kernel', join('brain', 'journal.ts'), 'package.json', 'tsconfig.json']) cpSync(join(HERE, name), join(dir, name), { recursive: true });
   const archive = Bun.spawnSync(['git', 'archive', '--format=tar', rev, 'body', 'BIRTH.md'], { cwd: HERE, stdout: 'pipe', stderr: 'pipe' });
   if (archive.exitCode !== 0) throw new Error(`git archive ${rev} failed: ${archive.stderr.toString()}`);
   const unpack = Bun.spawnSync(['tar', '-x', '-C', dir], { stdin: archive.stdout, stdout: 'pipe', stderr: 'pipe' });

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   appendEvent, eventName, isMutationRejection, isMutationRequest, journalSize, noteProblem, readEvents, readEventsFrom, rejectionFor,
   SCHEMA_VERSION,
-} from '../../kernel/journal';
+} from '../../brain/journal';
 
 function tmpJournal(): string {
   return join(mkdtempSync(join(tmpdir(), 'teneral-journal-')), 'data', 'journal.jsonl');

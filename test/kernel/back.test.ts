@@ -4,7 +4,7 @@ import {
   OWNER_REASON, chooseTarget, formatList, generations, goBack,
 } from '../../kernel/back';
 import { git } from '../../kernel/gates';
-import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../kernel/journal';
+import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { init, paths, supervise } from '../../kernel/supervisor';
 import { commitAll, makeRepo, writeFiles } from './helpers';
 
@@ -248,7 +248,7 @@ test('an install that was never started has nowhere to go back from', () => {
 test('while a supervisor holds the lock, going back is refused and nothing changes', async () => {
   const { dir, p, third } = install();
   // The third generation's body, made to stay up until a stimulus arrives.
-  const journalModule = JSON.stringify(`${import.meta.dir}/../../kernel/journal.ts`);
+  const journalModule = JSON.stringify(`${import.meta.dir}/../../brain/journal.ts`);
   writeFiles(p.candidate, { 'body/main.ts': `import { appendEvent, readEvents } from ${journalModule};
 const journal = process.env.TENERAL_JOURNAL;
 appendEvent(journal, process.env.TENERAL_GEN, { type: 'generation.ready', commit: process.env.TENERAL_GEN });

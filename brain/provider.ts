@@ -1,4 +1,4 @@
-import type { ToolCall, Usage } from '../kernel/journal';
+import type { ToolCall, Usage } from './journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
 import { accessToken, apiBase } from '../kernel/signin';
 import type { Image } from '../body/images';

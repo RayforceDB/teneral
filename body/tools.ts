@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from '../kernel/envelope';
 import { git } from '../kernel/gates';
-import { appendEvent } from '../kernel/journal';
+import { appendEvent } from '../brain/journal';
 import { keepImage, rootOf } from './images';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { buildMessages, needsTurn, type Sight } from '../../brain/memory';
 import { IMAGE_CHARS } from '../../body/images';
 import { toChatMessages, toResponsesInput } from '../../brain/provider';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 
 /** mulberry32: small, seeded, the same on every run. */
 function generator(seed: number) {

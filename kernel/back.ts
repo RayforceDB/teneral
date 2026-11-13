@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { sh } from './gates';
-import { appendEvent, readEvents, type JournalEvent } from './journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import {
   dropLock, installRoot, paths, readState, saveState, takeLock,
 } from './supervisor';
