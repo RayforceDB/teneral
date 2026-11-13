@@ -208,7 +208,7 @@ test('a style becomes colour codes for the depth the terminal has, and none at a
   expect(sgr({ bold: true }, 'none')).toBe('1');
   expect(sgr({ fg: 'accent' }, 'true')).toMatch(/^38;2;\d+;\d+;\d+$/);
   expect(sgr({ fg: 'accent' }, '256')).toMatch(/^38;5;\d+$/);
-  expect(sgr({ fg: 'accent', bold: true }, '16')).toBe('1;33');
+  expect(sgr({ fg: 'accent', bold: true }, '16')).toBe('1;34');
   // With 16 colours, and with none, dim text is set back by weight instead.
   expect(sgr({ fg: 'dim' }, '16')).toBe('2');
   expect(sgr({ fg: 'dim' }, 'none')).toBe('2');

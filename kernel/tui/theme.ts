@@ -8,13 +8,14 @@ export type Depth = 'none' | '16' | '256' | 'true';
 type Colour = readonly [rgb: readonly [number, number, number], indexed: number, basic: string];
 
 // Every colour is of middle lightness, so that it reads on a dark background and on a light one.
-// A reply has no colour at all: it is the terminal's own foreground. The owner's words are in
-// the owner's colour, so that the two are told apart at a glance.
+// A reply has no colour at all: it is the terminal's own foreground. The owner's words stand on a
+// ground of their own, so that the two are told apart at a glance; while the agent has not read
+// them yet they are faint, with no ground.
 export const PALETTE = {
   /** teneral's own: the mark, the frame of the welcome panel, the individual's name. The pale green of a creature just out of its old skin. */
   brand: [[88, 186, 148], 72, '36'],
-  /** The warm one, for the owner: their prompt mark and their words in the transcript, and the mark at the input. */
-  accent: [[226, 156, 72], 179, '33'],
+  /** The owner's marks: the prompt in the transcript and at the input, the chosen row of a list. A quiet blue. */
+  accent: [[122, 162, 204], 110, '34'],
   /** Machinery: tool lines, hints, quiet stimuli, the model's reasoning. With 16 colours it is the faint attribute. */
   dim: [[138, 134, 128], 245, '2'],
   /** Rules, frames and the least important marks. */

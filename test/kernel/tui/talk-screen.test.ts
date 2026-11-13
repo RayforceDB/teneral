@@ -248,15 +248,17 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   // Something said meanwhile waits under the call that is still running. The owner's line is kept by this client: nothing is sent yet.
   s.type('and thn?\r');
   s.journal({ type: 'stimulus', source: 'clock', text: 'tick' }, 4500);
-  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\? {2}queued\n\n/);
+  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\?\n\n/);
   expect(s.live()).toContain('1 queued · Up takes the last back');
   expect(sentFiles(s)).toEqual(['look around']);
   // Up in the empty box takes it back to be put right; Enter queues it again.
   s.type('\x1b[A');
   expect(s.live()).not.toContain('queued');
+  expect(s.live()).not.toMatch(/^› and thn\?$/m);
   expect(s.live()).toContain('│ › and thn?');
   s.type('\x7f\x7fen?\r');
-  expect(s.live()).toMatch(/› and then\? {2}queued\n\n/);
+  expect(s.live()).toMatch(/^› and then\?\n\n/m);
+  expect(s.live()).toContain('1 queued');
   expect(sentFiles(s)).toEqual(['look around']);
   // The result arrives: the call is printed with its outcome, and the step being over, the line goes out.
   s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'a\nb' }, 5300);

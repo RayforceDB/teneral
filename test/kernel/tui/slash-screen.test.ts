@@ -385,13 +385,13 @@ test('the name is coloured as it is typed: set back while it is part of one, the
   expect(since(at)).toContain('\x1b[38;2;138;134;128m/he\x1b[0m');
   at = from();
   s.type('lp');
-  expect(since(at)).toContain('\x1b[1;38;2;226;156;72m/help\x1b[0m');
+  expect(since(at)).toContain('\x1b[1;38;2;122;162;204m/help\x1b[0m');
   at = from();
   s.type('x');
   expect(since(at)).toContain('\x1b[38;2;222;110;88m/helpx\x1b[0m');
   at = from();
   s.type(`${CTRL_U}/image ~/日本語.png`);
-  expect(since(at)).toContain('\x1b[1;38;2;226;156;72m/image\x1b[0m ~/日本語.png');
+  expect(since(at)).toContain('\x1b[1;38;2;122;162;204m/image\x1b[0m ~/日本語.png');
   at = from();
   s.type(`${CTRL_U}/home/owner/a.png and /help`);
   expect(since(at)).toContain('/home/owner/a.png and /help');

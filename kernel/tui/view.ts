@@ -2,7 +2,7 @@ import { usage, type Command } from '../commands';
 import { placed, type Edit } from './editor';
 import { describe, type Attachment } from './images';
 import { markdown } from './markdown';
-import type { Entry } from './model';
+import { inQueue, type Entry } from './model';
 import { mark, windowStart } from './slash';
 import { clip, detab, fit, lineWidth, width, wrap, type Line, type Span } from './text';
 import type { Glyphs, Style } from './theme';
@@ -128,21 +128,24 @@ function titled(title: string, max: number, g: Glyphs, style: Style, indent = 0)
  * The rows of one entry, `max` columns wide. Everything someone else wrote starts in the third
  * column or further in; the first two belong to this client's own marks, which no reply can forge.
  */
-/** The owner's own words, wherever they stand in the conversation: in the owner's colour, so that they are never taken for a reply. */
-const OWNER: Style = { fg: 'accent', bold: true };
+/** The owner's own words once the agent has read them: on a ground of their own, so that they are never taken for a reply. */
+const OWNER: Style = { fg: 'paper', bg: 'slab', bold: true };
+/** The same words while they wait, in this client or on their way: faint, and with no ground. */
+const WAITING: Style = { fg: 'dim' };
 
 export function entryRows(e: Entry, max: number, look: Look): Line[] {
   const { g } = look;
   switch (e.kind) {
     case 'owner': {
-      const mark: Line = [{ text: `${g.prompt} `, style: { fg: 'accent', bold: true } }];
-      const rows = e.text === '' ? [] : e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: OWNER }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+      const waits = inQueue(e);
+      const mark: Line = [{ text: `${g.prompt} `, style: waits ? WAITING : { fg: 'accent', bold: true } }];
+      const rows = e.text === '' ? [] : e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: waits ? WAITING : OWNER }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
       const chips = chipRows(e.images.map((path, i) => chip(i + 1, look.image(path), path, g)), max, 2);
       // A message of images only: the mark stands before the first of them.
       if (rows.length === 0 && chips.length > 0) chips[0] = [...mark, ...chips[0]!.slice(1)];
       rows.push(...chips);
       if (rows.length === 0) rows.push(mark);
-      const tag = e.held ? 'queued' : e.pending ? 'on its way' : e.queued ? 'sent, not read yet' : e.elsewhere ? 'from another terminal' : '';
+      const tag = e.held ? '' : e.pending ? 'on its way' : e.queued ? 'sent, not read yet' : e.elsewhere ? 'from another terminal' : '';
       if (tag !== '') {
         const last = rows.at(-1)!;
         if (lineWidth(last) + tag.length + 2 <= max) last.push({ text: `  ${tag}`, style: DIM });
