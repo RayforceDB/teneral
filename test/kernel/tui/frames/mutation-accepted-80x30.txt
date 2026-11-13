@@ -28,7 +28,7 @@
 
 › go ahead and change yourself
 
-● I will ask for the mutation now.
+◦ I will ask for the mutation now.
 
   ▪ mutate  motive: remember names                                      ✓ 200ms
 

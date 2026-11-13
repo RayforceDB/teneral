@@ -28,7 +28,7 @@
 
 › посмотри ещё раз
 
-● Смотрю.
+◦ Смотрю.
 
   ▪ bash  command: ls -la body/ | sort              running
 

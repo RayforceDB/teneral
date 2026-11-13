@@ -28,7 +28,7 @@
 
 › look around
 
-● I will look.
+◦ I will look.
 
   ▪ bash  command: sleep 300                                                      running
 

@@ -32,12 +32,11 @@
 
 › and how many lines?
 
-○ The owner wants a count. I should not guess: `wc -l` gives it exactly.
-  Then report the total only.
+○ thought, 2 lines ▸ The owner wants a count. I should not guess: `wc -l` gives it exactly.
 
   ▪ bash  command: wc -l body/*.ts                                                          ✓ 200ms
 
-○ Report the total.
+○ thought ▸ Report the total.
 
 ● About 1,400.
 

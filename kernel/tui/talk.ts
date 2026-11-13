@@ -456,6 +456,16 @@ export class TalkScreen {
     return alive.supervisor && alive.body && this.standing.turn.busy && this.standing.mutation === null;
   }
 
+  /** Ctrl-R, or /reasoning: what the model thought since the owner's last line, in full; where it thought nothing since, the last time it did. */
+  private reasoning(): void {
+    const entries = this.transcript.entries;
+    const from = entries.findLastIndex((e) => e.kind === 'owner' && !inQueue(e));
+    let thoughts = entries.slice(from + 1).filter((e) => e.kind === 'reasoning');
+    if (thoughts.length === 0) thoughts = entries.filter((e) => e.kind === 'reasoning').slice(-1);
+    if (thoughts.length === 0) return this.sayOnce('There is no reasoning to show: the body journals none, or the model gave none.');
+    this.page(thoughts.length === 1 ? 'what it thought' : `what it thought, in ${thoughts.length} stretches`, thoughts.flatMap((e, i) => [...(i > 0 ? [''] : []), ...(e as { text: string }).text.split('\n')]));
+  }
+
   /** Send every line that was kept, in the order it was typed. */
   private sendQueued(): void {
     for (const line of this.queue.splice(0)) {
@@ -634,6 +644,7 @@ export class TalkScreen {
     if (key.kind === 'key') {
       if (key.name === 'tab') return this.toggleTools();
       if (ctrl('l')) return this.inline.invalidate();
+      if (ctrl('r')) return this.reasoning();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
       if (key.name === 'enter' && !key.alt && !key.shift) return this.submit();
       if (key.name === 'up' && this.queue.length > 0 && this.edit.text === '' && this.edit.chips.length === 0) return this.takeBack();
@@ -781,6 +792,8 @@ export class TalkScreen {
         }
         return this.page('generations, oldest first', clean(list).split('\n'));
       }
+      case '/reasoning':
+        return this.reasoning();
       case '/usage': {
         let lines: string[];
         try {

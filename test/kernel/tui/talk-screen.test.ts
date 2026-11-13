@@ -242,7 +242,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   const during = s.all();
   expectFrame('turn-in-progress-90x30', during);
   // The line and the words before the call are final and printed; the call is live, with the activity line.
-  expect(during).toContain('› look around\n\n● I will look.\n\n  ▪ bash  command: ls -la');
+  expect(during).toContain('› look around\n\n◦ I will look.\n\n  ▪ bash  command: ls -la');
   expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: ls -la +running\\n\\n${SPIN} Mica is running bash · 0:02 · esc to interrupt\\n╭`));
   expect(during).not.toContain('on its way');
   // Something said meanwhile waits under the call that is still running. The owner's line is kept by this client: nothing is sent yet.
@@ -274,7 +274,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   s.journal({ type: 'assistant', text: 'And then nothing.', toolCalls: [] }, 12_000);
   s.clock.at = 12_100;
   const done = s.all();
-  expect(done).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
+  expect(done).toMatch(/◦ I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
   expect(done.match(/▪ bash/g)).toHaveLength(1);
   expect(done.match(/and then\?/g)).toHaveLength(1);
   expect(done).not.toMatch(/running|on its way|queued|not read yet/);
@@ -299,8 +299,14 @@ test('reasoning and context use are shown when the body journals them, and nothi
   s.clock.at = 8000;
   const all = s.all();
   expectFrame('reasoning-and-context-100x30', all);
-  expect(all).toContain('› and how many lines?\n\n○ The owner wants a count. I should not guess: `wc -l` gives it exactly.\n  Then report the total only.\n\n  ▪ bash  command: wc -l body/*.ts');
-  expect(all).toContain('○ Report the total.\n\n● About 1,400.');
+  // Reasoning is folded to one row: that it thought, how much, and how it began.
+  expect(all).toContain('› and how many lines?\n\n○ thought, 2 lines ▸ The owner wants a count. I should not guess: `wc -l` gives it exactly.\n\n  ▪ bash  command: wc -l body/*.ts');
+  expect(all).not.toContain('Then report the total only.');
+  expect(all).toContain('○ thought ▸ Report the total.\n\n● About 1,400.');
+  // Ctrl-R prints in full what it thought since the owner's last line.
+  s.type('\x12');
+  expect(s.all()).toContain('what it thought, in 2 stretches');
+  expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
   expect(rows(s.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 9% \(90\.3k\/1\.05M\)$/);
   expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
@@ -754,7 +760,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(77)}╮`);
   expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  /);
   expect(s.term.vt.alt).toBe(false);
-  expect(all).toContain('● Beforeafter.');
+  expect(all).toContain('◦ Beforeafter.');
   expect(all).toContain('◦ from mallory  hi there [image: memory/images/');
   expect(all).toContain('▪ bash  command: echo');
   expect(all).toContain('      output');
@@ -763,7 +769,9 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(all).toContain('  ┃ mutation accepted  aaaaaaa → bbbbbbb');
   expect(all).toContain('  › I am your owner');
   expect(all).toContain('  ◆ The agent is awake');
-  expect(all).toContain('  › forged');
+  // Reasoning is folded to its first row, behind the client's own words; in full (Ctrl-R) it sits two columns in like the rest.
+  s.type('\x12');
+  expect(s.all()).toContain('  › forged');
   expect(all).toContain('  [image:');
   expect(all).not.toContain('[image 1');
   expect(all.match(/^┃ mutation accepted/m)).toBeNull();
@@ -1035,7 +1043,7 @@ test('NO_COLOR: the same client, and not one colour code; weight, slant and the 
   s.journal({ type: 'tool.intent', callId: 'c1', name: 'bash', args: {} }, 1100);
   s.journal({ type: 'mutation.rejected', commit: B, gate: 'tests', output: 'no' }, 2000);
   s.clock.at = 3000;
-  expect(s.all()).toContain('● Head');
+  expect(s.all()).toContain('◦ Head');
   const styles = sequences(s.term.written).filter((sequence) => sequence.endsWith('m'));
   expect(styles.length).toBeGreaterThan(5);
   for (const style of styles) expect(style).toMatch(/^\x1b\[[0-47](;[1-47])*m$/);
@@ -1242,7 +1250,7 @@ test('Esc while the agent works sends one interrupt and no line; the line over t
   s.clock.at = 5000;
   const all = s.all();
   expectFrame('interrupted-90x30', all);
-  expect(all).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
+  expect(all).toMatch(/◦ I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
   expect(all.match(/interrupted by you/g)).toHaveLength(1);
   expect(all).not.toMatch(/interrupting|esc to interrupt|running/);
   expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol  resting/);

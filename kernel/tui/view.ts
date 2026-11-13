@@ -156,9 +156,21 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
     case 'reasoning': {
       const style: Style = { fg: 'dim', italic: true };
       const mark: Line = [{ text: `${g.reasoning} `, style: FAINT }];
-      return e.text.split('\n').filter((line) => line.trim() !== '').flatMap((line, i) => wrap([{ text: detab(line.trim()), style }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+      const lines = e.text.split('\n').filter((line) => line.trim() !== '');
+      // Folded to one row: that it thought, how much, and how it began. Ctrl-R or /reasoning prints the latest in full; with tool output shown (Tab), all of it is here.
+      if (!look.tools) {
+        const head = `thought${lines.length > 1 ? `, ${lines.length} lines` : ''} ${g.pointer} `;
+        return [clip([...mark, { text: head, style: FAINT }, { text: detab((lines[0] ?? '').trim()), style }], max, { text: g.ellipsis, style: FAINT })];
+      }
+      return lines.flatMap((line, i) => wrap([{ text: detab(line.trim()), style }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
     }
     case 'reply': {
+      if (e.aside && !e.first) {
+        // Words between two tool calls: the work's own commentary, set back like the calls around it, so that the answer stands out when it comes.
+        const dim = markdown(e.text, Math.max(1, max - 2), g).map((line): Line => (line.length === 0 ? [] : [{ text: '  ' }, ...line.map((span): Span => ({ ...span, style: { ...span.style, fg: 'dim', bold: false } }))]));
+        if (dim.length > 0 && dim[0]!.length > 0) dim[0] = [{ text: `${g.quiet} `, style: FAINT }, ...dim[0]!.slice(1)];
+        return dim;
+      }
       const rows = markdown(e.text, Math.max(1, max - 2), g).map((line): Line => (line.length === 0 ? [] : [{ text: '  ' }, ...line]));
       // The client's own mark stands before the first row of what was said.
       if (rows.length > 0 && rows[0]!.length > 0) rows[0] = [{ text: `${g.reply} `, style: { fg: 'brand', bold: true } }, ...rows[0]!.slice(1)];

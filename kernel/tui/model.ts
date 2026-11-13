@@ -53,8 +53,11 @@ export type Entry = { id: number; rev: number } & (
   | { kind: 'owner'; text: string; images: string[]; held?: boolean; pending?: boolean; queued?: boolean; elsewhere?: boolean }
   /** A summary of the model's reasoning before a reply or a tool call, when the body journals one. */
   | { kind: 'reasoning'; text: string }
-  /** `first`: the first words this individual ever said. */
-  | { kind: 'reply'; text: string; first: boolean }
+  /**
+   * `first`: the first words this individual ever said. `aside`: said along with tool calls, in the
+   * middle of the work, and so not the answer: some models narrate every step this way.
+   */
+  | { kind: 'reply'; text: string; first: boolean; aside?: boolean }
   | { kind: 'tool'; callId: string; name: string; args: string; status: 'running' | 'ok' | 'failed' | 'cut short'; ms: number | null; output: string }
   /**
    * What the kernel did. `move`: the generation left and the one arrived in. `lead` is shown whole;
@@ -338,7 +341,8 @@ export class Transcript {
           return;
         }
         const shown = text.length > REPLY_CHARS ? `${text.slice(0, REPLY_CHARS)}\n\n[... ${text.length - REPLY_CHARS} more characters are in the journal]` : text;
-        this.push({ kind: 'reply', text: shown, first: !before.spoke });
+        const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
+        this.push({ kind: 'reply', text: shown, first: !before.spoke, ...(calls > 0 ? { aside: true } : {}) });
         return;
       }
       case 'tool.intent': {

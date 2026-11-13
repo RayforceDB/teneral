@@ -149,13 +149,13 @@ test('of more commands than six, the six around the chosen one are shown, and th
   const at = (chosen: number, cols = 80, rows = 30): string[] => text(liveRows(live(cols, rows, { edit: typing('/'), list: offered('/', chosen) }))).slice(4);
   const shown = (rows: string[]): string[] => rows.slice(0, -1).map((row) => /\/[a-z]+/.exec(row)![0]);
   expect(shown(at(0))).toEqual(['/help', '/image', '/stop', '/accept', '/tools', '/generations']);
-  expect(at(0).at(-1)).toBe(` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 12`);
+  expect(at(0).at(-1)).toBe(` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 13`);
   expect(at(0)[0]!.startsWith('  ▸ /help ')).toBe(true);
   expect(shown(at(5))).toEqual(['/stop', '/accept', '/tools', '/generations', '/history', '/offers']);
   expect(at(5)[3]!.startsWith('  ▸ /generations ')).toBe(true);
-  expect(shown(at(11))).toEqual(['/history', '/offers', '/approve', '/plain', '/usage', '/quit']);
-  expect(at(11)[5]!.startsWith('  ▸ /quit ')).toBe(true);
-  expect(at(11).at(-1)).toMatch(/ {3,}12 of 12$/);
+  expect(shown(at(12))).toEqual(['/offers', '/approve', '/plain', '/usage', '/reasoning', '/quit']);
+  expect(at(12)[5]!.startsWith('  ▸ /quit ')).toBe(true);
+  expect(at(12).at(-1)).toMatch(/ {3,}13 of 13$/);
   for (let chosen = 0; chosen < COMMANDS.length; chosen++) expect(at(chosen).filter((row) => row.startsWith('  ▸ '))).toEqual([expect.stringContaining(COMMANDS[chosen]!.name)]);
 });
 
@@ -188,7 +188,7 @@ test('with commands offered the live region still takes no more than half the sc
     '    /accept [commit]   accept the spec…',
     '    /tools             show or hide wh…',
     '    /generations       the generations…',
-    ' Tab completes · Enter runs     1 of 12',
+    ' Tab completes · Enter runs     1 of 13',
   ]);
   expect(text(liveRows(live(40, 10, { edit: typing('/'), list: offered('/', 4) }))).map((row) => row.slice(0, 12))).toEqual(['╭───────────', '│ › /       ', '╰───────────', '    /accept ', '  ▸ /tools  ']);
   expect(text(liveRows(live(40, 6, { edit: typing('/'), list: offered('/', 4) })))).toEqual(['› /', '  ▸ /tools             show or hide wh…']);

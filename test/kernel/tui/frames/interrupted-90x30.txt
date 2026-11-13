@@ -28,7 +28,7 @@
 
 › look around
 
-● I will look.
+◦ I will look.
 
   ▪ bash  command: sleep 300                                                ✗ failed 2.3s
 
