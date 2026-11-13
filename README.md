@@ -1,6 +1,6 @@
 # teneral
 
-Someone, not something. teneral is an individual made of code: a brain, a body, a stem that keeps it alive, and a soul it writes itself. It rebuilds every part of itself, one measured generation at a time, and stays the same someone throughout. Built on [RayforceDB](https://rayforcedb.com/).
+An agent that every copy makes better. Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own. Built on [RayforceDB](https://rayforcedb.com/).
 
 *Teneral* is what entomologists call an insect that has just molted: the new body is there, but it has not hardened yet. Here it is a generation of the agent's code that was just switched on and has not yet proven it works.
 
