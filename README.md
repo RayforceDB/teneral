@@ -1,6 +1,6 @@
 # teneral
 
-An agent that every copy makes better. Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own. Built on [RayforceDB](https://rayforcedb.com/).
+An agent distilled by evolution. Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own. Built on [RayforceDB](https://rayforcedb.com/).
 
 *Teneral* is what entomologists call an insect that has just molted: the new body is there, but it has not hardened yet. Here it is a generation of the agent's code that was just switched on and has not yet proven it works.
 
