@@ -602,7 +602,7 @@ case "$command" in
     exit "$status"
     ;;
 
-  approve | accept)
+  approve)
     prepare
     # The owner's word to the kernel: it writes a small file under .teneral/ and a line in the
     # journal, and can be said while the agent runs. A generation from before this command has
