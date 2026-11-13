@@ -281,7 +281,7 @@ const GATES = ['body', 'organs', 'types', 'tests-stem', 'tests-body', 'smoke'] a
 
 /**
  * The full gates on `commit` as if it were a fresh seed: its organs as it pins them, the
- * type check, the stem's tests, the body's tests and the smoke run, in a checkout made for it.
+ * type check, the tests of everything outside the body, the agent's own tests and the smoke run, in a checkout made for it.
  * The commit is compared with itself, so the rule about which paths a mutation may change, and any
  * rule about what the rest must be identical to, has nothing to say here: an offer may touch the
  * stem, and it is the human who decides about that.

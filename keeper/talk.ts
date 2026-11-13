@@ -15,7 +15,7 @@ import { installRoot, paths } from '../stem/supervisor';
 // the turn it is in; that is all this program can do to it. `/approve` is not said to the agent at
 // all: it leaves the owner's approval of a mutation for the stem (immune/approval.ts).
 //
-// It is in stem/ because it is the owner's tool, not part of the agent: it has to keep working
+// It is in keeper/ because it is the owner's tool, not part of the agent: it has to keep working
 // whatever the body does to itself. For the same reason nothing here trusts the shape of what the
 // body journaled.
 

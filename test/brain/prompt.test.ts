@@ -288,7 +288,7 @@ test('it says what the species is and how what it brings is taken: a merge, whic
   expect(flat).toMatch(/Offering a change of your own back is a path of its own/);
 });
 
-test('it says how to offer a change to the species, as the stem checks it, and that going public is the owner\'s decision', async () => {
+test('it says how to offer a change to the species, as it is checked, and that going public is the owner\'s decision', async () => {
   const { SECTIONS, WAITING } = await import('../../species/offer');
   expect(prompt).toContain('## Offering a change to the species');
   for (const section of SECTIONS) expect(flat).toContain(`\`${section}\``);

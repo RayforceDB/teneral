@@ -211,7 +211,7 @@
         </div>
         <div class="card">
           <h3>Pinned with the generation</h3>
-          <p>The engine is pinned in the brain by address and hash. The stem verifies it at the gate, and a rollback brings the old binary back together with the old code.</p>
+          <p>The engine is pinned in the brain by address and hash. It is verified by its hash at the gate, and a rollback brings the old binary back together with the old code.</p>
         </div>
         <div class="card">
           <h3>Rebuildable by rule</h3>
@@ -240,7 +240,7 @@
     <div class="wrap">
       <p class="eyebrow">How it works</p>
       <h2>A mutation is a commit that has to earn its place.</h2>
-      <p>The agent edits a copy of itself, commits, and asks to mutate. The stem takes that one commit into a clean checkout and decides. Until the new generation has answered once, it is on probation.</p>
+      <p>The agent edits a copy of itself, commits, and asks to mutate. Its immune gates take that one commit into a clean checkout and decide. Until the new generation has answered once, it is on probation.</p>
 
       <div class="life" role="img" aria-label="A running generation asks to mutate; the gates check the candidate; it is promoted to a new generation on probation, or rejected; a generation that cannot stand is rolled back.">
         <svg viewBox="0 -84 880 284" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
@@ -273,7 +273,7 @@
 
       <ol class="steps">
         <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
-        <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its stem included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the stem's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
+        <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its stem included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the tests of everything outside its body, its own tests, and a smoke run of the candidate against a stand-in model.</li>
         <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
         <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./one back</code> returns to any earlier generation.</li>
       </ol>
@@ -293,11 +293,11 @@
         </div>
         <div class="card">
           <h3>Offering back</h3>
-          <p>An offer is a branch with one change and nothing private. The stem checks it as a stranger would, the owner approves that exact commit, and it goes out as a pull request. Other individuals can run it and report. A human merges, and signs.</p>
+          <p>An offer is a branch with one change and nothing private. It is checked as a stranger would check it, the owner approves that exact commit, and it goes out as a pull request. Other individuals can run it and report. A human merges, and signs.</p>
         </div>
         <div class="card">
           <h3>Organs</h3>
-          <p>A native dependency is pinned in the body by address and hash. The stem verifies and unpacks it at the gate, and each generation runs with exactly its own version, so a rollback brings the old binary back too.</p>
+          <p>A native dependency is pinned in the body by address and hash. It is verified and unpacked at the gate, and each generation runs with exactly its own version, so a rollback brings the old binary back too.</p>
         </div>
       </div>
 

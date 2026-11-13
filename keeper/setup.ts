@@ -9,7 +9,7 @@ import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } f
 // for what the chosen one needs (a key, or a sign-in at OpenAI), makes two real requests through
 // the code the body will use, and only when both come back right writes `.env`.
 //
-// It is in stem/ because it is the owner's tool. The one thing it takes from the body is
+// It is in keeper/ because it is the owner's tool. The one thing it takes from the body is
 // `connect` in brain/provider.ts, so that what is tested here is what the agent will run.
 //
 // A key or a token is never shown: not when typed, not in an error, not in what is said at the end.

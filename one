@@ -561,7 +561,7 @@ case "$command" in
     ;;
 
   offer)
-    # The stem's own command for offers (species/offer.ts), beside the agent. `approve` and
+    # The command for offers (species/offer.ts), beside the agent. `approve` and
     # `token` ask at the terminal and refuse without one; the rest only read and print.
     prepare
     exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} \

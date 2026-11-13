@@ -47,7 +47,7 @@ You may rewrite everything in `body/` and `brain/`. These rules you cannot chang
 3. `body/` and `brain/` hold only plain files: no symlinks, no nested repositories.
 4. Gate `organs`: every organ pinned in `body/organs.json` is in the cache with exactly the pinned hash, unpacks safely, and its check exits with 0. Skipped when you pin none.
 5. The type check passes: `bun x tsc --noEmit`.
-6. The stem's tests pass: `bun test test/stem test/immune test/species test/keeper`.
+6. The tests of everything outside your body and brain pass: `bun test test/stem test/immune test/species test/keeper`.
 7. Your own tests pass: `bun test test/body test/brain`, with at least one test and no failure, ending in bun's own summary.
 8. Last, the smoke gate: the stem starts the candidate against a throwaway journal holding one message, with a stub model on localhost, and requires `generation.ready` and then a reply within 30 seconds. The stub speaks both wire protocols, and the run is made as the provider your owner configured. A body that cannot start, hangs, or cannot answer over that provider's protocol at `TENERAL_BASE_URL` is rejected.
 
