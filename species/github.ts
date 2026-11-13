@@ -79,8 +79,8 @@ export class GitHubError extends Error {
   }
 }
 
-/** The permissions a fine-grained token needs, as the README tells the owner. */
-export const TOKEN_NEEDS = 'a fine-grained personal access token for that one repository with Contents: Read and write, and Pull requests: Read and write (Metadata: Read comes with them)';
+/** What the token has to be able to do, as the README tells the owner: push to the owner's fork, and open a pull request on the species' repository. */
+export const TOKEN_NEEDS = 'a personal access token that may push to your fork and open pull requests: a classic token with the `public_repo` scope does both. A fine-grained token limited to the fork can push there, and GitHub may still refuse it the pull request on a repository that is not yours'
 
 function refusal(hub: Hub, status: number, said: string, limited: boolean): string {
   const tail = said === '' ? '' : `: ${said}`;

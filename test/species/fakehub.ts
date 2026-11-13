@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 // A stand-in for GitHub, for the tests of species/offer.ts: one bare repository served over git's
@@ -13,7 +14,7 @@ import { join } from 'node:path';
 // and everything it holds; `POST /_mode` makes the next requests fail in a chosen way.
 
 interface Seen { method: string; path: string; headers: Record<string, string>; body: unknown }
-interface Pull { number: number; title: string; body: string; state: string; head: { ref: string; sha: string }; base: { ref: string }; html_url: string }
+interface Pull { number: number; title: string; body: string; state: string; head: { ref: string; sha: string; label: string }; base: { ref: string }; html_url: string }
 
 if (import.meta.main) {
   const [bare = '', slug = '', token = ''] = process.argv.slice(2);
@@ -21,14 +22,26 @@ if (import.meta.main) {
   const pushes: { user: string; path: string }[] = [];
   const pulls: Pull[] = [];
   const comments: { issue: number; body: string; html_url: string }[] = [];
-  /** `pulls`/`comments`: a status to answer the next such POST with, once. `private`: reading over git needs the token too. */
-  const mode: { pulls?: number; comments?: number; private?: boolean } = {};
+  /**
+   * `pulls`/`comments`: a status to answer the next such POST with, once. `private`: reading over git needs the token too.
+   * `login`: whose token it is; unset, the species' owner. `push`: whether that account may push to the species; unset, it may.
+   * A fork is a bare repository beside the species', at `<login>/<name>.git`: it is there when a test made it.
+   */
+  const mode: { pulls?: number; comments?: number; private?: boolean; login?: string; push?: boolean } = {};
 
   const gitAt = (...args: string[]): string => {
     const p = Bun.spawnSync(['git', '-C', bare, ...args], { stdout: 'pipe', stderr: 'pipe' });
     return p.exitCode === 0 ? p.stdout.toString().trim() : '';
   };
   const headOf = (ref: string): string => gitAt('rev-parse', '--verify', '--quiet', `refs/heads/${ref}`);
+  const forkDir = (account: string): string => join(bare, '..', account, `${slug.split('/')[1]}.git`);
+  /** The commit a head is at, named as GitHub names it: `branch` here, `account:branch` in that account's fork. */
+  const shaOf = (label: string): string => {
+    const [account, ref] = label.includes(':') ? label.split(':') as [string, string] : [slug.split('/')[0]!, label];
+    if (account === slug.split('/')[0]) return headOf(ref);
+    const p = Bun.spawnSync(['git', '-C', forkDir(account), 'rev-parse', '--verify', '--quiet', `refs/heads/${ref}`], { stdout: 'pipe', stderr: 'pipe' });
+    return p.exitCode === 0 ? p.stdout.toString().trim() : '';
+  };
   const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response => Response.json(body, { status, headers });
 
   /** git's own server for the repository, as a CGI program. */
@@ -95,21 +108,31 @@ if (import.meta.main) {
       if (headers.accept !== 'application/vnd.github+json' || !headers['x-github-api-version'] || !headers['user-agent']) {
         return json(400, { message: 'fakehub: a request needs Accept: application/vnd.github+json, X-GitHub-Api-Version and User-Agent' });
       }
+      if (url.pathname === '/api/user' && req.method === 'GET') return json(200, { login: mode.login ?? slug.split('/')[0] });
       const at = new RegExp(`^/api/repos/${slug}(/.*)?$`).exec(url.pathname);
-      if (!at) return json(404, { message: 'Not Found' });
+      if (!at) {
+        const other = /^\/api\/repos\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(url.pathname);
+        if (other && req.method === 'GET' && other[2] === slug.split('/')[1] && existsSync(forkDir(other[1]!))) {
+          return json(200, { full_name: `${other[1]}/${other[2]}`, fork: true, parent: { full_name: slug } });
+        }
+        return json(404, { message: 'Not Found' });
+      }
       const rest = at[1] ?? '';
       const owner = slug.split('/')[0]!;
       const fresh = (p: Pull): Pull => {
         // A pull request shows the head of its branch as it is now, and git can fetch it as refs/pull/<n>/head.
-        const sha = headOf(p.head.ref);
+        const sha = shaOf(p.head.label);
         if (sha !== '') {
           p.head.sha = sha;
+          // A head in a fork is brought over, as GitHub keeps every pull request's commits in the repository it is opened on.
+          const account = p.head.label.split(':')[0]!;
+          if (account !== owner) gitAt('fetch', '--quiet', forkDir(account), `refs/heads/${p.head.ref}`);
           gitAt('update-ref', `refs/pull/${p.number}/head`, sha);
         }
         return p;
       };
 
-      if (rest === '' && req.method === 'GET') return json(200, { full_name: slug });
+      if (rest === '' && req.method === 'GET') return json(200, { full_name: slug, permissions: { push: mode.push !== false } });
       if (rest === '/pulls' && req.method === 'POST') {
         if (mode.pulls) {
           const status = mode.pulls;
@@ -122,16 +145,17 @@ if (import.meta.main) {
         if (typeof b?.title !== 'string' || b.title === '' || typeof b.head !== 'string' || typeof b.base !== 'string') {
           return json(422, { message: 'Validation Failed', errors: [{ resource: 'PullRequest', code: 'missing_field', field: 'title, head or base' }] });
         }
-        if (headOf(b.head) === '' || headOf(b.base) === '') {
-          return json(422, { message: 'Validation Failed', errors: [{ resource: 'PullRequest', field: headOf(b.head) === '' ? 'head' : 'base', code: 'invalid' }] });
+        const label = b.head.includes(':') ? b.head : `${owner}:${b.head}`;
+        if (shaOf(label) === '' || headOf(b.base) === '') {
+          return json(422, { message: 'Validation Failed', errors: [{ resource: 'PullRequest', field: shaOf(label) === '' ? 'head' : 'base', code: 'invalid' }] });
         }
-        if (pulls.some((p) => p.state === 'open' && p.head.ref === b.head)) {
-          return json(422, { message: 'Validation Failed', errors: [{ resource: 'PullRequest', code: 'custom', message: `A pull request already exists for ${owner}:${b.head}.` }] });
+        if (pulls.some((p) => p.state === 'open' && p.head.label === label)) {
+          return json(422, { message: 'Validation Failed', errors: [{ resource: 'PullRequest', code: 'custom', message: `A pull request already exists for ${label}.` }] });
         }
         const number = pulls.length + 1;
         const pull: Pull = {
           number, title: b.title, body: typeof b.body === 'string' ? b.body : '', state: 'open',
-          head: { ref: b.head, sha: '' }, base: { ref: b.base }, html_url: `https://github.invalid/${slug}/pull/${number}`,
+          head: { ref: label.split(':')[1]!, sha: '', label }, base: { ref: b.base }, html_url: `https://github.invalid/${slug}/pull/${number}`,
         };
         pulls.push(pull);
         return json(201, fresh(pull));
@@ -139,7 +163,7 @@ if (import.meta.main) {
       if (rest === '/pulls' && req.method === 'GET') {
         const head = url.searchParams.get('head');
         const state = url.searchParams.get('state') ?? 'open';
-        return json(200, pulls.filter((p) => p.state === state && (head === null || head === `${owner}:${p.head.ref}`)).map(fresh));
+        return json(200, pulls.filter((p) => p.state === state && (head === null || head === p.head.label)).map(fresh));
       }
       const one = /^\/pulls\/(\d+)$/.exec(rest);
       if (one && req.method === 'GET') {
@@ -172,7 +196,7 @@ export interface FakeHub {
   /** The REST API's base. */
   api: string;
   state: () => Promise<{ seen: Seen[]; pushes: { user: string; path: string }[]; pulls: Pull[]; comments: { issue: number; body: string; html_url: string }[] }>;
-  mode: (m: { pulls?: number; comments?: number; private?: boolean }) => Promise<void>;
+  mode: (m: { pulls?: number; comments?: number; private?: boolean; login?: string; push?: boolean }) => Promise<void>;
   stop: () => void;
 }
 

@@ -104,6 +104,48 @@ export function hubOf(root: string, s: Record<string, string | undefined>): Hub 
   return { url: known?.https ?? url, slug, api: (s.TENERAL_GITHUB_API || DEFAULT_API).replace(/\/+$/, ''), branch };
 }
 
+/** Where an offer is pushed: a repository, and who owns it. `fork` is false when that is the species' own repository. */
+export interface Outlet { url: string; slug: string; owner: string; fork: boolean }
+
+/**
+ * Where this owner's offers are pushed. A stranger has no right to write to the species' repository
+ * and needs none: the commit goes to the owner's fork, and the pull request is opened from there.
+ *
+ * `TENERAL_FORK` (`owner/name`) names the fork outright. Unset, GitHub is asked who the token
+ * belongs to, and the fork is that account's repository of the species' name, when it is a fork of
+ * the species. An owner who may push to the species itself and has no fork, a maintainer, pushes
+ * there. Anyone else is told to make the fork. `TENERAL_FORK_URL` gives the address git pushes
+ * to where it cannot be told from the species' own: a GitHub server of one's own, or a test.
+ */
+export async function outletOf(i: Install, hub: Hub, send?: typeof fetch): Promise<Outlet> {
+  const onGitHub = githubRemote(hub.url) !== null;
+  const urlOf = (slug: string): string => {
+    if (i.s.TENERAL_FORK_URL) return i.s.TENERAL_FORK_URL;
+    if (onGitHub) return `https://github.com/${slug}.git`;
+    throw new Error(`the species is not on github.com, so TENERAL_FORK_URL has to give the address git pushes to for ${slug}`);
+  };
+  const own: Outlet = { url: hub.url, slug: hub.slug, owner: hub.slug.split('/')[0]!, fork: false };
+  const named = (i.s.TENERAL_FORK ?? '').trim();
+  if (named !== '') {
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(named)) throw new Error(`TENERAL_FORK is "${named}", which is not a repository as owner/name`);
+    return named === hub.slug ? own : { url: urlOf(named), slug: named, owner: named.split('/')[0]!, fork: true };
+  }
+  const login = (await api(hub, i.auth, 'GET', '/user', undefined, send) as { login?: unknown } | null)?.login;
+  if (typeof login !== 'string' || !/^[A-Za-z0-9._-]+$/.test(login)) throw new Error('GitHub did not say whose token this is, so the fork cannot be found. TENERAL_FORK in .env names it, as owner/name');
+  const slug = `${login}/${hub.slug.split('/')[1]}`;
+  if (slug === hub.slug) return own;
+  try {
+    const repo = await api(hub, i.auth, 'GET', `/repos/${slug}`, undefined, send) as { fork?: unknown; parent?: { full_name?: unknown } } | null;
+    if (repo?.fork === true && repo.parent?.full_name === hub.slug) return { url: urlOf(slug), slug, owner: login, fork: true };
+    throw new Error(`${slug} exists and is not a fork of ${hub.slug}. If the fork has another name, TENERAL_FORK in .env names it, as owner/name`);
+  } catch (err) {
+    if (!(err instanceof GitHubError) || err.status !== 404) throw err;
+  }
+  const species = await api(hub, i.auth, 'GET', `/repos/${hub.slug}`, undefined, send) as { permissions?: { push?: unknown } } | null;
+  if (species?.permissions?.push === true) return own;
+  throw new Error(`${login} has no fork of ${hub.slug} yet. Your owner makes one, with one click, at https://github.com/${hub.slug}/fork; then run this again. The approval still stands`);
+}
+
 // --- the leak scan ---
 
 export interface Finding {
@@ -584,32 +626,41 @@ export async function publish(i: Install, branch: string, o: NetOptions = {}): P
     return { status: 1, text: `The species is at ${short(theirs)} at its home, and ${branch} is not built on that. Fetch it, rebase the branch onto it, sign and check again; then your owner approves the new commit.` };
   }
 
+  let out: Outlet;
+  try {
+    out = await outletOf(i, hub, o.send);
+  } catch (err) {
+    return { status: 1, text: `Nothing was published: ${reasonOf(err)}.` };
+  }
+  const there: Hub = { ...hub, url: out.url, slug: out.slug };
   const target = `contrib/${i.id}/${slugOf(branch)}`;
+  // As GitHub names a branch of another repository: `<owner>:<branch>`.
+  const head = out.fork ? `${out.owner}:${target}` : target;
   // Forced: the branch is this individual's own, and a mended offer replaces the one before it.
-  const pushed = gitRemote(i.root, i.auth, ['push', '--quiet', hub.url, `+${commit}:refs/heads/${target}`]);
-  if (pushed.code !== 0) return { status: 1, text: `${remoteFailure(hub, `Pushing ${target}`, pushed)}\nNothing was published. Run this again once that is mended; the approval still stands.` };
+  const pushed = gitRemote(i.root, i.auth, ['push', '--quiet', out.url, `+${commit}:refs/heads/${target}`]);
+  if (pushed.code !== 0) return { status: 1, text: `${remoteFailure(there, `Pushing ${target}`, pushed)}\nNothing was published. Run this again once that is mended; the approval still stands.` };
 
   let pull: Pull;
   let note = '';
   try {
     try {
-      pull = asPull(await api(hub, i.auth, 'POST', `/repos/${hub.slug}/pulls`, { title: report.title, head: target, base: hub.branch, body: `${report.body}\n\n${footer(i, report, key)}` }, o.send));
+      pull = asPull(await api(hub, i.auth, 'POST', `/repos/${hub.slug}/pulls`, { title: report.title, head, base: hub.branch, body: `${report.body}\n\n${footer(i, report, key)}` }, o.send));
     } catch (err) {
       if (!(err instanceof GitHubError) || err.status !== 422 || !/already exists/i.test(err.detail)) throw err;
       // An earlier run got as far as this, or an earlier offer under the same name is still open: the push above has brought it to this commit.
-      const open = await api(hub, i.auth, 'GET', `/repos/${hub.slug}/pulls?state=open&head=${encodeURIComponent(`${hub.slug.split('/')[0]}:${target}`)}`, undefined, o.send);
+      const open = await api(hub, i.auth, 'GET', `/repos/${hub.slug}/pulls?state=open&head=${encodeURIComponent(`${out.owner}:${target}`)}`, undefined, o.send);
       if (!Array.isArray(open) || open.length === 0) throw err;
       pull = asPull(open[0]);
       note = ' The pull request was already open; it now shows this commit, with the title and text it had.';
     }
   } catch (err) {
-    return { status: 1, text: `The commit was pushed as ${target}, but the pull request was not opened: ${reasonOf(err)}.\nRun this again once that is mended: it goes on from here, and the approval still stands.` };
+    return { status: 1, text: `The commit was pushed to ${out.slug} as ${target}, but the pull request was not opened: ${reasonOf(err)}.\nRun this again once that is mended: it goes on from here, and the approval still stands.` };
   }
   const published = { url: pull.html_url, branch: target, at: new Date().toISOString() };
   saveReport(i.root, { ...report, published });
   appendEvent(journalOf(i.root), generation(i.root), { type: 'offer.published', commit, branch: target, url: pull.html_url });
   if (mode === 'ask') useApproval(i.owner, commit);
-  return { status: 0, text: `Published ${short(commit)} as ${target}: ${pull.html_url}${note}\nIt is an offer now. A human reads it and decides; nothing here merges it.` };
+  return { status: 0, text: `Published ${short(commit)} as ${target}${out.fork ? `, in your fork ${out.slug}` : ''}: ${pull.html_url}${note}\nIt is an offer now. A human reads it and decides; nothing here merges it.` };
 }
 
 // --- witness ---

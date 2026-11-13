@@ -3,11 +3,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deliver } from '../../body/envelope';
-import { git, type GateResult } from '../../immune/gates';
+import { git, sh, type GateResult } from '../../immune/gates';
 import { TOKEN_FILE, api, githubRemote, saveToken, GitHubError } from '../../species/github';
 import { readEvents } from '../../brain/journal';
 import {
-  SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, ownSecrets, ownerCommand, pending, publish, readReport, readWitness,
+  SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, outletOf, ownSecrets, ownerCommand, pending, publish, readReport, readWitness,
   scan, settings, sign, slugOf, speciesHead, speciesRef, witness,
 } from '../../species/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../species/offerkey';
@@ -515,6 +515,85 @@ function watchGit(base: string): { log: () => string; done: () => void } {
   return { log: () => readFileSync(log, 'utf8'), done: () => { process.env.PATH = path; } };
 }
 
+// --- the owner's fork ---
+
+/** A fork of the species in `account`, as GitHub would make it: a bare repository of its own beside the species'. */
+function fork(w: World, account: string): string {
+  const dir = join(w.base, account, 'teneral.git');
+  mkdirSync(join(w.base, account), { recursive: true });
+  git(w.base, 'clone', '-q', '--bare', w.bare, dir);
+  return dir;
+}
+
+t('an owner with no right to write to the species publishes through their fork: the commit goes there, the pull request is opened on the species from it, and nothing is pushed to the species', async () => {
+  const w = await world('ask');
+  const i = install(w.root);
+  await w.hub.mode({ login: 'alice', push: false });
+  const commit = offer(w.root, 'greeting', GREETING);
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  approve(i.owner, commit);
+  const target = `contrib/${i.id}/greeting`;
+  const forkUrl = `${w.hub.git.replace(/teneral\.git$/, '')}alice/teneral.git`;
+  const there = { ...i, s: { ...i.s, TENERAL_FORK_URL: forkUrl } };
+
+  // No fork yet: the owner is told to make one, and the approval is kept for the run after.
+  const before = await publish(there, 'offer/greeting');
+  expect(before.status).toBe(1);
+  expect(before.text).toContain(`alice has no fork of ${SLUG} yet`);
+  expect(before.text).toContain(`https://github.com/${SLUG}/fork`);
+  expect(approved(i.owner, commit)).toBe(true);
+  expect((await w.hub.state()).pushes).toEqual([]);
+
+  const forked = fork(w, 'alice');
+  const out = await publish(there, 'offer/greeting');
+  expect(out.text).toContain(`in your fork alice/teneral: https://github.invalid/${SLUG}/pull/1`);
+  expect(out.status).toBe(0);
+  expect(git(forked, 'rev-parse', `refs/heads/${target}`)).toBe(commit);
+  expect(sh(['git', 'rev-parse', '--verify', '--quiet', `refs/heads/${target}`], w.bare).code).not.toBe(0);
+  const state = await w.hub.state();
+  expect(state.pushes).toEqual([{ user: 'x-access-token', path: '/git/alice/teneral.git/git-receive-pack' }]);
+  const post = state.seen.find((r) => r.method === 'POST')!;
+  expect(post.path).toBe(`/repos/${SLUG}/pulls`);
+  expect(post.body).toMatchObject({ head: `alice:${target}`, base: 'main' });
+  // The species holds the offered commit as the pull request's head, which is where a witness fetches it from.
+  expect(git(w.bare, 'rev-parse', 'refs/pull/1/head')).toBe(commit);
+
+  // A mended offer replaces the one before it in the fork, and the open pull request shows it.
+  git(w.root, 'checkout', '-q', 'offer/greeting');
+  writeFiles(w.root, { 'body/greeting.ts': "export const greeting: string = 'good day';\n" });
+  const second = commitAll(w.root, DESCRIPTION);
+  expect(sign(i, 'offer/greeting').status).toBe(0);
+  const signed = git(w.root, 'rev-parse', 'offer/greeting');
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  approve(i.owner, signed);
+  const again = await publish(there, 'offer/greeting');
+  expect(again.status).toBe(0);
+  expect(again.text).toContain('already open');
+  expect(git(forked, 'rev-parse', `refs/heads/${target}`)).toBe(signed);
+  expect(second).not.toBe(commit);
+});
+
+t('the fork is the one TENERAL_FORK names when it is named; a repository of the owner\'s that is no fork of the species is refused; a maintainer with no fork pushes to the species', async () => {
+  const w = await world('auto');
+  const i = install(w.root);
+  const hub = hubOf(w.root, i.s);
+  // The species' owner, as every test above is: the species itself.
+  expect(await outletOf(i, hub)).toEqual({ url: hub.url, slug: SLUG, owner: 'species', fork: false });
+  // Another account that may push there and has no fork: a maintainer.
+  await w.hub.mode({ login: 'carol', push: true });
+  expect(await outletOf(i, hub)).toMatchObject({ slug: SLUG, fork: false });
+  // Named outright: nothing is asked of GitHub.
+  const asked = (await w.hub.state()).seen.length;
+  expect(await outletOf({ ...i, s: { ...i.s, TENERAL_FORK: 'dave/other', TENERAL_FORK_URL: 'http://127.0.0.1:9/x.git' } }, hub))
+    .toEqual({ url: 'http://127.0.0.1:9/x.git', slug: 'dave/other', owner: 'dave', fork: true });
+  expect((await w.hub.state()).seen.length).toBe(asked);
+  await expect(outletOf({ ...i, s: { ...i.s, TENERAL_FORK: 'not a repo' } }, hub)).rejects.toThrow(/not a repository as owner\/name/);
+  // Off github.com the address of a fork cannot be guessed.
+  await w.hub.mode({ login: 'alice', push: false });
+  fork(w, 'alice');
+  await expect(outletOf(i, hub)).rejects.toThrow(/TENERAL_FORK_URL/);
+});
+
 t('publish pushes the approved commit to contrib/<individual>/<name>, opens the pull request as documented, journals it, and the token is nowhere', async () => {
   const w = await world('ask');
   const i = install(w.root);
@@ -587,7 +666,7 @@ t('auto publishes without asking; without a token nothing is tried', async () =>
   const none = await publish(i, 'offer/greeting');
   expect(none.status).toBe(1);
   expect(none.text).toContain('./one offer token');
-  expect(none.text).toContain('Contents: Read and write');
+  expect(none.text).toContain('a classic token with the `public_repo` scope');
   saveToken(i.auth, TOKEN);
   expect((await publish(i, 'offer/greeting')).status).toBe(0);
   expect(git(w.bare, 'rev-parse', `refs/heads/contrib/${i.id}/greeting`)).toBe(commit);
@@ -631,8 +710,8 @@ t('a token GitHub does not accept, a missing permission, a limit and a dead netw
   await w.hub.mode({ pulls: 403 });
   out = await publish(i, 'offer/greeting');
   expect(out.status).toBe(1);
-  expect(out.text).toContain(`pushed as ${target}, but the pull request was not opened`);
-  expect(out.text).toContain('Pull requests: Read and write');
+  expect(out.text).toContain(`pushed to ${SLUG} as ${target}, but the pull request was not opened`);
+  expect(out.text).toContain('open pull requests');
   expect(out.text).toContain('Resource not accessible by personal access token');
   expect(git(w.bare, 'rev-parse', `refs/heads/${target}`)).toBe(commit);
   expect(approved(i.owner, commit)).toBe(true);
