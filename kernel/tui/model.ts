@@ -44,12 +44,13 @@ export const ENTRY_LIMIT = 2_000;
 
 export type Entry = { id: number; rev: number } & (
   /**
-   * The owner's words. `pending`: sent from here and not in the journal yet. `queued`: in the
-   * journal, but the request the agent is in the middle of was sent before it arrived, so it has
-   * not been read yet. `elsewhere`: typed at another terminal.
+   * The owner's words. `held`: typed here and kept by this client while the agent is in the
+   * middle of a step: not sent, and the owner's to take back. `pending`: sent from here and not
+   * in the journal yet. `queued`: in the journal, but the request the agent is in the middle of
+   * was sent before it arrived, so it has not been read yet. `elsewhere`: typed at another terminal.
    */
   /** `images`: the kept images the line named, as paths under `memory/images/`; `text` is the line without them. */
-  | { kind: 'owner'; text: string; images: string[]; pending?: boolean; queued?: boolean; elsewhere?: boolean }
+  | { kind: 'owner'; text: string; images: string[]; held?: boolean; pending?: boolean; queued?: boolean; elsewhere?: boolean }
   /** A summary of the model's reasoning before a reply or a tool call, when the body journals one. */
   | { kind: 'reasoning'; text: string }
   /** `first`: the first words this individual ever said. */
@@ -199,7 +200,7 @@ function ends(text: string, each: number): string {
 const tailOf = (text: string, limit: number): string => (text.length > limit ? text.slice(-limit).replace(/^[^\n]*\n/, '') : text);
 
 /** Whether an owner's line still waits: to be journaled, or to be read by the agent. */
-export const inQueue = (e: Entry): boolean => e.kind === 'owner' && (e.pending === true || e.queued === true);
+export const inQueue = (e: Entry): boolean => e.kind === 'owner' && (e.held === true || e.pending === true || e.queued === true);
 
 /** Whether an entry may still change: a line the agent has not read yet, a tool call without its result. */
 export const unfinished = (e: Entry): boolean => inQueue(e) || (e.kind === 'tool' && e.status === 'running');
@@ -239,6 +240,18 @@ export class Transcript {
   say(message: string): void {
     const { text, paths } = splitMarkers(clean(message));
     this.mine.push(this.push({ kind: 'owner', text, images: paths, pending: true }));
+  }
+
+  /** A line this client keeps for now instead of sending: shown, and the owner's to take back. */
+  hold(message: string): Entry {
+    const { text, paths } = splitMarkers(clean(message));
+    return this.push({ kind: 'owner', text, images: paths, held: true });
+  }
+
+  /** Take an entry out: a held line that was sent after all, or taken back. */
+  drop(entry: Entry): void {
+    const index = this.entries.indexOf(entry);
+    if (index !== -1) this.entries.splice(index, 1);
   }
 
   note(text: string): Entry {

@@ -245,26 +245,37 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   expect(during).toContain('› look around\n\n● I will look.\n\n  ▪ bash  command: ls -la');
   expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: ls -la +running\\n\\n${SPIN} Mica is running bash · 0:02 · esc to interrupt\\n╭`));
   expect(during).not.toContain('on its way');
-  // Something said meanwhile, here and at another terminal, waits under the call that is still running.
-  s.type('and then?\r');
+  // Something said meanwhile waits under the call that is still running. The owner's line is kept by this client: nothing is sent yet.
+  s.type('and thn?\r');
   s.journal({ type: 'stimulus', source: 'clock', text: 'tick' }, 4500);
-  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and then\? {2}on its way\n\n/);
-  // The result arrives: the call is printed with its outcome, then what waited, in the journal's order.
+  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\? {2}queued\n\n/);
+  expect(s.live()).toContain('1 queued · Up in an empty box takes the last one back');
+  expect(sentFiles(s)).toEqual(['look around']);
+  // Up in the empty box takes it back to be put right; Enter queues it again.
+  s.type('\x1b[A');
+  expect(s.live()).not.toContain('queued');
+  expect(s.live()).toContain('│ › and thn?');
+  s.type('\x7f\x7fen?\r');
+  expect(s.live()).toMatch(/› and then\? {2}queued\n\n/);
+  expect(sentFiles(s)).toEqual(['look around']);
+  // The result arrives: the call is printed with its outcome, and the step being over, the line goes out.
   s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'a\nb' }, 5300);
+  expect(s.live()).toMatch(/› and then\? {2}on its way\n\n/);
+  expect(sentFiles(s).sort()).toEqual(['and then?', 'look around']);
   s.journal({ type: 'stimulus', source: 'terminal', text: 'and then?' }, 5400);
   // Journaled, but the request under way was sent before it: it stays over the box, queued.
-  expect(s.live()).toMatch(/^\n› and then\? {2}queued\n\n/);
+  expect(s.live()).toMatch(/^\n› and then\? {2}sent, not read yet\n\n/);
   expect(s.all()).not.toContain('on its way');
   s.journal({ type: 'assistant', text: 'Two files.', toolCalls: [] }, 9000);
   // The reply written without it is printed first; the line follows it, read now.
-  expect(s.live()).not.toContain('queued');
+  expect(s.live()).not.toContain('not read yet');
   s.journal({ type: 'assistant', text: 'And then nothing.', toolCalls: [] }, 12_000);
   s.clock.at = 12_100;
   const done = s.all();
   expect(done).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
   expect(done.match(/▪ bash/g)).toHaveLength(1);
   expect(done.match(/and then\?/g)).toHaveLength(1);
-  expect(done).not.toMatch(/running|on its way|queued/);
+  expect(done).not.toMatch(/running|on its way|queued|not read yet/);
   expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol · resting/);
 });
 

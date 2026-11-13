@@ -258,6 +258,7 @@ test('a path, a slash later in the line, two slashes and a text of several lines
   settled(s);
   s.say('first', 1100);
   s.say('second', 1200);
+  s.journal({ type: 'assistant', text: 'Both read.', toolCalls: [] }, 1250);
   s.clock.at = 1300;
   // A path typed by hand: the list is there for its first letters only, as long as some command begins so.
   s.type('/h');

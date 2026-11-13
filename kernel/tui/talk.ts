@@ -64,7 +64,7 @@ const HELP = [
   '',
   'Leaving ends this client only. Nothing else here stops the agent or changes it.',
   '',
-  'A line you send stands over the input box until the agent has read it. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "queued": the agent has it, but was in the middle of a step when it came, and reads it with its next one. When the mark is gone and the line has moved up into the conversation, the agent has read it.',
+  'A line you send stands over the input box until the agent has read it. "queued": the agent is in the middle of a step, so this client keeps the line and sends it when the step ends; until then Up in an empty box takes the last queued line back into the box, to change it, or to drop it by clearing the box. Leaving sends what is queued. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "sent, not read yet": the agent has it and reads it with its next step. When the mark is gone and the line has moved up into the conversation, the agent has read it.',
   '',
   'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the kernel is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
 ];
@@ -228,6 +228,8 @@ export class TalkScreen {
   private readonly asks: Ask[] = [];
   /** Keys pressed while a line that may be a file's path is looked up: they are taken once it is known. */
   private held: Key[] | null = null;
+  /** Lines typed while the agent was in the middle of a step: kept here, not sent yet, and the owner's to take back with Up. */
+  private readonly queue: { message: string; typed: string; chips: Edit['chips']; entry: Entry }[] = [];
   private readonly images = new Map<string, Attachment | null>();
   /** The text the owner closed the list of commands on with Esc: it stays closed until the text is another. */
   private dismissed: string | null = null;
@@ -348,6 +350,8 @@ export class TalkScreen {
   /** Take the live region away and give the terminal back: the conversation stays in its scrollback. Safe to call twice, and from a signal handler. */
   close(status = 0): void {
     if (this.closed) return;
+    // Nothing typed for the agent is lost by leaving.
+    this.sendQueued();
     this.closed = true;
     clearTimeout(this.escape);
     for (const stop of this.stops) stop();
@@ -441,6 +445,35 @@ export class TalkScreen {
     try {
       this.standing = stand(this.standing, e);
     } catch { /* an event of a shape nobody foresaw changes nothing */ }
+    // A step ended: what was kept goes out now, and the agent reads it with its next one.
+    if (live && ['assistant', 'tool.result', 'turn.interrupted', 'generation.ready'].includes(e.type)) this.sendQueued();
+  }
+
+  /** Whether a line typed now is kept here rather than sent: the agent is in the middle of a step, and would not read it before the next anyway. */
+  private holding(): boolean {
+    const alive = this.alive();
+    return alive.supervisor && alive.body && this.standing.turn.busy && this.standing.mutation === null;
+  }
+
+  /** Send every line that was kept, in the order it was typed. */
+  private sendQueued(): void {
+    for (const line of this.queue.splice(0)) {
+      this.transcript.drop(line.entry);
+      try {
+        tell(this.o.paths.owner, line.message);
+        this.transcript.say(line.message);
+      } catch (err) {
+        this.say(`That line could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      this.dirty = true;
+    }
+  }
+
+  /** Up in an empty box: the last line that was kept comes back into it, with its images, to be changed or dropped. */
+  private takeBack(): void {
+    const line = this.queue.pop()!;
+    this.transcript.drop(line.entry);
+    this.edit = { ...this.edit, text: line.typed, cursor: line.typed.length, chips: line.chips, at: null };
   }
 
   /** Look at the journal, the helper's answers and the soul once, print what is finished, and paint if the live region shows differently. */
@@ -453,6 +486,7 @@ export class TalkScreen {
       if (e.type === 'turn.interrupted') this.interrupting = null;
       this.dirty = true;
     }
+    if (this.queue.length > 0 && !this.holding()) this.sendQueued();
     this.interrupted();
     this.answers();
     if (this.ticks % 8 === 1) this.readName();
@@ -601,6 +635,7 @@ export class TalkScreen {
       if (ctrl('l')) return this.inline.invalidate();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
       if (key.name === 'enter' && !key.alt && !key.shift) return this.submit();
+      if (key.name === 'up' && this.queue.length > 0 && this.edit.text === '' && this.edit.chips.length === 0) return this.takeBack();
     }
     const next = edit(this.edit, key);
     if (next !== null) this.edit = next;
@@ -629,8 +664,12 @@ export class TalkScreen {
   private send(text: string, typed = text): void {
     try {
       const message = withMarkers(text, this.edit.chips.map((chip) => chip.path));
-      tell(this.o.paths.owner, message);
-      this.transcript.say(message);
+      if (this.holding()) {
+        this.queue.push({ message, typed, chips: this.edit.chips, entry: this.transcript.hold(message) });
+      } else {
+        tell(this.o.paths.owner, message);
+        this.transcript.say(message);
+      }
       this.edit = sent(this.edit, typed);
     } catch (err) {
       this.say(`That line could not be sent: ${err instanceof Error ? err.message : String(err)}`);
@@ -933,7 +972,8 @@ export class TalkScreen {
     const waiting = this.asks.length > 0 ? (this.asks.some((ask) => ask.origin === 'key') ? 'asking your machine for the clipboard\'s image' : 'asking your machine for the file') : '';
     const chips = this.edit.chips.length;
     const hint = waiting !== '' ? `${waiting} ${g.ellipsis}`
-      : chips > 0 ? `attached: ${this.edit.chips.map((_, i) => `image ${i + 1}`).join(', ')} ${g.sep} Backspace at the start removes the last` : '';
+      : chips > 0 ? `attached: ${this.edit.chips.map((_, i) => `image ${i + 1}`).join(', ')} ${g.sep} Backspace at the start removes the last`
+      : this.queue.length > 0 ? `${this.queue.length} queued ${g.sep} Up in an empty box takes the last one back` : '';
     let context = '';
     if (s.usage !== null) {
       const window = (providers as { contextWindow?: unknown }).contextWindow;

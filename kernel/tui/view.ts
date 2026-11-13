@@ -122,18 +122,21 @@ function titled(title: string, max: number, g: Glyphs, style: Style, indent = 0)
  * The rows of one entry, `max` columns wide. Everything someone else wrote starts in the third
  * column or further in; the first two belong to this client's own marks, which no reply can forge.
  */
+/** The owner's own words, wherever they stand in the conversation: in the owner's colour, so that they are never taken for a reply. */
+const OWNER: Style = { fg: 'accent', bold: true };
+
 export function entryRows(e: Entry, max: number, look: Look): Line[] {
   const { g } = look;
   switch (e.kind) {
     case 'owner': {
       const mark: Line = [{ text: `${g.prompt} `, style: { fg: 'accent', bold: true } }];
-      const rows = e.text === '' ? [] : e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: { bold: true } }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
+      const rows = e.text === '' ? [] : e.text.split('\n').flatMap((line, i) => wrap([{ text: detab(line), style: OWNER }], max, i === 0 ? mark : [{ text: '  ' }], [{ text: '  ' }]));
       const chips = chipRows(e.images.map((path, i) => chip(i + 1, look.image(path), path, g)), max, 2);
       // A message of images only: the mark stands before the first of them.
       if (rows.length === 0 && chips.length > 0) chips[0] = [...mark, ...chips[0]!.slice(1)];
       rows.push(...chips);
       if (rows.length === 0) rows.push(mark);
-      const tag = e.pending ? 'on its way' : e.queued ? 'queued' : e.elsewhere ? 'from another terminal' : '';
+      const tag = e.held ? 'queued' : e.pending ? 'on its way' : e.queued ? 'sent, not read yet' : e.elsewhere ? 'from another terminal' : '';
       if (tag !== '') {
         const last = rows.at(-1)!;
         if (lineWidth(last) + tag.length + 2 <= max) last.push({ text: `  ${tag}`, style: DIM });
@@ -149,7 +152,7 @@ export function entryRows(e: Entry, max: number, look: Look): Line[] {
     case 'reply': {
       const rows = markdown(e.text, Math.max(1, max - 2), g).map((line): Line => (line.length === 0 ? [] : [{ text: '  ' }, ...line]));
       // The client's own mark stands before the first row of what was said.
-      if (rows.length > 0 && rows[0]!.length > 0) rows[0] = [{ text: `${g.reply} `, style: { bold: true } }, ...rows[0]!.slice(1)];
+      if (rows.length > 0 && rows[0]!.length > 0) rows[0] = [{ text: `${g.reply} `, style: { fg: 'brand', bold: true } }, ...rows[0]!.slice(1)];
       // The first words this individual ever said get a line of their own before them. Once.
       if (e.first) rows.unshift([{ text: '  ' }, { text: g.rule.repeat(Math.max(1, Math.min(24, max - 2))), style: BRAND }], []);
       return rows;
