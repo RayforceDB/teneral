@@ -390,6 +390,18 @@ cd teneral
 ./one talk    <span class="c"># attach a terminal; Ctrl+C leaves it running</span>
 ./one back    <span class="c"># return it to the generation before</span></pre>
       <p style="margin-top:26px">The agent keeps running whether or not anyone is watching. It is woken by your words, a clock, messages from other individuals, and whatever senses it builds for itself.</p>
+
+      <h3 style="margin:44px 0 10px;font-size:20px">Then give back what it learns.</h3>
+      <p>Sooner or later it changes something in itself that would serve every other individual, and says so. Fork the project on GitHub once, store a token once, and from then on each offer costs you one word.</p>
+<pre><span class="c"># once: your fork on GitHub, and a token that may push to it</span>
+./one offer token
+
+<span class="c"># each time, in ./one talk</span>
+/offers            <span class="c"># what it wants to offer, and what its checks found</span>
+/approve &lt;commit&gt;  <span class="c"># let exactly that commit go out, as a pull request from your fork</span>
+
+<span class="c"># and when the species has moved on: it merges, you say</span>
+/approve           <span class="c"># take what every other individual has given</span></pre>
     </div>
   </section>
 </main>
