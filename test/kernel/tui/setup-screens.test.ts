@@ -73,7 +73,7 @@ test('a key provider from welcome to the last page: choose with the arrows, type
 
   r.press(DOWN);
   expect(flat(await r.see('  ▸ 2  OpenAI API key'))).toContain('Pay as you go, with a key from your OpenAI account. The key is stored in .env.');
-  r.press(DOWN + DOWN + DOWN + UP);
+  r.press(DOWN + DOWN + DOWN + UP + UP);
   await r.see('  ▸ 2  OpenAI API key');
   r.press('\r');
 

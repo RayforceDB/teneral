@@ -374,7 +374,8 @@ export async function setup(o: SetupOptions): Promise<number> {
       let bearer: string;
       let baseUrl: string;
       if (entry.auth === 'key') {
-        baseUrl = entry.baseUrl === null ? '' : env.TENERAL_OPENAI_API ?? entry.baseUrl;
+        // TENERAL_OPENAI_API stands in for OpenAI's own address only: another provider's is never replaced by it.
+        baseUrl = entry.baseUrl === null ? '' : (entry.id === 'openai' ? env.TENERAL_OPENAI_API : undefined) ?? entry.baseUrl;
         while (!/^https?:\/\/\S+$/.test(baseUrl)) {
           baseUrl = (await askValue(() => ui.baseUrl())).replace(/\/+$/, '');
           if (!/^https?:\/\/\S+$/.test(baseUrl)) ui.problem('That is not an http or https address');

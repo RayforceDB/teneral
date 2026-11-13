@@ -181,6 +181,7 @@ The setup offers what `kernel/providers.ts` lists:
 1. **ChatGPT plan (Continue with ChatGPT).** The agent's requests use your ChatGPT Plus or Pro plan, through the sign-in OpenAI documents for open-source apps that run locally ([Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)). No API key is involved.
 2. **OpenAI API key.** Pay as you go, at `https://api.openai.com/v1`, over the Responses API.
 3. **Another OpenAI-compatible endpoint.** Any chat-completions endpoint: you type its base URL, a key and a model that supports tool calls. This is what the project did before there was a choice, and what a `.env` without `TENERAL_PROVIDER` still means.
+4. **Kimi Code plan.** A Kimi membership with Kimi Code benefits, with an API key you create in the Kimi Code Console, at `https://api.kimi.ai/coding/v1` over the Responses API, which Kimi Code documents for third-party tools. In mainland China the address is `https://api.kimi.com/coding/v1`: put it in `TENERAL_BASE_URL` after the setup. Which models the key may use depends on the plan.
 
 What the ChatGPT sign-in does:
 

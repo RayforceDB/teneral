@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { DEFAULT_PROVIDER, PROVIDERS, contextWindow, credentialFile, findProvider, missingConfig, planNotice, providerFor, userAgent } from '../../kernel/providers';
 
-test('the table offers the three providers, each under an id of its own', () => {
-  expect(PROVIDERS.map((p) => p.id)).toEqual(['chatgpt', 'openai', 'compatible']);
+test('the table offers the four providers, each under an id of its own', () => {
+  expect(PROVIDERS.map((p) => p.id)).toEqual(['chatgpt', 'openai', 'compatible', 'kimi']);
   expect(new Set(PROVIDERS.map((p) => p.id)).size).toBe(PROVIDERS.length);
   for (const p of PROVIDERS) {
     expect(p.id).toMatch(/^[a-z][a-z0-9-]*$/);

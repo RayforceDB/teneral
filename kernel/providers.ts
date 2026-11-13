@@ -69,6 +69,22 @@ export const PROVIDERS: readonly ProviderEntry[] = [
     tools: 'flat',
     notes: ['Any chat-completions endpoint: you give its base URL, a key and a model that supports tool calls. All three are stored in .env.'],
   },
+  {
+    // As Kimi Code's own page for third-party tools gives it: https://www.kimi.com/code/docs/en/third-party-tools/codex.html, read 2026-11-13.
+    // "The Kimi Code server natively supports the OpenAI Responses API (streaming and non-streaming, reasoning, and function calling all work)."
+    id: 'kimi',
+    name: 'Kimi Code plan (API key from the Kimi Code Console)',
+    wire: 'responses',
+    auth: 'key',
+    baseUrl: 'https://api.kimi.ai/coding/v1',
+    models: ['k3.1-pro', 'k3.1-pro-highspeed', 'k3', 'kimi-for-coding'],
+    tools: 'flat',
+    notes: [
+      'Uses your Kimi membership with Kimi Code benefits for the agent\'s requests, with an API key you create in the Kimi Code Console. The key is stored in .env.',
+      'Which models your key may use depends on your plan; the Console and Kimi Code\'s "Membership Benefits" page say which.',
+      'Requests go to https://api.kimi.ai/coding/v1. In mainland China the address is https://api.kimi.com/coding/v1: set TENERAL_BASE_URL in .env to it after the setup.',
+    ],
+  },
 ];
 
 /** What a configuration without `TENERAL_PROVIDER`, or with one this table does not know, is taken as. */
@@ -122,6 +138,9 @@ const WINDOWS: Readonly<Record<string, number>> = {
   'gpt-5.6-sol': 1_050_000, 'gpt-5.6-terra': 1_050_000, 'gpt-5.6-luna': 1_050_000, 'gpt-5.6-cyber': 400_000,
   'gpt-5.5': 1_050_000, 'gpt-5.5-pro': 1_050_000, 'gpt-5.4': 1_050_000, 'gpt-5.4-pro': 1_050_000, 'gpt-5.4-mini': 400_000,
   'gpt-5.2': 400_000, 'gpt-5.2-pro': 400_000,
+  // Kimi Code, from the table of plans on https://www.kimi.com/code/docs/en/third-party-tools/codex.html, read 2026-11-13.
+  // Where a model's window depends on the plan, the smaller is taken, as the one that does not promise room that may not be there.
+  'k3.1-pro': 262_144, 'k3.1-pro-highspeed': 1_048_576, 'k3': 262_144, 'k3-256k': 262_144, 'kimi-for-coding': 1_048_576, 'kimi-for-coding-highspeed': 262_144,
 };
 
 /**
