@@ -93,7 +93,6 @@
   .model text { font-family: inherit; fill: var(--soft); font-size: 15px; }
   .model text.nm { fill: var(--ink); font-size: 18.5px; font-weight: 650; letter-spacing: -.01em; }
   .model text.nm.big { font-size: 21px; }
-  .modelwrap:hover text.nm.big { fill: var(--accent); }
   @keyframes hover { from { transform: translateY(0); } to { transform: translateY(-9px); } }
   .model .float { animation: hover 3.6s ease-in-out infinite alternate; }
   .model .sheen { fill: url(#gsheen); stroke: none; }
@@ -102,6 +101,10 @@
   .model .gel { fill: url(#gbody); stroke: var(--ink); stroke-width: 1.2; stroke-opacity: .45; }
   .model .spec { fill: #fff; opacity: .7; filter: url(#blur3); }
   .model .soulc { fill: url(#gsoul); }
+  .model .gate { fill: var(--ink); fill-opacity: .1; stroke: var(--accent); stroke-width: 1.5; }
+  .model .gatein { fill: var(--ink); fill-opacity: .16; stroke: none; }
+  .model .float.late { animation-delay: -1.5s; animation-duration: 4.4s; }
+  .modelwrap:hover text.nm { fill: var(--accent); }
   .model .halo { fill: var(--accent); opacity: .55; filter: url(#blur12); transform-origin: 186px 192px; animation: breathe 2.8s ease-in-out infinite alternate; }
   @keyframes breathe { from { transform: scale(.8); opacity: .35; } to { transform: scale(1.2); opacity: .65; } }
   @media (prefers-reduced-motion: reduce) { .model .float, .model .halo { animation: none; } }
@@ -130,6 +133,7 @@
   ol.steps li strong { color: var(--ink); font-weight: 600; }
 
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 34px; }
+  .two.pair { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
 
   pre {
     background: var(--code); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
@@ -152,6 +156,7 @@
   <header class="top">
     <a href="#top" aria-label="teneral"><img class="logo" src="logo.png" alt="teneral" width="1200" height="308"></a>
     <nav>
+      <a href="#anatomy">Anatomy</a>
       <a class="wide" href="#how">How it works</a>
       <a href="#foundation">Foundation</a>
       <a class="wide" href="#species">The species</a>
@@ -173,14 +178,14 @@
       <p class="meta">A project of <a href="https://rayforcedb.com/">Rayforce Technologies Inc.</a> · open source under MIT · built on <a href="https://rayforcedb.com/">RayforceDB</a></p>
     </div>
 
-    <a class="modelwrap" href="#foundation"><svg class="model" viewBox="0 70 520 590" role="img" aria-label="One individual: RayforceDB as the foundation, the journal and the stem as hard layers above it, the body as a soft translucent form floating over them, and the soul as a light inside the body."><defs>
+    <a class="modelwrap" href="#anatomy"><svg class="model" viewBox="0 -10 520 510" role="img" aria-label="One individual, drawn as layers. At the bottom the stem, a hard dark base. Over it the immune layer, a slab with an opening every new generation must pass through. Above that the body, a soft translucent form, with the soul as a light inside it. Over the body floats the brain: the pages of its journal lying on a dark block, RayforceDB."><defs>
 <radialGradient id="gbody" cx="36%" cy="28%" r="80%"><stop offset="0" style="stop-color:#fff;stop-opacity:.95"/><stop offset=".5" style="stop-color:var(--soft);stop-opacity:.12"/><stop offset="1" style="stop-color:var(--soft);stop-opacity:.42"/></radialGradient>
 <radialGradient id="gsoul" cx="38%" cy="32%" r="70%"><stop offset="0" style="stop-color:#fff"/><stop offset=".55" style="stop-color:var(--accent);stop-opacity:.9"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></radialGradient>
 <linearGradient id="gsheen" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/></linearGradient>
 <filter id="blur8" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="8"/></filter>
 <filter id="blur12" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12"/></filter>
 <filter id="blur3" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
-</defs><polygon class="shadow" points="158,483 308,558 158,633 8,558"/><g class="slab base"><polygon class="l" points="8,500 158,575 158,615 8,540"/><polygon class="r" points="308,500 158,575 158,615 308,540"/><polygon class="t" points="158,425 308,500 158,575 8,500"/><polygon class="sheen" points="158,425 308,500 158,575 8,500"/><path class="rule" d="M26.8 490.6L176.8 565.6M45.5 481.2L195.5 556.2M64.2 471.9L214.2 546.9M83.0 462.5L233.0 537.5M101.8 453.1L251.8 528.1M120.5 443.8L270.5 518.8M139.2 434.4L289.2 509.4"/></g><polygon class="shadow" points="158,388 286,452 158,516 30,452"/><g class="slab journal"><polygon class="l" points="30,392 158,456 158,466 30,402"/><polygon class="r" points="286,392 158,456 158,466 286,402"/><polygon class="t" points="158,328 286,392 158,456 30,392"/><polygon class="sheen" points="158,328 286,392 158,456 30,392"/><path class="rule" d="M44.2 399.1L172.2 335.1M58.4 406.2L186.4 342.2M72.7 413.3L200.7 349.3M86.9 420.4L214.9 356.4M101.1 427.6L229.1 363.6M115.3 434.7L243.3 370.7M129.6 441.8L257.6 377.8M143.8 448.9L271.8 384.9"/></g><polygon class="shadow" points="158,282 286,346 158,410 30,346"/><g class="slab stem"><polygon class="l" points="30,290 158,354 158,378 30,314"/><polygon class="r" points="286,290 158,354 158,378 286,314"/><polygon class="t" points="158,226 286,290 158,354 30,290"/><polygon class="sheen" points="158,226 286,290 158,354 30,290"/></g><ellipse class="shadow soft" cx="158" cy="292" rx="78" ry="34"/><g class="float"><ellipse class="halo" cx="186" cy="192" rx="40" ry="34"/><circle class="soulc" cx="186" cy="192" r="15"/><path class="gel" d="M54 186C50 140 96 104 150 108C190 111 204 128 232 138C262 149 270 176 256 204C240 238 190 252 140 248C92 244 58 226 54 186Z"/><ellipse class="spec" cx="112" cy="142" rx="24" ry="10" transform="rotate(-30 112 142)"/></g><path class="lead" d="M236 140L322 112"/><circle class="dot" cx="236" cy="140" r="2.6"/><text class="nm " x="332" y="104">Body</text><text class="ds" x="332" y="125">Senses, thinks, acts.</text><text class="ds" x="332" y="144">Soft: its own to rewrite.</text><path class="lead" d="M204 192L322 196"/><circle class="dot" cx="204" cy="192" r="2.6"/><text class="nm " x="332" y="188">Soul</text><text class="ds" x="332" y="209">Who it is. Written by</text><text class="ds" x="332" y="228">itself, never shared.</text><path class="lead" d="M294 302L322 302"/><circle class="dot" cx="294" cy="302" r="2.6"/><text class="nm " x="332" y="294">Stem</text><text class="ds" x="332" y="315">Judges every new body.</text><text class="ds" x="332" y="334">No mutation changes it.</text><path class="lead" d="M294 397L322 397"/><circle class="dot" cx="294" cy="397" r="2.6"/><text class="nm " x="332" y="389">Journal</text><text class="ds" x="332" y="410">Everything that</text><text class="ds" x="332" y="429">happened, append-only.</text><path class="lead" d="M316 520L322 520"/><circle class="dot" cx="316" cy="520" r="2.6"/><text class="nm big" x="332" y="512">RayforceDB</text><text class="ds" x="332" y="533">The foundation: memory,</text><text class="ds" x="332" y="552">recall and measurement.</text></svg></a>
+</defs><polygon class="shadow" points="158,333 308,408 158,483 8,408"/><g class="slab base"><polygon class="l" points="8,350 158,425 158,465 8,390"/><polygon class="r" points="308,350 158,425 158,465 308,390"/><polygon class="t" points="158,275 308,350 158,425 8,350"/><polygon class="sheen" points="158,275 308,350 158,425 8,350"/></g><polygon class="shadow" points="158,282 286,346 158,410 30,346"/><g class="slab immune"><polygon class="l" points="30,290 158,354 158,378 30,314"/><polygon class="r" points="286,290 158,354 158,378 286,314"/><polygon class="t" points="158,226 286,290 158,354 30,290"/><polygon class="sheen" points="158,226 286,290 158,354 30,290"/><polygon class="gate" points="158,262 214,290 158,318 102,290"/><polygon class="gatein" points="158,276 186,290 158,304 130,290"/></g><ellipse class="shadow soft" cx="158" cy="292" rx="78" ry="34"/><g class="float"><ellipse class="halo" cx="186" cy="192" rx="40" ry="34"/><circle class="soulc" cx="186" cy="192" r="15"/><path class="gel" d="M54 186C50 140 96 104 150 108C190 111 204 128 232 138C262 149 270 176 256 204C240 238 190 252 140 248C92 244 58 226 54 186Z"/><ellipse class="spec" cx="112" cy="142" rx="24" ry="10" transform="rotate(-30 112 142)"/></g><g class="float late"><ellipse class="shadow soft" cx="158" cy="112" rx="46" ry="12"/><g class="slab base"><polygon class="l" points="98,54 158,84 158,98 98,68"/><polygon class="r" points="218,54 158,84 158,98 218,68"/><polygon class="t" points="158,24 218,54 158,84 98,54"/></g><g class="slab journal"><polygon class="l" points="106,36 158,62 158,66 106,40"/><polygon class="r" points="210,36 158,62 158,66 210,40"/><polygon class="t" points="158,10 210,36 158,62 106,36"/><polygon class="sheen" points="158,10 210,36 158,62 106,36"/><path class="rule" d="M116.4 41.2L168.4 15.2M126.8 46.4L178.8 20.4M137.2 51.6L189.2 25.6M147.6 56.8L199.6 30.8"/></g></g><path class="lead" d="M212 40L322 22"/><circle class="dot" cx="212" cy="40" r="2.6"/><text class="nm" x="332" y="30">Brain</text><text class="ds" x="332" y="51">Thinks and remembers: its</text><text class="ds" x="332" y="70">journal, on RayforceDB.</text><path class="lead" d="M238 142L322 114"/><circle class="dot" cx="238" cy="142" r="2.6"/><text class="nm" x="332" y="122">Body</text><text class="ds" x="332" y="143">Acts and senses.</text><text class="ds" x="332" y="162">Soft: its own to rewrite.</text><path class="lead" d="M204 194L322 196"/><circle class="dot" cx="204" cy="194" r="2.6"/><text class="nm" x="332" y="204">Soul</text><text class="ds" x="332" y="225">Who it is. Written by</text><text class="ds" x="332" y="244">itself, never shared.</text><path class="lead" d="M290 304L322 288"/><circle class="dot" cx="290" cy="304" r="2.6"/><text class="nm" x="332" y="296">Immune</text><text class="ds" x="332" y="317">Every new generation</text><text class="ds" x="332" y="336">must pass its gates.</text><path class="lead" d="M312 380L322 378"/><circle class="dot" cx="312" cy="380" r="2.6"/><text class="nm" x="332" y="386">Stem</text><text class="ds" x="332" y="407">Keeps it alive: wakes it,</text><text class="ds" x="332" y="426">and puts it back.</text></svg></a>
   </div>
 
   <section id="what">
@@ -193,11 +198,48 @@
     </div>
   </section>
 
+  <section id="anatomy">
+    <div class="wrap">
+      <p class="eyebrow">Anatomy</p>
+      <h2>One repository, laid out as the organism it holds.</h2>
+      <p>Every part of an individual is a directory of its code, and every part is its own to change. What it changes in its brain and body it mutates into by itself. Anything else becomes a generation only when its owner has approved it.</p>
+
+      <div class="two pair">
+        <div class="card">
+          <span class="path">brain/</span>
+          <h3>Brain</h3>
+          <p>What it thinks and remembers with: the model it calls, the journal of everything that happened to it, what of that is in mind for each thought, and the engine its memory lives in.</p>
+        </div>
+        <div class="card">
+          <span class="path">body/</span>
+          <h3>Body</h3>
+          <p>What it acts and senses with: its tools, its shell, and the channels by which its owner, a clock and other individuals reach it.</p>
+        </div>
+        <div class="card">
+          <span class="path">stem/</span>
+          <h3>Stem</h3>
+          <p>Like a brainstem, the part it does not steer. It wakes the agent, restarts it, and puts back the generation before when a new one cannot stand.</p>
+        </div>
+        <div class="card">
+          <span class="path">immune/</span>
+          <h3>Immune</h3>
+          <p>What decides whether a change takes: the gates each new generation must pass, the owner's approval, and the hash of everything it runs on.</p>
+        </div>
+      </div>
+
+      <ul class="plain">
+        <li><strong>Soul</strong> is a few pages the individual writes about who it is. They are never committed and never shared.</li>
+        <li><strong>Species</strong> is its kin: the published line it descends from, takes from, and offers back to.</li>
+        <li><strong>Keeper</strong> is the owner's side, not part of the organism: the terminal, the setup, the word that approves or sends back. The owner addresses it as <code>./one</code>.</li>
+      </ul>
+    </div>
+  </section>
+
   <section id="foundation">
     <div class="wrap">
       <p class="eyebrow">Foundation</p>
       <h2>Built on RayforceDB.</h2>
-      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal the stem keeps, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows. Memory is not a tool the agent picks up: it is part of its brain, beside the model it thinks with.</p>
+      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal, which is appended to and never rewritten, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows. Memory is not a tool the agent picks up: it is part of its brain, beside the model it thinks with.</p>
       <p>RayforceDB is a SIMD-accelerated columnar database in pure C with no dependencies. It is one small binary that starts in a moment, which is exactly what a body that may be replaced tomorrow can stand on.</p>
 
       <div class="two">
