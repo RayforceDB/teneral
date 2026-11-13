@@ -4,8 +4,8 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
-import { accept } from '../../kernel/owner';
-import { readConsent } from '../../kernel/species';
+import { leaveApproval } from '../../kernel/owner';
+import { readApproval } from '../../kernel/approval';
 import {
   CRASH_LIMIT, REJECTION_LIMIT, excused, init, installRoot, paths, supervise, type Options,
 } from '../../kernel/supervisor';
@@ -1049,7 +1049,7 @@ process.exit(75);`)}` });
   expect(readEvents(p.journal).filter((e) => e.type === 'note')).toHaveLength(2);
 });
 
-// --- the species: a generation with another kernel, the owner's acceptance, a mutation that was not judged ---
+// --- outside the body: a generation with another kernel, the owner's approval, a mutation that was not judged ---
 
 /** An install on a first generation with a kernel file, and a second in the workspace that changes `files` as well as its body. */
 function withKernel(files: Record<string, string>, body = `${V1}\n// v2`) {
@@ -1100,26 +1100,26 @@ test('rolling back to a generation with another kernel ends the supervisor the s
   expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
 });
 
-test('a mutation that was refused without a verdict may be asked for again, any number of times: the owner\'s word, or the species\' remote, is what is waited for', async () => {
+test('a mutation that was refused without a verdict may be asked for again, any number of times: the owner\'s word is what is waited for', async () => {
   const rounds = REJECTION_LIMIT + 3;
   const r = await seedOnly(asksFor("'c'.repeat(40)", rounds), {
-    gates: () => ({ ok: false, gate: 'species', output: 'ask your owner', undecided: true }), restartDelayMs: 20,
+    gates: () => ({ ok: false, gate: 'approval', output: 'ask your owner', undecided: true }), restartDelayMs: 20,
   });
   expect(r.outcome).toBe('stopped');
   expect(r.events.filter((e) => e.type === 'mutation.rejected')).toHaveLength(rounds);
   for (const line of r.logs.filter((l) => l.includes('rejected at gate'))) expect(line).toContain('restarting in 20 ms');
   // The same answer with a verdict in it is counted as ever.
-  const counted = await seedOnly(asksFor("'c'.repeat(40)", rounds), { gates: () => ({ ok: false, gate: 'species', output: 'differs' }) });
+  const counted = await seedOnly(asksFor("'c'.repeat(40)", rounds), { gates: () => ({ ok: false, gate: 'kernel', output: 'switched off' }) });
   expect(counted.outcome).toBe('halted');
 });
 
-test('what the owner accepted from a talk client is taken in at the start and before the gates judge: written down, journaled, and the file gone', async () => {
+test('what the owner approved from a talk client is taken in at the start and before the gates judge: written down, journaled, and the file gone', async () => {
   const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
   init(dir);
   const p = paths(dir);
-  // The second generation is asked for by a first whose owner accepts that very commit while it runs.
+  // The second generation is asked for by a first whose owner approves that very commit while it runs.
   const saying = V1.replace("appendEvent(journal, gen, { type: 'mutation.requested'", `
-require('node:fs').writeFileSync(require('node:path').join(process.env.TENERAL_OWNER, '.said-while-running.accept'), process.env.TEST_NEXT);
+require('node:fs').writeFileSync(require('node:path').join(process.env.TENERAL_OWNER, '.said-while-running.mutation'), process.env.TEST_NEXT);
 appendEvent(journal, gen, { type: 'mutation.requested'`);
   expect(saying).not.toBe(V1);
   writeFiles(dir, { 'body/main.ts': saying });
@@ -1129,24 +1129,24 @@ appendEvent(journal, gen, { type: 'mutation.requested'`);
   const next = commitAll(p.candidate, 'v2');
   process.env.TEST_NEXT = next;
   // And one that was said before anything ran.
-  accept(p.owner, seed);
+  leaveApproval(p.owner, seed);
   const seen: (string | undefined)[] = [];
   const logs: string[] = [];
   expect(await supervise({
     root: dir, ...QUIET, log: (line) => { logs.push(line); },
     gates: () => {
-      seen.push(readConsent(dir).accepted);
+      seen.push(readApproval(dir).approved);
       return PASS;
     },
   })).toBe('stopped');
   expect(seen).toEqual([next]);
   expect(readdirSync(p.owner)).toEqual([]);
-  expect(logs).toContain(`the owner accepted species commit ${seed}`);
-  expect(logs).toContain(`the owner accepted species commit ${next}`);
-  expect(readEvents(p.journal).filter((e) => e.type === 'species.accepted')).toMatchObject([
+  expect(logs).toContain(`the owner approved the mutation to ${seed}`);
+  expect(logs).toContain(`the owner approved the mutation to ${next}`);
+  expect(readEvents(p.journal).filter((e) => e.type === 'mutation.approved')).toMatchObject([
     { commit: seed, route: 'talk', gen: first }, { commit: next, route: 'talk', gen: first },
   ]);
-  expect(readConsent(dir)).toMatchObject({ accepted: next, route: 'talk' });
+  expect(readApproval(dir)).toMatchObject({ approved: next, route: 'talk' });
 });
 
 test('what the launcher tells a kernel about itself is not handed on to the body', async () => {

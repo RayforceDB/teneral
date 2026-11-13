@@ -12,7 +12,7 @@ import {
 } from '../../kernel/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../kernel/offerkey';
 import { APPROVALS_DIR, APPROVAL_SUFFIX, approve, approved, tell } from '../../kernel/owner';
-import { CHANGEABLE, isProtected } from '../../kernel/protected';
+import { FREE, isProtected } from '../../kernel/protected';
 import { userAgent } from '../../kernel/providers';
 import { talk } from '../../kernel/talk';
 import { startFakeHub, type FakeHub } from './fakehub';
@@ -434,9 +434,12 @@ t('the owner sees what waits and approves it by the start of its commit, in the 
   expect(ownerCommand(w.root, '/approved')).toBeNull();
   const listed = ownerCommand(w.root, '/offers')!.join('\n');
   for (const part of [commit, 'body: a greeting', 'body/greeting.ts', 'Not verified:', '/approve <commit>']) expect(listed).toContain(part);
-  expect(ownerCommand(w.root, '/approve')!.join(' ')).toContain('first seven');
-  expect(ownerCommand(w.root, '/approve abc')!.join(' ')).toContain('first seven');
-  expect(ownerCommand(w.root, '/approve 0000000')!.join(' ')).toContain('Nothing that starts with 0000000');
+  // /approve is the owner's one word, for a mutation outside the body as well: with nothing of that kind asked for, it says so and points at what does wait.
+  expect(ownerCommand(w.root, '/approve')!.join(' ')).toContain('nothing is waiting for your approval');
+  expect(ownerCommand(w.root, '/approve')!.join(' ')).toContain('One commit waits to go out to the species: /offers shows what');
+  expect(ownerCommand(w.root, '/approve abc')!.join(' ')).toContain('names no commit of this repository');
+  expect(ownerCommand(w.root, '/approve 0000000')!.join(' ')).toContain('names no commit of this repository');
+  expect(ownerCommand(w.root, `/approve ${commit.slice(0, 7)} more`)!.join(' ')).toContain('first seven');
   expect(approved(i.owner, commit)).toBe(false);
 
   // Not a terminal: the command line approves nothing and stores no token.
@@ -779,10 +782,10 @@ t('a failing witness says which check failed and posts nothing of what the code 
 
 test('the workflow that reports paths outside the body draws the line where the kernel does, and pins its actions by commit', () => {
   const workflow = readFileSync(join(PROJECT, '.github', 'workflows', 'gates.yml'), 'utf8');
-  const pattern = /CHANGEABLE: '(.+)'/.exec(workflow)![1]!;
+  const pattern = /FREE: '(.+)'/.exec(workflow)![1]!;
   const inside = new RegExp(pattern);
   const samples = [
-    ...CHANGEABLE.flatMap((entry) => (entry.endsWith('/') ? [`${entry}x.ts`, `${entry}deep/x.ts`, entry.slice(0, -1), `x/${entry}y`] : [entry, `${entry}.bak`, `x/${entry}`])),
+    ...FREE.flatMap((entry) => (entry.endsWith('/') ? [`${entry}x.ts`, `${entry}deep/x.ts`, entry.slice(0, -1), `x/${entry}y`] : [entry, `${entry}.bak`, `x/${entry}`])),
     'kernel/gates.ts', 'test/kernel/x.test.ts', 'README.md', 'BIRTH.md', 'box', '.github/workflows/gates.yml', 'bodyx/a.ts', 'test/bodyx.ts', 'BACKLOG.mdx',
   ];
   for (const path of samples) expect(`${path} ${inside.test(path)}`).toBe(`${path} ${!isProtected(path)}`);

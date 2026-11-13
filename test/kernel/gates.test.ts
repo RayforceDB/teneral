@@ -19,22 +19,26 @@ test('a change inside body/ passes', async () => {
   expect(await runGates(dir, seed, next, NO_CHECKS)).toEqual({ ok: true, gate: 'all', output: '' });
 });
 
-test('a change to a protected path is rejected and named', async () => {
+/** As a supervisor the launcher started, on an install whose owner is asked: the default. */
+const ASK = { approval: { launcher: 1 } };
+
+test('a change outside the body waits for the owner, and is named', async () => {
   const { dir, seed } = makeLineage({ 'kernel/k.ts': 'export const k = 1;\n' });
   writeFiles(dir, { 'kernel/k.ts': 'export const k = 2;\n' });
   const next = commitAll(dir, 'touch kernel');
-  const result = await runGates(dir, seed, next, NO_CHECKS);
+  const result = await runGates(dir, seed, next, NO_CHECKS, ASK);
   expect(result.ok).toBe(false);
-  expect(result.gate).toBe('protected');
+  expect(result.gate).toBe('approval');
+  expect(result.undecided).toBe(true);
   expect(result.output).toContain('kernel/k.ts');
 });
 
-test('moving a protected file away is rejected', async () => {
+test('moving a file out of the kernel waits for the owner', async () => {
   const { dir, seed } = makeLineage({ 'kernel/k.ts': 'export const k = 1;\n' });
   writeFiles(dir, { 'body/k.ts': 'export const k = 1;\n' });
   rmSync(join(dir, 'kernel/k.ts'));
   const next = commitAll(dir, 'move');
-  expect((await runGates(dir, seed, next, NO_CHECKS)).gate).toBe('protected');
+  expect((await runGates(dir, seed, next, NO_CHECKS, ASK)).gate).toBe('approval');
 });
 
 test('a name outside ASCII is matched and reported as it is, not as git quotes it', async () => {
@@ -45,22 +49,22 @@ test('a name outside ASCII is matched and reported as it is, not as git quotes i
 
   writeFiles(dir, { 'kernel/é.ts': 'export const e = 1;\n' });
   const forbidden = commitAll(dir, 'add kernel/é.ts');
-  const result = await runGates(dir, seed, forbidden, NO_CHECKS);
+  const result = await runGates(dir, seed, forbidden, NO_CHECKS, ASK);
   expect(result.ok).toBe(false);
-  expect(result.gate).toBe('protected');
+  expect(result.gate).toBe('approval');
   expect(result.output).toContain('kernel/é.ts');
   expect(result.output).not.toContain('\\303');
-  expect(result.output).not.toContain('"');
+  expect(result.output.split('\n')[0]).not.toContain('"');
 });
 
-test('a name that only looks changeable once whitespace is trimmed is rejected', async () => {
+test('a name that only looks like the body once whitespace is trimmed waits for the owner', async () => {
   const spaced = makeLineage({ 'body/a.ts': 'a\n' });
   writeFiles(spaced.dir, { ' body/x.ts': 'x\n' });
-  expect((await runGates(spaced.dir, spaced.seed, commitAll(spaced.dir, 'space'), NO_CHECKS)).gate).toBe('protected');
+  expect((await runGates(spaced.dir, spaced.seed, commitAll(spaced.dir, 'space'), NO_CHECKS, ASK)).gate).toBe('approval');
 
   const tabbed = makeLineage({ 'body/a.ts': 'a\n' });
   writeFiles(tabbed.dir, { '\tBACKLOG.md': 'x\n' });
-  expect((await runGates(tabbed.dir, tabbed.seed, commitAll(tabbed.dir, 'tab'), NO_CHECKS)).gate).toBe('protected');
+  expect((await runGates(tabbed.dir, tabbed.seed, commitAll(tabbed.dir, 'tab'), NO_CHECKS, ASK)).gate).toBe('approval');
 });
 
 test('uncommitted work in the candidate is rejected', async () => {

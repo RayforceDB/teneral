@@ -123,17 +123,17 @@ test('the commands offered stand under the box, the chosen one marked, each with
   // The footer, with its tip, the context and what is attached, is back when nothing is offered.
   expect(text(liveRows(live(80, 24, { edit: typing('/h'), list: null }))).at(-1)).toBe(' gpt-6.1-sol  resting  …/data/work/teneral            context 8% (71.9k/1.05M)');
   // What is under way and what the agent is doing stay over the box.
-  const busy = text(liveRows(live(80, 30, { edit: typing('/a'), list: offered('/a', 1), pending: [[{ text: '  ▪ bash  sleep 9' }]], activity: [{ text: '⠹ The agent is running bash' }] })));
+  const busy = text(liveRows(live(80, 30, { edit: typing('/h'), list: offered('/h', 1), pending: [[{ text: '  ▪ bash  sleep 9' }]], activity: [{ text: '⠹ The agent is running bash' }] })));
   expect(busy).toEqual([
     '',
     '  ▪ bash  sleep 9',
     '',
     '⠹ The agent is running bash',
     `╭${'─'.repeat(77)}╮`,
-    `│ › /a${' '.repeat(72)}│`,
+    `│ › /h${' '.repeat(72)}│`,
     `╰${'─'.repeat(77)}╯`,
-    '    /accept [commit]   accept the species commit the agent asked about, or the…',
-    '  ▸ /approve <commit>  let exactly that commit go out',
+    '    /help     the keys and commands',
+    '  ▸ /history  print the earlier conversation that was read from the journal',
     ' Tab completes · Enter runs · Esc closes · Up/Down choose',
   ]);
   // The chosen row is the owner's colour and heavy; the others are set back.
@@ -148,14 +148,14 @@ test('the commands offered stand under the box, the chosen one marked, each with
 test('of more commands than six, the six around the chosen one are shown, and the row under them says which of how many it is', () => {
   const at = (chosen: number, cols = 80, rows = 30): string[] => text(liveRows(live(cols, rows, { edit: typing('/'), list: offered('/', chosen) }))).slice(4);
   const shown = (rows: string[]): string[] => rows.slice(0, -1).map((row) => /\/[a-z]+/.exec(row)![0]);
-  expect(shown(at(0))).toEqual(['/help', '/image', '/stop', '/accept', '/tools', '/generations']);
-  expect(at(0).at(-1)).toBe(` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 13`);
+  expect(shown(at(0))).toEqual(['/help', '/image', '/stop', '/approve', '/tools', '/generations']);
+  expect(at(0).at(-1)).toBe(` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 12`);
   expect(at(0)[0]!.startsWith('  ▸ /help ')).toBe(true);
-  expect(shown(at(5))).toEqual(['/stop', '/accept', '/tools', '/generations', '/history', '/offers']);
+  expect(shown(at(5))).toEqual(['/stop', '/approve', '/tools', '/generations', '/history', '/offers']);
   expect(at(5)[3]!.startsWith('  ▸ /generations ')).toBe(true);
-  expect(shown(at(12))).toEqual(['/offers', '/approve', '/plain', '/usage', '/reasoning', '/quit']);
-  expect(at(12)[5]!.startsWith('  ▸ /quit ')).toBe(true);
-  expect(at(12).at(-1)).toMatch(/ {3,}13 of 13$/);
+  expect(shown(at(11))).toEqual(['/history', '/offers', '/plain', '/usage', '/reasoning', '/quit']);
+  expect(at(11)[5]!.startsWith('  ▸ /quit ')).toBe(true);
+  expect(at(11).at(-1)).toMatch(/ {3,}12 of 12$/);
   for (let chosen = 0; chosen < COMMANDS.length; chosen++) expect(at(chosen).filter((row) => row.startsWith('  ▸ '))).toEqual([expect.stringContaining(COMMANDS[chosen]!.name)]);
 });
 
@@ -185,12 +185,12 @@ test('with commands offered the live region still takes no more than half the sc
     '  ▸ /help              the keys and co…',
     '    /image <path>      attach an image…',
     '    /stop              interrupt what …',
-    '    /accept [commit]   accept the spec…',
+    '    /approve [commit]  approve the mut…',
     '    /tools             show or hide wh…',
     '    /generations       the generations…',
-    ' Tab completes · Enter runs     1 of 13',
+    ' Tab completes · Enter runs     1 of 12',
   ]);
-  expect(text(liveRows(live(40, 10, { edit: typing('/'), list: offered('/', 4) }))).map((row) => row.slice(0, 12))).toEqual(['╭───────────', '│ › /       ', '╰───────────', '    /accept ', '  ▸ /tools  ']);
+  expect(text(liveRows(live(40, 10, { edit: typing('/'), list: offered('/', 4) }))).map((row) => row.slice(0, 12))).toEqual(['╭───────────', '│ › /       ', '╰───────────', '    /approve', '  ▸ /tools  ']);
   expect(text(liveRows(live(40, 6, { edit: typing('/'), list: offered('/', 4) })))).toEqual(['› /', '  ▸ /tools             show or hide wh…']);
 });
 

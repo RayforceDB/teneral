@@ -23,7 +23,7 @@ test('commands are offered while the cursor is in the word that names one: all o
   expect(names('/')).toEqual(COMMANDS.map((c) => c.name));
   expect(names('/h')).toEqual(['/help', '/history']);
   expect(names('/hi')).toEqual(['/history']);
-  expect(names('/a')).toEqual(['/accept', '/approve']);
+  expect(names('/a')).toEqual(['/approve']);
   expect(names('/help')).toEqual(['/help']);
   expect(names('  /q')).toEqual(['/quit']);
   // No command begins so; the word is finished; the cursor has left it.
@@ -43,7 +43,6 @@ test('completing puts the whole name where the word was, with a blank after it o
   const done = (text: string, name: string) => complete(text, typed(text)!, commandNamed(name)!);
   expect(done('/h', '/help')).toEqual({ text: '/help', cursor: 5 });
   expect(done('/', '/image')).toEqual({ text: '/image ', cursor: 7 });
-  expect(done('/ac', '/accept')).toEqual({ text: '/accept ', cursor: 8 });
   expect(done('  /ap', '/approve')).toEqual({ text: '  /approve ', cursor: 11 });
   expect(done('/q\n', '/quit')).toEqual({ text: '/quit\n', cursor: 5 });
 });
@@ -52,8 +51,8 @@ test('the command word is marked for colouring: a command in the owner\'s colour
   const style = (text: string) => mark(text)?.style ?? null;
   expect(mark('/help')).toEqual({ from: 0, to: 5, style: { fg: 'accent', bold: true } });
   expect(mark('  /image ~/a.png')).toEqual({ from: 2, to: 8, style: { fg: 'accent', bold: true } });
-  expect(style('/accept')).toEqual({ fg: 'accent', bold: true });
-  expect(style('/accept abc1234')).toEqual({ fg: 'accent', bold: true });
+  expect(style('/approve')).toEqual({ fg: 'accent', bold: true });
+  expect(style('/approve abc1234')).toEqual({ fg: 'accent', bold: true });
   expect(style('/help ')).toEqual({ fg: 'accent', bold: true });
   expect(style('/')).toEqual({ fg: 'dim' });
   expect(style('/he')).toEqual({ fg: 'dim' });
@@ -67,7 +66,7 @@ test('Enter: a command with what follows it; words as they are; and a line shape
   expect(entered('/help')).toEqual({ kind: 'command', command: commandNamed('/help')!, arg: '' });
   expect(entered('/image  ~/My Pictures/a.png')).toEqual({ kind: 'command', command: commandNamed('/image')!, arg: '~/My Pictures/a.png' });
   expect(entered('/image')).toEqual({ kind: 'command', command: commandNamed('/image')!, arg: '' });
-  expect(entered('/accept abc1234')).toEqual({ kind: 'command', command: commandNamed('/accept')!, arg: 'abc1234' });
+  expect(entered('/approve abc1234')).toEqual({ kind: 'command', command: commandNamed('/approve')!, arg: 'abc1234' });
   for (const words of ['hello', 'what is in /help?', '/teneral/body is where you live', '/home/owner/a.png', '/Help', '/help\nplease', '/ a', '/']) {
     expect(entered(words)).toEqual({ kind: 'words', text: words });
   }

@@ -20,9 +20,9 @@ test('every command is a slash and lower-case letters, named once, with one line
 
 test('whether something follows a command is read from its hint: it has to, it may, or nothing does', () => {
   const by = (name: string) => takes(commandNamed(name)!);
-  expect([by('/image'), by('/approve'), by('/accept'), by('/help'), by('/quit')]).toEqual(['required', 'required', 'optional', 'none', 'none']);
+  expect([by('/image'), by('/approve'), by('/help'), by('/quit')]).toEqual(['required', 'optional', 'none', 'none']);
   expect(usage(commandNamed('/image')!)).toBe('/image <path>');
-  expect(usage(commandNamed('/accept')!)).toBe('/accept [commit]');
+  expect(usage(commandNamed('/approve')!)).toBe('/approve [commit]');
   expect(usage(commandNamed('/stop')!)).toBe('/stop');
   expect(commandNamed('/nonsense')).toBeNull();
   expect(commandNamed('help')).toBeNull();
@@ -39,9 +39,8 @@ test('/help prints the table: every command for the screen client, with the key 
   expect(helpRows('plain')).toEqual([
     '  /help              the keys and commands',
     '  /stop              interrupt what the agent is doing now',
-    '  /accept [commit]   accept the species commit the agent asked about, or the one named',
+    '  /approve [commit]  approve the mutation the agent asked about, or the commit or offer named',
     '  /offers            what waits for your approval before it goes out to the species',
-    '  /approve <commit>  let exactly that commit go out',
     '  /quit              leave',
   ]);
 });

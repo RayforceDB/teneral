@@ -5,7 +5,8 @@ import { DEFAULT_CHECKS, repoRoot, runGates, type Check, type GateResult } from 
 import { DEFAULT_API, GitHubError, TOKEN_FILE, TOKEN_NEEDS, api, gitRemote, githubRemote, hasToken, remoteFailure, saveToken, type Hub } from './github';
 import { appendEvent } from './journal';
 import { GIT_NAMESPACE, KEY_FILE, WITNESS_NAMESPACE, commitSigner, ensureKey, run, signCommits, signText, signerOf, type Key } from './offerkey';
-import { approve, approved, useApproval } from './owner';
+import { approvedSummary, chooseApproval } from './approval';
+import { approve, approved, approvedLine, leaveApproval, tell, useApproval } from './owner';
 import { isProtected } from './protected';
 import { speciesRef as resolveSpecies } from './species';
 import { authDir, userAgent } from './providers';
@@ -261,7 +262,7 @@ export interface Report {
   body: string;
   commits: { commit: string; subject: string; signer: string | null }[];
   files: { path: string; change: string; bytes: number }[];
-  /** The changed paths outside what a mutation may change: the kernel, its tests, the project's own files. */
+  /** The changed paths outside the body, which a mutation changes only with its owner's approval: the kernel, its tests, the project's own files. */
   outside: string[];
   /** Changed files git takes for binary: nothing looked inside them. */
   binary: string[];
@@ -750,7 +751,25 @@ export function approvePending(i: Install, prefix: string): Outcome {
   };
 }
 
-/** `/offers` and `/approve <commit>` in the talk clients: the lines to show, or null for a line that is neither. */
+/**
+ * `/approve [commit]` in the talk clients, the owner's one word for both things that wait for it: a
+ * commit waiting to go out to the species, when what is named is the start of one; else a mutation
+ * that changes something outside the body (kernel/approval.ts), the one named or the one last asked for.
+ */
+function approveCommand(i: Install, arg: string): string[] {
+  if (/^[0-9a-f]{7,40}$/.test(arg) && pending(i).some((r) => r.commit.startsWith(arg))) return approvePending(i, arg).text.split('\n');
+  const chosen = chooseApproval(i.root, arg, generation(i.root));
+  if ('why' in chosen) {
+    const offers = pending(i).length;
+    return [`Not approved: ${chosen.why}.`, ...(offers === 0 ? [] : [`${offers === 1 ? 'One commit waits' : `${offers} commits wait`} to go out to the species: /offers shows what, and /approve <commit> lets one go.`])];
+  }
+  // The owner's word to the kernel, as a file of its own kind in the owner's channel (kernel/owner.ts). The line after it is what tells the agent.
+  leaveApproval(i.owner, chosen.commit);
+  tell(i.owner, approvedLine(chosen.commit));
+  return [`${approvedSummary(chosen)} The kernel takes that in when the agent next asks for its mutation, and the agent was told to ask again.`];
+}
+
+/** `/offers` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is neither. */
 export function ownerCommand(root: string, line: string): string[] | null {
   const [name = '', arg = '', ...more] = line.trim().split(/\s+/);
   if (name !== '/offers' && name !== '/approve') return null;
@@ -761,8 +780,8 @@ export function ownerCommand(root: string, line: string): string[] | null {
       if (all.length === 0) return ['Nothing is waiting for your approval.'];
       return [...all.flatMap((r) => [...showPending(i, r.commit).text.split('\n'), '']), `/approve <commit> lets one of them go out (TENERAL_PUBLISH is ${consent(i.s)}).`];
     }
-    if (arg === '' || more.length > 0) return ['/approve <commit>: the first seven or more characters of a commit that /offers lists.'];
-    return approvePending(i, arg).text.split('\n');
+    if (more.length > 0) return ['/approve, or /approve <commit>: the first seven or more characters of one commit.'];
+    return approveCommand(i, arg);
   } catch (err) {
     return [`That could not be done: ${reasonOf(err)}`];
   }

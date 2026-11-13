@@ -4,7 +4,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync,
 import { dirname, join } from 'node:path';
 
 // The launcher: the one program the container starts, and the one part of the kernel that is the
-// install's and never a generation's. A mutation from the species can replace every other file of
+// install's and never a generation's. A mutation the owner approved can replace every other file of
 // the kernel, and the kernel of a generation is the kernel that runs it: the supervisor, the gates
 // and the owner's commands are started from `.teneral/live`, the checkout of the current
 // generation. This file stays in the owner's checkout and decides only which kernel that is, and

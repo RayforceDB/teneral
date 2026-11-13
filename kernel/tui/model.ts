@@ -369,6 +369,9 @@ export class Transcript {
         // The owner stopped the turn, from this terminal or another.
         this.push({ kind: 'quiet', label: 'interrupted by you', text: '' });
         return;
+      case 'mutation.approved':
+        this.push({ kind: 'quiet', label: `mutation to ${shortSha(f.commit)} approved by you`, text: '' });
+        return;
       case 'species.accepted':
         this.push({ kind: 'quiet', label: `species commit ${shortSha(f.commit)} accepted by you`, text: '' });
         return;
@@ -378,6 +381,14 @@ export class Transcript {
         this.tools.clear();
         return;
       case 'mutation.rejected':
+        // Not a refusal: the kernel judged nothing, and waits for the owner's word (kernel/approval.ts).
+        if (f.gate === 'approval') {
+          this.push({
+            kind: 'notice', tone: 'warn', title: `mutation to ${shortSha(f.commit)} waits for your approval`,
+            lead: cut(flat(clean(asText(f.output)).split('\n')[0] ?? ''), 600), body: `/approve lets it through to the checks; /approve ${shortSha(f.commit)} says the same by name.`,
+          });
+          return;
+        }
         this.push({
           kind: 'notice', tone: 'warn', title: `mutation to ${shortSha(f.commit)} rejected at gate "${cut(flat(clean(asText(f.gate))), 40)}"`,
           lead: '', body: tailOf(clean(asText(f.output)).trimEnd(), NOTICE_CHARS),

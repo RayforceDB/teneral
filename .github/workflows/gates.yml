@@ -37,7 +37,7 @@ jobs:
         run: bun kernel/offer.ts gates HEAD
 
   paths:
-    name: paths outside what a mutation may change
+    name: paths outside the body
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -46,21 +46,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      # A report, not a verdict: it never fails. The list is kernel/protected.ts, and a test keeps the two the same.
+      # A report, not a verdict: it never fails. These are the paths a mutation changes only with its owner's
+      # approval. The list is kernel/protected.ts, and a test keeps the two the same.
       - name: report them
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-          CHANGEABLE: '^(body/|test/body/|BACKLOG\.md$)'
+          FREE: '^(body/|test/body/|BACKLOG\.md$)'
         run: |
-          outside="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD | grep -v -E "$CHANGEABLE" || true)"
+          outside="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD | grep -v -E "$FREE" || true)"
           if [ -z "$outside" ]; then
-            echo "This pull request changes only what a mutation may change: body/, test/body/ and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "This pull request changes only what a mutation changes without asking its owner: body/, test/body/ and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             count="$(printf '%s\n' "$outside" | wc -l | tr -d ' ')"
-            echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation could not: the kernel, its tests or the project's own files."
+            echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation changes only with its owner's approval: the kernel, its tests or the project's own files."
             {
               echo "### This pull request changes $count path(s) outside the body"
-              echo "A mutation could not make these changes: the kernel, its tests, the project's own files."
+              echo "A mutation makes these changes only with its owner's approval: the kernel, its tests, the project's own files."
               echo
               printf '%s\n' "$outside" | sed 's/^/- `/; s/$/`/'
             } | tee -a "$GITHUB_STEP_SUMMARY"

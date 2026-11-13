@@ -428,7 +428,7 @@ test('the candidate\'s checks and its smoke run are handed the candidate\'s orga
   // A gate that fails earlier never gets as far as the organs: nothing of a refused commit is unpacked.
   const early = pinned(pinOf('tool', sha(bytes)), { 'kernel/k.ts': 'export const k = 1;\n' });
   stock(early.dir, bytes);
-  expect((await runGates(early.dir, early.seed, early.next, NO_CHECKS)).gate).toBe('protected');
+  expect((await runGates(early.dir, early.seed, early.next, NO_CHECKS)).gate).toBe('kernel');
   expect(unpackedIn(early.dir)).toEqual([]);
 }, SLOW);
 

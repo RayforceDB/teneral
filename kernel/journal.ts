@@ -42,9 +42,12 @@ export type EventBody =
   | { type: 'generation.ready'; commit: string }
   | { type: 'generation.promoted'; commit: string; previous: string }
   | { type: 'generation.rolledback'; commit: string; to: string; reason: string }
-  // The owner accepted a species commit, and every one before it, for this lineage to stand on
-  // (kernel/species.ts). `route` says how: `./box accept`, or `/accept` in a talk client. It came
-  // later, and it is a record: nothing is owed for it, and a reader from before it passes it by.
+  // The owner approved a mutation that changes something outside the body (kernel/approval.ts).
+  // `route` says how: `./box approve`, or `/approve` in a talk client. It is a record: nothing is
+  // owed for it, and a reader from before it passes it by.
+  | { type: 'mutation.approved'; commit: string; route: 'box' | 'talk' }
+  // The same record from when the kernel changed only by a merge of the species, and the owner
+  // accepted the species commit. Older journals hold it; nothing writes it any more.
   | { type: 'species.accepted'; commit: string; route: 'box' | 'talk' }
   // The body's own record, for whatever it keeps outside the journal and must be able to build again
   // from it. The kernel stores a note and never reads one; `noteProblem` says what it takes. It came

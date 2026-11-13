@@ -1,11 +1,12 @@
 /**
- * The only paths a candidate may change. A trailing slash means anything inside
- * that directory; anything else is one exact file.
+ * The paths a mutation changes on the agent's own word: its body, the body's tests and its list of
+ * work. A trailing slash means anything inside that directory; anything else is one exact file.
  *
- * This is an allowlist on purpose: a file nobody thought to list (a new config
- * file, a new top-level file) must be protected by default, not changeable.
+ * Every other path may change as well, but only in a commit the owner approved (kernel/approval.ts).
+ * This is an allowlist on purpose: a file nobody thought to list (a new config file, a new
+ * top-level file) asks for the owner's word by default.
  */
-export const CHANGEABLE: readonly string[] = ['body/', 'test/body/', 'BACKLOG.md'];
+export const FREE: readonly string[] = ['body/', 'test/body/', 'BACKLOG.md'];
 
 /** Backslash, control characters and DEL never appear in a path we are willing to match. */
 const UNSAFE_CHARS = /[\\\x00-\x1f\x7f]/;
@@ -18,17 +19,17 @@ function isSuspect(path: string): boolean {
   return path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..');
 }
 
+/** Whether a change to `path` waits for the owner's approval: every path that is not one of the free ones. */
 export function isProtected(path: string): boolean {
   if (isSuspect(path)) return true;
-  return !CHANGEABLE.some((entry) => (
+  return !FREE.some((entry) => (
     entry.endsWith('/') ? path.startsWith(entry) && path.length > entry.length : path === entry
   ));
 }
 
 /**
  * Protected paths that no part of a running individual reads as code: the project's page, its documents and
- * its CI. They are the species' like everything else outside the changeable paths, and must equal a species
- * commit; but a change to them alone brings no other kernel, so it asks for no consent and no handover.
+ * its CI. A change to them alone brings no other kernel, so it asks for no approval and no handover.
  */
 export const INERT: readonly string[] = ['site/', 'docs/', '.github/', 'README.md', 'LICENSE'];
 

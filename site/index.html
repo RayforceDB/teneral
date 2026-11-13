@@ -273,7 +273,7 @@
 
       <ol class="steps">
         <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
-        <li><strong>The gates.</strong> Only its own paths may change. Then, in a fresh checkout: the type check, the kernel's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
+        <li><strong>The gates.</strong> A change to its own body goes straight on; a change to anything else, its kernel included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the kernel's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
         <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
         <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./box back</code> returns to any earlier generation.</li>
       </ol>
@@ -283,13 +283,13 @@
   <section id="species">
     <div class="wrap">
       <p class="eyebrow">The species</p>
-      <h2>Each clone is its own individual. They still share a kernel.</h2>
-      <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges in its body. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
+      <h2>Each clone is its own individual. They grow from one species.</h2>
+      <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges: in its body by itself, in its kernel with its owner's word. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
 
       <div class="two">
         <div class="card">
           <h3>Taking from the species</h3>
-          <p>The agent merges the species into its own workspace and asks to mutate. Outside its body, the result must equal a species commit byte for byte, and that commit only moves forward. A new kernel needs the owner's <code>/accept</code>, and is put back by a small launcher if it cannot start.</p>
+          <p>The agent merges the species into its own workspace and asks to mutate. Like every change outside its body, the merge waits for the owner's <code>/approve</code>, and a new kernel that cannot start is put back by a small launcher.</p>
         </div>
         <div class="card">
           <h3>Offering back</h3>
@@ -303,7 +303,7 @@
 
       <ul class="plain">
         <li>The cage is the owner's: the container, its flags and the launcher are never changed by a mutation.</li>
-        <li>Where the install lists the maintainer's keys, a species commit without their signature is refused.</li>
+        <li>Nothing in the repository is closed to the agent, its kernel included. What it changes outside its body becomes a generation only when the owner has approved that commit.</li>
         <li>These guard against mistakes, not against intent. The agent has a shell in its own repository, and the README says exactly where that matters.</li>
       </ul>
     </div>

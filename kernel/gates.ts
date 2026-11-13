@@ -7,13 +7,13 @@ import { dirname, join } from 'node:path';
 import { appendEvent, readEvents } from './journal';
 import { ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parseOrgans, provideOrgans, type Organ } from './organs';
 import { protectedChanges } from './protected';
-import { judgeSpecies, type SpeciesOptions } from './species';
+import { judgeApproval, type ApprovalOptions } from './approval';
 
 export interface GateResult {
   ok: boolean;
   gate: string;
   output: string;
-  /** A rejection that judged nothing, so that the same commit may be asked for again: the owner has yet to accept a species commit, or the species could not be fetched. */
+  /** A rejection that judged nothing, so that the same commit may be asked for again: the owner has yet to approve it. */
   undecided?: boolean;
 }
 
@@ -542,11 +542,11 @@ export interface GateOptions {
   provider?: string;
   /** How long the check of one organ may run. Default ORGAN_CHECK_TIMEOUT_MS. */
   organTimeoutMs?: number;
-  /** What the owner configured about the species, and the launcher this supervisor runs under (kernel/species.ts). */
-  species?: SpeciesOptions;
+  /** What the owner allows outside the free paths, and the launcher this supervisor runs under (kernel/approval.ts). */
+  approval?: ApprovalOptions;
 }
 
-/** The paths outside the changeable ones in which commits `a` and `b` differ: empty when they have the same kernel, project files and all. */
+/** The paths outside the free ones in which commits `a` and `b` differ: empty when they have the same kernel, project files and all. */
 export function protectedDiff(dir: string, a: string, b: string): string[] {
   // --no-renames lists both ends of a move, so moving a protected file out is caught.
   // -z: without it git prints unusual names quoted and escaped, which would not match the allowlist.
@@ -571,15 +571,11 @@ export async function runGates(
     if (git(dir, 'rev-parse', 'HEAD') !== to) return fail('head', `the candidate is not at ${to}`);
     if (git(dir, 'status', '--porcelain') !== '') return fail('head', 'the candidate has uncommitted changes');
     root = repoRoot(dir);
-    const forbidden = protectedDiff(dir, from, to);
-    if (forbidden.length > 0) {
-      // Outside the changeable paths a lineage holds what the species holds, so this is a mutation from
-      // the species or it is refused. A mutation that stays inside them never gets here, and needs no network.
-      const verdict = await judgeSpecies(dir, root, from, to, forbidden, opts.species, { signal: opts.signal, graceMs });
-      if (!verdict.ok) {
-        if (verdict.interrupted) return interrupted();
-        return { ...fail(verdict.gate, verdict.output), ...(verdict.undecided ? { undecided: true } : {}) };
-      }
+    const outside = protectedDiff(dir, from, to);
+    if (outside.length > 0) {
+      // Outside the free paths a commit runs only on the owner's word. A mutation that stays inside them never gets here.
+      const verdict = judgeApproval(root, from, to, outside, opts.approval);
+      if (!verdict.ok) return { ...fail(verdict.gate, verdict.output), ...(verdict.undecided ? { undecided: true } : {}) };
     }
     const entries = bodyEntries(dir, to);
     const odd = entries.filter((entry) => !PLAIN_MODES.has(entry.mode));

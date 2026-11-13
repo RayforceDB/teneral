@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import { CHANGEABLE, isProtected, protectedChanges } from '../../kernel/protected';
+import { FREE, isProtected, protectedChanges } from '../../kernel/protected';
 
-const changeable = [
+const free = [
   'body/loop.ts',
   'body/deep/x.ts',
   'test/body/loop.test.ts',
@@ -44,10 +44,10 @@ const protectedPaths = [
 ];
 
 test('the allowlist is the agent, its tests and its notes', () => {
-  expect(CHANGEABLE).toEqual(['body/', 'test/body/', 'BACKLOG.md']);
+  expect(FREE).toEqual(['body/', 'test/body/', 'BACKLOG.md']);
 });
 
-test.each(changeable)('changeable: %j', (path) => {
+test.each(free)('free: %j', (path) => {
   expect(isProtected(path)).toBe(false);
 });
 

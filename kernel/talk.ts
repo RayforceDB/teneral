@@ -2,18 +2,18 @@ import { closeSync, openSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { helpRows } from './commands';
 import { eventName, journalSize, readEventsFrom, type JournalEvent } from './journal';
-import { accept, acceptedLine, interrupt, tell } from './owner';
+import { interrupt, tell } from './owner';
 import { ownerCommand } from './offer';
 import { planNotice } from './providers';
-import { cageNotice, chooseAccept } from './species';
+import { cageNotice } from './approval';
 import { installRoot, paths } from './supervisor';
 
 // The owner's terminal: `./box talk` runs this inside the agent's container. What is typed goes to
 // the agent as files in the owner directory (kernel/owner.ts); what the agent says is read back
 // from the journal. Nothing here talks to the agent's process, so any number of these can run at
 // once, and ending one ends nothing else. `/stop` asks the agent, over the same channel, to stop
-// the turn it is in; that is all this program can do to it. `/accept` is not said to the agent at
-// all: it leaves the owner's acceptance of a species commit for the kernel (kernel/species.ts).
+// the turn it is in; that is all this program can do to it. `/approve` is not said to the agent at
+// all: it leaves the owner's approval of a mutation for the kernel (kernel/approval.ts).
 //
 // It is in kernel/ because it is the owner's tool, not part of the agent: it has to keep working
 // whatever the body does to itself. For the same reason nothing here trusts the shape of what the
@@ -74,6 +74,8 @@ export function render(e: JournalEvent): string | null {
       // Whatever else woke the agent, in one line: another agent's message, the clock, the birth letter.
       return `[${oneLine(asText(f.source), 80)}] ${oneLine(asText(f.text), 200)}`;
     case 'mutation.rejected': {
+      // Not a refusal: the kernel judged nothing, and waits for the owner's word (kernel/approval.ts).
+      if (f.gate === 'approval') return `[kernel] mutation to ${short(f.commit)} waits for the owner's approval, /approve: ${oneLine(asText(f.output).split('\n')[0] ?? '', 600)}`;
       const output = tail(asText(f.output), 1500);
       const said = output === '' ? '' : `:\n${output.split('\n').map((line) => `    ${line}`).join('\n')}`;
       return `[kernel] mutation to ${short(f.commit)} rejected at gate "${oneLine(asText(f.gate), 40)}"${said}`;
@@ -84,6 +86,8 @@ export function render(e: JournalEvent): string | null {
       return `[kernel] rolled back ${short(f.commit)} to ${short(f.to)}: ${oneLine(asText(f.reason), 300)}`;
     case 'turn.interrupted':
       return '[interrupted by the owner]';
+    case 'mutation.approved':
+      return `[kernel] mutation to ${short(f.commit)} approved by the owner (${f.route === 'talk' ? '/approve' : './box approve'})`;
     case 'species.accepted':
       return `[kernel] species commit ${short(f.commit)} accepted by the owner (${f.route === 'talk' ? '/accept' : './box accept'})`;
     default:
@@ -246,8 +250,6 @@ export interface TalkOptions {
   banner?: string | null;
   /** Said after it, when the species has other cage files than this install (kernel/species.ts). */
   cage?: string | null;
-  /** The install, for `/accept`, which looks up the commit it is given. Without it that command says it cannot. */
-  root?: string;
   pollMs?: number;
   /** Piped input only: how long the journal may stay silent while a line waits to be sent or answered. Default 5 minutes. */
   waitMs?: number;
@@ -329,20 +331,13 @@ export async function talk(o: TalkOptions): Promise<number> {
   };
 
   /**
-   * `/accept [commit]`: the owner accepts a species commit, the one named or the one the gate last
-   * asked about. It goes to the kernel as a file of its own kind (kernel/owner.ts), never to the agent.
+   * `/approve [commit]`: the owner approves a mutation outside the body, the one named or the one the gate
+   * last asked about, or lets an offer go out. It goes to the kernel as a file of its own kind (kernel/owner.ts), never to the agent.
    */
-  const acceptCommit = (wanted: string): void => {
-    try {
-      if (o.root === undefined) return o.note('(this client was not told where its install is, so it cannot accept a species commit)');
-      const chosen = chooseAccept(o.root, wanted);
-      if ('why' in chosen) return o.note(`(not accepted: ${chosen.why})`);
-      accept(o.owner, chosen.commit);
-      tell(o.owner, acceptedLine(chosen.commit));
-      o.note(`(accepted species commit ${short(chosen.commit)}${chosen.subject === '' ? '' : `, "${oneLine(chosen.subject, 80)}"`}, and every one before it. The kernel takes that in when the agent next asks to mutate, and the agent was told to ask again)`);
-    } catch (err) {
-      o.note(`could not accept that: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const approveCommit = (text: string): void => {
+    const lines = o.command?.(text) ?? null;
+    if (lines === null) return o.note('(this client was not told where its install is, so it cannot approve anything)');
+    for (const line of lines) o.note(`(${line})`);
   };
 
   /** A line that is a command to the kernel is answered here and never sent as text. */
@@ -368,9 +363,10 @@ export async function talk(o: TalkOptions): Promise<number> {
         const text = raw.trim();
         if (text === '') continue;
         if (text === '/quit') { quit = true; return; }
-        // Never a line for the agent, typed or piped: it is the owner's word to the kernel, and is taken at once.
-        if (text === '/accept' || text.startsWith('/accept ')) acceptCommit(text.slice(7).trim());
-        else if (!o.interactive) queue.push(text);
+        // Piped in, every line is a line for the agent: an approval is the owner's, given at a terminal, and a script does not approve.
+        if (!o.interactive) queue.push(text);
+        // The owner's word to the kernel: never a line for the agent, also in a client that cannot take it.
+        else if (text === '/approve' || text.startsWith('/approve ')) approveCommit(text);
         else if (text === '/stop') stop();
         // The commands this client has, from the table both clients read (kernel/commands.ts).
         else if (text === '/help') for (const row of ['The commands here; every other line goes to the agent as your words:', ...helpRows('plain')]) o.note(row);
@@ -385,7 +381,7 @@ export async function talk(o: TalkOptions): Promise<number> {
 
   if (o.interactive) {
     history();
-    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /accept accepts the species commit it asked you about. /help lists the commands. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
+    o.note('--- attached. Type to talk. /stop interrupts what the agent is doing. /approve approves a mutation outside its body that it asked you about. /help lists the commands. /quit, Ctrl-D or Ctrl-C leaves; the agent goes on without you. ---');
     if (turn.busy) o.note('(the agent is in the middle of a turn)');
   }
 
@@ -488,7 +484,6 @@ if (import.meta.main) {
     interactive: process.stdin.isTTY === true,
     banner: planNotice(process.env),
     cage,
-    root: p.root,
     waitMs,
     command: (line) => ownerCommand(p.root, line),
   });

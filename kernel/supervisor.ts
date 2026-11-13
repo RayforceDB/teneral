@@ -11,7 +11,7 @@ import {
 } from './journal';
 import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
-import { cageNotice, takeAccepts } from './species';
+import { cageNotice, takeApprovals } from './approval';
 import { isInert } from './protected';
 
 /** The agent exits with this code to ask for a mutation. */
@@ -493,7 +493,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
     ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, {
       signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER,
       checkTimeoutMs: allowance(process.env.TENERAL_CHECK_MINUTES, 60_000), smokeTimeoutMs: allowance(process.env.TENERAL_SMOKE_SECONDS, 1000),
-      species: { upstream: process.env.TENERAL_UPSTREAM, mode: process.env.TENERAL_SPECIES, launcher: Number(process.env.TENERAL_LAUNCHER) || null },
+      approval: { mode: process.env.TENERAL_KERNEL, launcher: Number(process.env.TENERAL_LAUNCHER) || null },
     }));
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));
 
@@ -542,18 +542,18 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
     }
     const leftover = dropLeftoverGateTrees(p.root);
     if (leftover.length > 0) log(`removed gate checkouts left by an earlier run: ${leftover.join(', ')}`);
-    // The cage is the owner's and stays as it is, whatever the species has; the owner is only told.
+    // The cage is the owner's and stays as it is, whatever the generation's commit holds; the owner is only told.
     const cage = cageNotice(p.root, dirname(import.meta.dir));
     if (cage !== null) log(cage);
-    /** What the owner accepted from a talk client since this was last looked at; never throws. */
-    const accepts = (gen: string): void => {
+    /** What the owner approved from a talk client since this was last looked at; never throws. */
+    const approvals = (gen: string): void => {
       try {
-        for (const commit of takeAccepts(p.root, p.owner, p.journal, gen, log)) log(`the owner accepted species commit ${commit}`);
+        for (const commit of takeApprovals(p.root, p.owner, p.journal, gen, log)) log(`the owner approved the mutation to ${commit}`);
       } catch (err) {
-        log(`the owner's acceptances could not be read: ${reasonOf(err)}`);
+        log(`the owner's approvals could not be read: ${reasonOf(err)}`);
       }
     };
-    accepts(state.current);
+    approvals(state.current);
     /** Crashes in a row with no reply in between. */
     let crashes = 0;
     /** Restarts of this generation after a crash, in total. */
@@ -564,8 +564,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
 
     /**
      * Whether the kernel of `next` is another than the one of `gen`, which is the one running here:
-     * whether anything outside the changeable paths differs between the two commits, other than the
-     * species' page, documents and CI, which no kernel runs.
+     * whether anything outside the free paths differs between the two commits, other than the
+     * project's page, documents and CI, which no kernel runs.
      */
     const otherKernel = (gen: string, next: string): boolean => {
       try {
@@ -761,7 +761,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         // journal, and the next start answers it as interrupted.
         const abort = new AbortController();
         terminate = () => abort.abort();
-        accepts(gen);
+        approvals(gen);
         try {
           result = await gates(p.candidate, gen, request.commit, abort.signal);
         } finally {
@@ -776,7 +776,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         // waits one unit and is never stopped. Asking for the same rejected commit again is slowed more
         // each time and, at the limit, left to the owner. A run that was only interrupted judged nothing.
         const last = rejected as { commit: string; times: number } | null;
-        // Neither did one that waits for the owner's word on a species commit, or could not fetch the species.
+        // Neither did one that waits for the owner's approval.
         const times: number = result.gate === 'interrupted' || result.undecided ? 0 : (last?.commit === request.commit ? last.times : 0) + 1;
         if (times > 0) rejected = { commit: request.commit, times };
         if (times >= REJECTION_LIMIT) {
@@ -791,7 +791,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       }
       const handover = otherKernel(gen, request.commit);
       if (handover) {
-        // A mutation from the species: the new generation comes with a kernel of its own, and this one judged it
+        // A mutation outside the body: the new generation comes with a kernel of its own, and this one judged it
         // but will not run it. The launcher holds that kernel on trial, and goes back to `gen` by its own hand if
         // it does not bring the generation to ready. Written before the state, so a state that names the new
         // generation is never without it; one left by a kill before the state was saved names nothing current.
@@ -807,7 +807,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       appendEvent(p.journal, request.commit, { type: 'generation.promoted', commit: request.commit, previous: gen });
       log(`promoted ${request.commit}`);
       if (handover) {
-        log(`generation ${request.commit} is a mutation from the species and has a kernel of its own; handing over to it`);
+        log(`generation ${request.commit} has a kernel of its own; handing over to it`);
         return 'relaunch';
       }
     }

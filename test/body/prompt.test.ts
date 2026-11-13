@@ -19,7 +19,7 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 // "What the kernel requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
 // The numbers are checked against the kernel's own constants where it exports them.
 import { OWNER_REASON } from '../../kernel/back';
-import { CHANGEABLE } from '../../kernel/protected';
+import { FREE } from '../../kernel/protected';
 import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
 import { ProviderError } from '../../body/provider';
 import { PATIENCE, refusalNote } from '../../body/retry';
@@ -79,7 +79,7 @@ test('it lists what a mutation must pass, in the kernel\'s order', () => {
   ].map((phrase) => flat.indexOf(phrase));
   expect(order.every((at) => at !== -1)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
-  for (const path of CHANGEABLE) expect(flat).toContain(`\`${path}\``);
+  for (const path of FREE) expect(flat).toContain(`\`${path}\``);
 });
 
 test('it describes the smoke gate and the bare environment the checks run in', () => {
@@ -251,33 +251,39 @@ test('it says what a note is and the rule it exists for', () => {
   expect(JSON.stringify(buildMessages([note], 'S'))).not.toContain('not for the model');
 });
 
-test('it says what the species is, the rule, and how a mutation from it is taken', () => {
+test('it says that everything outside the body is its own to change, and that such a change waits for the owner\'s approval', () => {
+  expect(flat).toMatch(/A kernel supervises you\. It is code in this same repository, in `kernel\/`, and you may change it as you change yourself/);
+  expect(flat).toMatch(/Everything outside `body\/`, `test\/body\/` and `BACKLOG\.md` \(the kernel, its tests, the project files\) is yours to change as well/);
+  expect(flat).toContain('`TENERAL_KERNEL`');
+  for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
+  expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body/);
+  expect(flat).toMatch(/`\/approve` in their terminal or `\.\/box approve`/);
+  expect(flat).toMatch(/you call `mutate` again for the same commit/);
+  expect(flat).toMatch(/a later commit that changes only your body passes on it/);
+  expect(flat).toMatch(/With `off` such a commit is refused at gate `kernel`/);
+  expect(flat).toMatch(/it is not counted against the commit/);
+  expect(flat).toMatch(/`site\/`, `docs\/`, `\.github\/`, `README\.md` and `LICENSE` are run by no kernel/);
+});
+
+test('it says that the new kernel is started by the launcher, which puts a generation back when that kernel fails, and that the cage is the owner\'s', () => {
+  expect(flat).toMatch(/the kernel that judges it is the one running, not the one in the commit/);
+  expect(flat).toMatch(/a small launcher, which no mutation changes, starts the kernel of your new generation/);
+  expect(flat).toMatch(/the launcher puts you back on the generation before/);
+  expect(flat).toMatch(/A kernel that starts and then judges wrongly is caught by nobody but you and your owner/);
+  expect(flat).toMatch(/`box`, the `Dockerfile` and the launcher \(`kernel\/launcher\.ts`\) are your owner's install, the cage/);
+  expect(flat).toMatch(/no mutation puts it into effect/);
+  expect(flat).toMatch(/your owner must update the install/);
+});
+
+test('it says what the species is and how what it brings is taken: a merge, which waits for the owner like any change outside the body', () => {
   expect(flat).toMatch(/a git ref named by `TENERAL_UPSTREAM`/);
   expect(flat).toMatch(/`origin\/main` where the repository has a remote `origin`, else the branch your owner's checkout is on/);
-  expect(flat).toMatch(/outside those three paths every generation holds exactly what one commit of the species holds/);
-  expect(flat).toMatch(/the merge base of your commit and the species, only moves forward/);
+  expect(flat).toMatch(/Nothing obliges your kernel to equal the species'/);
   const steps = ['`git fetch origin`', '`git merge origin/main`', '`git checkout origin/main -- <path>`', 'Run `bun run check` and `bun test`', 'Tell your owner what the species brings'].map((phrase) => flat.indexOf(phrase));
   expect(steps.every((at) => at !== -1)).toBe(true);
   expect([...steps].sort((a, b) => a - b)).toEqual(steps);
   expect(flat).toMatch(/keeping your own behaviour/);
-  expect(flat).toMatch(/never edit such a file/);
-});
-
-test('it says how the owner consents, and that a refusal that waits for the owner is not counted against the commit', () => {
-  expect(flat).toContain('`TENERAL_SPECIES`');
-  for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
-  expect(flat).toMatch(/refused at gate `species` with the species commit named/);
-  expect(flat).toMatch(/`\/accept` in their terminal or `\.\/box accept`/);
-  expect(flat).toMatch(/you call `mutate` again for the same commit/);
-  expect(flat).toMatch(/they are not counted against the commit/);
-});
-
-test('it says that the new kernel is started by the launcher, which puts a generation back when that kernel fails, and that the cage is the owner\'s', () => {
-  expect(flat).toMatch(/a small launcher, which no mutation changes, starts the kernel of your new generation/);
-  expect(flat).toMatch(/the launcher puts you back on the generation before/);
-  expect(flat).toMatch(/`box`, the `Dockerfile`, the launcher \(`kernel\/launcher\.ts`\) and `SIGNERS`, the list of keys whose signature makes a commit the species' word, are your owner's install/);
-  expect(flat).toMatch(/a species commit not signed by one of its keys is refused at gate `species`/);
-  expect(flat).toMatch(/your owner must update the install/);
+  expect(flat).toMatch(/it waits for your owner's approval like any such commit/);
   expect(flat).toMatch(/Offering a change of your own back is a path of its own/);
 });
 

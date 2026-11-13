@@ -59,19 +59,19 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
     '  ▸ /help              the keys and commands',
     '    /image <path>      attach an image file from your machine',
     '    /stop              interrupt what the agent is doing now',
-    '    /accept [commit]   accept the species commit the agent asked about, or the…',
+    '    /approve [commit]  approve the mutation the agent asked about, or the comm…',
     '    /tools             show or hide what each tool call returned',
     '    /generations       the generations this individual has lived in',
-    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 13`,
+    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 12`,
   ]);
   // The cursor the owner sees is still in the box, after the slash.
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 5 });
   // Down past the sixth: the list moves with the choice. Up from the first goes to the last.
   s.type(DOWN.repeat(7));
-  expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/approve', '/plain']);
-  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 13$/);
+  expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/plain', '/usage']);
+  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 12$/);
   s.type(UP.repeat(8));
-  expect(listed(s)).toEqual(['/offers', '/approve', '/plain', '/usage', '/reasoning', '[/quit]']);
+  expect(listed(s)).toEqual(['/history', '/offers', '/plain', '/usage', '/reasoning', '[/quit]']);
   s.type(DOWN);
   expect(listed(s).slice(0, 2)).toEqual(['[/help]', '/image']);
   s.type(`${CTRL_N}${CTRL_N}${CTRL_P}`);
@@ -123,15 +123,15 @@ test('Tab completes the chosen command, with a blank after it when something may
   s.type(TAB);
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 13 });
   expect(listed(s)).toEqual([]);
-  s.type(`${CTRL_U}/ac${TAB}abc`);
-  expect(typed(s)).toEqual(['› /accept abc']);
+  s.type(`${CTRL_U}/ap${TAB}abc`);
+  expect(typed(s)).toEqual(['› /approve abc']);
   // Nothing was run or sent by any of it.
-  expect(s.all()).not.toMatch(/── \w|accepted|attaches an image/i);
+  expect(s.all()).not.toMatch(/── \w|approved|attaches an image/i);
   expect(channel(s)).toEqual([]);
   // Tab with no list open shows what tool calls returned, as before.
   s.type(TAB);
   expect(flowed(s)).toContain('From now on each tool call is shown with a few rows of what it returned.');
-  expect(typed(s)).toEqual(['› /accept abc']);
+  expect(typed(s)).toEqual(['› /approve abc']);
 });
 
 test('Enter on a whole name runs it as before; on part of one it runs the chosen command when nothing follows one, and only completes it when something does or may', () => {
@@ -153,17 +153,17 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   // The whole name, as before this list was there: /image alone says what it wants.
   s.type(`${CTRL_U}/image${ENTER}`);
   expect(flowed(s)).toContain('/image <path> attaches an image file from your machine: /image ~/Pictures/plan.png');
-  // Something may follow /accept: part of the name is only completed, and nothing is accepted by a slip of the hand.
-  s.type(`/ac${ENTER}`);
-  expect(typed(s)).toEqual(['› /accept']);
-  expect(flowed(s)).not.toMatch(/accepted/i);
+  // Something may follow /approve: part of the name is only completed, and nothing is approved by a slip of the hand.
+  s.type(`/ap${ENTER}`);
+  expect(typed(s)).toEqual(['› /approve']);
+  expect(flowed(s)).not.toMatch(/approved/i);
   s.type(ENTER);
-  expect(flowed(s)).toMatch(/Not accepted: |That could not be accepted: /);
+  expect(flowed(s)).toMatch(/Not approved: |That could not be done: /);
   expect(typed(s)).toEqual(['›']);
   // What the row under the list says Enter does is what it does.
   s.type('/a');
   expect(rows(s.live()).at(-1)).toBe(' Tab completes · Enter completes · Esc closes · Up/Down choose');
-  s.type('ccept');
+  s.type('pprove');
   expect(rows(s.live()).at(-1)).toBe(' Tab completes · Enter runs · Esc closes · Up/Down choose');
   s.type(`${CTRL_U}/q`);
   expect(rows(s.live()).at(-1)).toBe(' Tab completes · Enter runs · Esc closes · Up/Down choose');
@@ -413,12 +413,12 @@ test('at 40, 80 and 120 columns the list fits the width, its rows cut with a mar
     s.type('/');
     if (cols !== 80) expectFrame(`commands-listed-${cols}x30`, s.all());
     const live = rows(s.live());
-    expect(listed(s)).toEqual(['[/help]', '/image', '/stop', '/accept', '/tools', '/generations']);
+    expect(listed(s)).toEqual(['[/help]', '/image', '/stop', '/approve', '/tools', '/generations']);
     for (const row of live) expect([...row].length).toBeLessThanOrEqual(cols - 1);
-    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 13$/);
-    expect(live[7]).toBe(cols === 40 ? '    /accept [commit]   accept the spec…' : cols === 80 ? '    /accept [commit]   accept the species commit the agent asked about, or the…' : '    /accept [commit]   accept the species commit the agent asked about, or the one named');
+    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 12$/);
+    expect(live[7]).toBe(cols === 40 ? '    /approve [commit]  approve the mut…' : cols === 80 ? '    /approve [commit]  approve the mutation the agent asked about, or the comm…' : '    /approve [commit]  approve the mutation the agent asked about, or the commit or offer named');
     s.type(`a${TAB}`);
-    expect(typed(s)).toEqual(['› /accept']);
+    expect(typed(s)).toEqual(['› /approve']);
   }
 });
 
@@ -438,7 +438,7 @@ test('resize while the list is open: it is drawn anew at each size with the same
       expect(listed(s).filter((name) => name.startsWith('['))).toEqual(['[/stop]']);
       expect(s.term.vt.block).not.toBeNull();
       if (height >= 24) {
-        expect(listed(s)).toEqual(['/help', '/image', '[/stop]', '/accept', '/tools', '/generations']);
+        expect(listed(s)).toEqual(['/help', '/image', '[/stop]', '/approve', '/tools', '/generations']);
         expect(live.filter((row) => row.startsWith('╭'))).toEqual([`╭${'─'.repeat(cols - 3)}╮`]);
         expect(live.filter((row) => row.includes('Tab completes'))).toHaveLength(1);
       }

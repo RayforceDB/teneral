@@ -20,13 +20,12 @@ export const COMMANDS: readonly Command[] = [
   { name: '/help', hint: '', about: 'the keys and commands', plain: true },
   { name: '/image', hint: '<path>', about: 'attach an image file from your machine', plain: false },
   { name: '/stop', hint: '', about: 'interrupt what the agent is doing now', also: 'Esc', plain: true },
-  { name: '/accept', hint: '[commit]', about: 'accept the species commit the agent asked about, or the one named', plain: true },
+  // Answered by `ownerCommand` in kernel/offer.ts, as `/offers` is.
+  { name: '/approve', hint: '[commit]', about: 'approve the mutation the agent asked about, or the commit or offer named', plain: true },
   { name: '/tools', hint: '', about: 'show or hide what each tool call returned', also: 'Tab', plain: false },
   { name: '/generations', hint: '', about: 'the generations this individual has lived in', plain: false },
   { name: '/history', hint: '', about: 'print the earlier conversation that was read from the journal', plain: false },
-  // These two are answered by `ownerCommand` in kernel/offer.ts.
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
-  { name: '/approve', hint: '<commit>', about: 'let exactly that commit go out', plain: true },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
   { name: '/reasoning', hint: '', about: 'print in full what the model last thought', also: 'Ctrl-R', plain: false },

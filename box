@@ -21,9 +21,9 @@ usage: ./box <command>
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
                   --list shows the generations it has lived in. A running agent is stopped
                   for it and started again
-  accept [<commit>]
-                  accept the species commit the agent asked to stand on, or the one named, and
-                  with it that commit's kernel. /accept in talk does the same
+  approve [<commit>]
+                  approve the mutation the agent asked for that changes something outside its
+                  body, its kernel included, or the commit named. /approve in talk does the same
   logs            follow what the kernel and the agent print
   offer <command> what the agent offers to the species: `offer list` shows what was checked and
                   what waits for you, `offer approve <commit>` lets exactly that commit go out,
@@ -452,7 +452,7 @@ once() {
   docker run --rm "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" "$@"
 }
 
-# Where the kernel is that answers the owner's commands (talk, back, accept), relative to this
+# Where the kernel is that answers the owner's commands (talk, back, approve), relative to this
 # directory: the current generation's own, in .teneral/live, once a generation has one, else this
 # checkout's. The launcher says which (kernel/launcher.ts); it is asked beside a running agent, or
 # in a container of its own. This script, the Dockerfile and the launcher are the install's own and
@@ -602,15 +602,18 @@ case "$command" in
     exit "$status"
     ;;
 
-  accept)
+  approve | accept)
     prepare
     # The owner's word to the kernel: it writes a small file under .teneral/ and a line in the
-    # journal, and can be said while the agent runs.
-    accept="$(kernel_home)/kernel/accept.ts"
+    # journal, and can be said while the agent runs. A generation from before this command has
+    # the one it was then, accept.ts, which accepts a species commit; that is what answers there.
+    home="$(kernel_home)"
+    approve="$home/kernel/approve.ts"
+    [ -f "$approve" ] || approve="$home/kernel/accept.ts"
     if alive; then
-      exec docker exec "$name" bun "$accept" "$@"
+      exec docker exec "$name" bun "$approve" "$@"
     fi
-    once bun "$accept" "$@"
+    once bun "$approve" "$@"
     ;;
 
   '' | help | -h | --help)

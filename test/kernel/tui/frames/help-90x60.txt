@@ -57,12 +57,12 @@
     /help              the keys and commands
     /image <path>      attach an image file from your machine
     /stop              interrupt what the agent is doing now (also Esc)
-    /accept [commit]   accept the species commit the agent asked about, or the one named
+    /approve [commit]  approve the mutation the agent asked about, or the commit or offer
+  named
     /tools             show or hide what each tool call returned (also Tab)
     /generations       the generations this individual has lived in
     /history           print the earlier conversation that was read from the journal
     /offers            what waits for your approval before it goes out to the species
-    /approve <commit>  let exactly that commit go out
     /plain             how to get the plain text client
     /usage             what the requests to the model cost, and how much came from the
   cache
@@ -76,11 +76,15 @@
   it. While commands are listed under the box, Esc closes the list and interrupts
   nothing; press it again for the agent.
 
-  /accept is your word to the kernel, not to the agent. A mutation from the species
-  brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel
-  lets none through until you have accepted the species commit it stands on, or a later
-  one. The agent asks you; /accept answers for the commit it asked about, /accept
-  <commit> for another. Then tell the agent to ask for its mutation again.
+  /approve is your word to the kernel, not to the agent. The agent may change anything,
+  its kernel included; what it changes in its own body it mutates into by itself, and a
+  mutation that changes anything else waits for you. With TENERAL_KERNEL=ask, the
+  default, the kernel lets none through until you have approved a commit that holds the
+  same outside the body. The agent asks you; /approve answers for the commit it asked
+  about, /approve <commit> for another, and tells the agent to ask for its mutation
+  again. A new kernel that cannot bring the agent to ready is put back by the launcher.
+  /approve <commit> with a commit that /offers lists lets that one go out to the species
+  instead.
 
   Leaving ends this client only. Nothing else here stops the agent or changes it.
 

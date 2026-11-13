@@ -11,15 +11,16 @@ import { join } from 'node:path';
 // always written under a name ending in `.txt`, so no text, whatever it says, can be taken for an
 // interrupt. A body from before interrupts reads the file as an empty line and drops it.
 //
-// A third thing is left here for the kernel and not for the body: the owner's acceptance of a
-// species commit (kernel/species.ts). Its name ends in `.accept` and starts with a dot, and a
-// name that starts with a dot is one every body's reader passes over, so no body takes it for a
-// line. It holds the commit accepted. Here too the kind is in the name alone.
+// A third thing is left here for the kernel and not for the body: the owner's approval of a
+// mutation that changes something outside the body (kernel/approval.ts). Its name ends in
+// `.mutation` and starts with a dot, and a name that starts with a dot is one every body's reader
+// passes over, so no body takes it for a line. It holds the commit approved. Here too the kind is
+// in the name alone.
 
 /** What the name of an interrupt ends with. */
 export const INTERRUPT_SUFFIX = '.interrupt';
-/** What the name of an acceptance ends with. */
-export const ACCEPT_SUFFIX = '.accept';
+/** What the name of an approval of a mutation ends with. */
+export const MUTATION_SUFFIX = '.mutation';
 
 let lastMs = 0;
 let count = 0;
@@ -62,21 +63,21 @@ export function interrupt(dir: string): string {
 }
 
 /**
- * Say, as the owner, that the species commit `commit` is accepted. The supervisor takes the file
- * in before it next judges a mutation (`takeAccepts` in kernel/species.ts); the body never reads it.
- * Returns the file's name.
+ * Say, as the owner, that the mutation to `commit` is approved, with what it changes outside the body.
+ * The supervisor takes the file in before it next judges a mutation (`takeApprovals` in
+ * kernel/approval.ts); the body never reads it. Returns the file's name.
  */
-export function accept(dir: string, commit: string): string {
-  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('an acceptance names one commit by its full id');
+export function leaveApproval(dir: string, commit: string): string {
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('an approval names one commit by its full id');
   mkdirSync(dir, { recursive: true });
-  const name = `.${nextName(ACCEPT_SUFFIX)}`;
+  const name = `.${nextName(MUTATION_SUFFIX)}`;
   const tmp = join(dir, `${name}.tmp`);
   writeFileSync(tmp, commit);
   renameSync(tmp, join(dir, name));
   return name;
 }
 
-// A third thing: the owner's approval of one commit going out to the species (kernel/offer.ts).
+// A fourth thing: the owner's approval of one commit going out to the species (kernel/offer.ts).
 // Unlike a line and an interrupt it is not for the body, so it lies where the body does not read:
 // a directory of its own under this one, whose name starts with a dot. An approval is an empty
 // file named after the commit it is for, ending in `.approve`. The name says everything: which
@@ -114,9 +115,9 @@ export function useApproval(dir: string, commit: string): void {
 }
 
 /**
- * The line the agent gets when its owner has accepted a species commit. An acceptance is for the kernel and
+ * The line the agent gets when its owner has approved a mutation. An approval is for the kernel and
  * wakes nobody; without this the agent would sit waiting for an answer that had already been given.
  */
-export function acceptedLine(commit: string): string {
-  return `I accepted species commit ${commit.slice(0, 12)}. Ask to mutate again for the same commit.`;
+export function approvedLine(commit: string): string {
+  return `I approved commit ${commit.slice(0, 12)}. Ask to mutate again for the same commit.`;
 }
