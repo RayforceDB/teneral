@@ -1,0 +1,89 @@
+// What the model was asked for, as the journal has it: the body journals with each reply what the
+// provider said the request cost. Nothing here asks anyone anything; it only adds up.
+import { tokens } from './tui/view';
+import type { JournalEvent } from './journal';
+
+export interface Spent {
+  requests: number;
+  input: number;
+  /** Of `input`, what the provider read from its cache. Counted only where the body journals it. */
+  cached: number;
+  output: number;
+}
+
+const NONE = (): Spent => ({ requests: 0, input: 0, cached: 0, output: 0 });
+
+const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0);
+
+/** The share of the input that came from the provider's cache, as `87%`; empty when nothing was asked. */
+export const share = (s: Spent): string => (s.input > 0 ? `${Math.round((s.cached / s.input) * 100)}%` : '');
+
+export interface UsageReport {
+  /** By span of time, the widest last. */
+  spans: { name: string; spent: Spent }[];
+  /** By what woke the agent for the turn the request belongs to, the costliest first. */
+  sources: { name: string; spent: Spent }[];
+}
+
+/** Add up every journaled usage: by span of time ending at `now`, and over the last day by what started the turn. */
+export function usageReport(events: JournalEvent[], now: number, generation: string | null): UsageReport {
+  const HOUR = 3_600_000;
+  const spans = [
+    { name: 'the last hour', from: now - HOUR, spent: NONE() },
+    { name: 'the last 24 hours', from: now - 24 * HOUR, spent: NONE() },
+    { name: 'this generation', from: Number.NaN, spent: NONE() },
+    { name: 'this whole life', from: -Infinity, spent: NONE() },
+  ];
+  const sources = new Map<string, Spent>();
+  let source = 'the start';
+  const add = (s: Spent, input: number, cached: number, output: number): void => {
+    s.requests += 1;
+    s.input += input;
+    s.cached += Math.min(cached, input);
+    s.output += output;
+  };
+  for (const e of events) {
+    const f = e as unknown as Record<string, unknown>;
+    if (e.type === 'stimulus') {
+      source = typeof f.source === 'string' && f.source !== '' ? f.source.slice(0, 40) : 'unknown';
+      continue;
+    }
+    if (e.type !== 'assistant' || typeof f.usage !== 'object' || f.usage === null) continue;
+    const u = f.usage as Record<string, unknown>;
+    const input = count(u.input);
+    const output = count(u.output);
+    const cached = count(u.cached);
+    const at = Date.parse(typeof f.ts === 'string' ? f.ts : '');
+    for (const span of spans) {
+      const inSpan = Number.isNaN(span.from) ? generation !== null && f.gen === generation : Number.isFinite(at) ? at >= span.from : span.from === -Infinity;
+      if (inSpan) add(span.spent, input, cached, output);
+    }
+    if (Number.isFinite(at) && at >= now - 24 * HOUR) {
+      if (!sources.has(source)) sources.set(source, NONE());
+      add(sources.get(source)!, input, cached, output);
+    }
+  }
+  return {
+    spans: spans.map(({ name, spent }) => ({ name, spent })),
+    sources: [...sources].map(([name, spent]) => ({ name, spent })).sort((a, b) => b.spent.input - a.spent.input),
+  };
+}
+
+function table(head: string, rows: { name: string; spent: Spent }[]): string[] {
+  const cells = rows.map(({ name, spent }) => [name, String(spent.requests), tokens(spent.input), spent.requests === 0 ? '' : share(spent), tokens(spent.output),
+    spent.requests === 0 ? '' : tokens(spent.input / spent.requests)]);
+  const all = [[head, 'requests', 'input', 'cached', 'output', 'input/request'], ...cells];
+  const wide = all[0]!.map((_, i) => Math.max(...all.map((row) => row[i]!.length)));
+  return all.map((row) => row.map((cell, i) => (i === 0 ? cell.padEnd(wide[i]!) : cell.padStart(wide[i]!))).join('  ').trimEnd());
+}
+
+/** The report as lines of plain text, in two tables. */
+export function formatUsage(r: UsageReport): string[] {
+  if (r.spans.at(-1)!.spent.requests === 0) return ['The journal holds no usage: this body does not journal what its requests cost.'];
+  return [
+    ...table('', r.spans),
+    '',
+    ...(r.sources.length > 0 ? [...table('the last 24 hours, by what woke it', r.sources), ''] : []),
+    'Tokens, as the provider counted them. "cached" is the share of the input it read from its cache: a request that only adds to the one before should be nearly all cached, and what is not is paid in full.',
+  ];
+}

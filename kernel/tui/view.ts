@@ -59,6 +59,12 @@ export function contextUse(used: number, window: number | null): string {
   return `context ${Math.min(100, Math.round((used / window) * 100))}% (${tokens(used)}/${tokens(window)})`;
 }
 
+/** How much of the last request's input the provider read from its cache: `cached 87%`. Empty when the body does not journal it. */
+export function cacheUse(input: number, cached: number | null): string {
+  if (cached === null || input <= 0) return '';
+  return `cached ${Math.min(100, Math.round((cached / input) * 100))}%`;
+}
+
 /** A directory in little room: its last two parts, with a mark for what was left out. */
 export function shortDir(path: string, g: Glyphs): string {
   const parts = path.split('/').filter((part) => part !== '');

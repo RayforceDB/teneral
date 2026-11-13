@@ -64,6 +64,8 @@
     /offers            what waits for your approval before it goes out to the species
     /approve <commit>  let exactly that commit go out
     /plain             how to get the plain text client
+    /usage             what the requests to the model cost, and how much came from the
+  cache
     /quit              leave (also Ctrl-D on an empty line, and Ctrl-C)
 
   Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model

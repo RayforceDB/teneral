@@ -28,6 +28,7 @@ export const COMMANDS: readonly Command[] = [
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
   { name: '/approve', hint: '<commit>', about: 'let exactly that commit go out', plain: true },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
+  { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
   { name: '/quit', hint: '', about: 'leave', also: 'Ctrl-D on an empty line, and Ctrl-C', plain: true },
 ];
 

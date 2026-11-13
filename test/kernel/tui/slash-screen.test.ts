@@ -62,16 +62,16 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
     '    /accept [commit]   accept the species commit the agent asked about, or the…',
     '    /tools             show or hide what each tool call returned',
     '    /generations       the generations this individual has lived in',
-    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 11`,
+    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 12`,
   ]);
   // The cursor the owner sees is still in the box, after the slash.
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 5 });
   // Down past the sixth: the list moves with the choice. Up from the first goes to the last.
   s.type(DOWN.repeat(7));
   expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/approve', '/plain']);
-  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 11$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 12$/);
   s.type(UP.repeat(8));
-  expect(listed(s)).toEqual(['/generations', '/history', '/offers', '/approve', '/plain', '[/quit]']);
+  expect(listed(s)).toEqual(['/history', '/offers', '/approve', '/plain', '/usage', '[/quit]']);
   s.type(DOWN);
   expect(listed(s).slice(0, 2)).toEqual(['[/help]', '/image']);
   s.type(`${CTRL_N}${CTRL_N}${CTRL_P}`);
@@ -415,7 +415,7 @@ test('at 40, 80 and 120 columns the list fits the width, its rows cut with a mar
     const live = rows(s.live());
     expect(listed(s)).toEqual(['[/help]', '/image', '/stop', '/accept', '/tools', '/generations']);
     for (const row of live) expect([...row].length).toBeLessThanOrEqual(cols - 1);
-    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 11$/);
+    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 12$/);
     expect(live[7]).toBe(cols === 40 ? '    /accept [commit]   accept the spec…' : cols === 80 ? '    /accept [commit]   accept the species commit the agent asked about, or the…' : '    /accept [commit]   accept the species commit the agent asked about, or the one named');
     s.type(`a${TAB}`);
     expect(typed(s)).toEqual(['› /accept']);
