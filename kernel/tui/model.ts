@@ -91,9 +91,15 @@ export interface Standing {
   known: string[];
   /** What the provider said the last request cost, in tokens, when the body journals that. */
   usage: { input: number; output: number; cached: number | null } | null;
+  /**
+   * The turn that is owed failed and will be tried again, as the body journals it (a `note` of
+   * kind `turn.failed`): what was said, how many in a row, and when the next try is, in ms; null
+   * where the body tries at once. Null again as soon as anything comes of a request.
+   */
+  trouble: { message: string; failures: number; retryAt: number | null } | null;
 }
 
-export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null };
+export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null, trouble: null };
 
 /** A journaled `usage`, when it is one: two counts that are numbers, and maybe a third. */
 function usageOf(value: unknown): Standing['usage'] {
@@ -127,21 +133,27 @@ export function stand(s: Standing, e: JournalEvent): Standing {
       const text = asText(f.text).trim();
       const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
       const words = text !== '' && !text.startsWith(NOT_FROM_MODEL);
-      return { ...next, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
+      return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
     }
     case 'tool.intent':
       return { ...next, tool: { callId: asText(f.callId), name: cut(flat(clean(asText(f.name))), 40) } };
     case 'tool.result':
       return s.tool !== null && s.tool.callId === asText(f.callId) ? { ...next, tool: null } : next;
     case 'turn.interrupted':
-      return { ...next, tool: null, asked: false };
+      return { ...next, trouble: null, tool: null, asked: false };
+    case 'note': {
+      if (f.kind !== 'turn.failed' || typeof f.data !== 'object' || f.data === null) return next;
+      const d = f.data as Record<string, unknown>;
+      const retryAt = Date.parse(asText(d.retryAt));
+      return { ...next, trouble: { message: cut(flat(clean(asText(d.message))), 300), failures: typeof d.failures === 'number' ? d.failures : 1, retryAt: Number.isNaN(retryAt) ? null : retryAt } };
+    }
     case 'mutation.requested':
       return { ...next, mutation: asText(f.commit) };
     case 'mutation.rejected':
       return { ...next, mutation: null, asked: false };
     case 'generation.started':
       know(f.commit);
-      return { ...next, current: asText(f.commit) || s.current, tool: null };
+      return { ...next, current: asText(f.commit) || s.current, tool: null, trouble: null };
     case 'generation.ready':
       know(e.gen);
       return next;

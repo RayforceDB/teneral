@@ -179,7 +179,7 @@ test('interrupted while it waits to try a failed turn again: the turn is given u
   expect(needsTurn(l.events())).toBe(true);
   interrupt(l.owner);
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'turn.interrupted']);
+  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'turn.interrupted']);
   expect(needsTurn(l.events())).toBe(false);
   await Bun.sleep(500);
   expect(l.asked).toHaveLength(1);

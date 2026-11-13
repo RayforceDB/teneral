@@ -12,7 +12,7 @@ import { ENTRY_LIMIT } from '../../../kernel/tui/model';
 import { ago, lineage } from '../../../kernel/tui/talk';
 import { commitAll, writeFiles } from '../helpers';
 import { gif, jpeg, png } from './pictures';
-import { A, B, C, expectFrame, stage, type Stage } from './stage';
+import { A, B, C, T0, expectFrame, stage, type Stage } from './stage';
 import { sequences } from './vt';
 
 const PASTE = (text: string): string => `\x1b[200~${text}\x1b[201~`;
@@ -1404,4 +1404,21 @@ test('when the species has other cage files than the install, the owner is told 
   settled(s);
   expect(flowed(s)).toContain('The species has other versions of box, Dockerfile than this install.');
   expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('The species has other versions');
+});
+
+test('a turn that failed and waits to be tried again is said so over the box, with why and when, and is gone once an answer comes', () => {
+  const s = stage(120, 30, { name: 'Mica' });
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'hello?' }, 1000);
+  s.clock.at = 5000;
+  expect(s.live()).toContain('Mica is thinking');
+  s.journal({ type: 'note', kind: 'turn.failed', data: { kind: 'passing', failures: 4, message: 'the usage limit is reached', retryAt: new Date(T0 + s.clock.at + 14 * 60_000 + 5000).toISOString() } }, 5000);
+  expect(s.live()).toContain('! Mica cannot get an answer from the model · 4 in a row · next try in 15 min · the usage limit is reached');
+  expect(s.live()).not.toContain('is thinking');
+  s.clock.at += 10 * 60_000;
+  expect(s.live()).toContain('next try in 5 min');
+  s.clock.at += 6 * 60_000;
+  expect(s.live()).toContain('4 in a row · trying again · the usage limit');
+  s.journal({ type: 'assistant', text: 'Here now.', toolCalls: [] }, s.clock.at);
+  expect(s.live()).not.toMatch(/cannot get an answer|thinking/);
 });

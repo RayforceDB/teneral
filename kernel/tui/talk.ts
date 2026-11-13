@@ -945,7 +945,7 @@ export class TalkScreen {
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
+    const stamp = `${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -970,7 +970,13 @@ export class TalkScreen {
       list = { matches: offered.matches, chosen: offered.chosen, keys: ['Tab completes', runs ? 'Enter runs' : 'Enter completes', 'Esc closes', 'Up/Down choose'] };
     }
     const esc = this.interrupting !== null ? `interrupting ${g.ellipsis}` : stoppable && list === null ? 'esc to interrupt' : '';
-    const activity: Line | null = active
+    // The turn is owed and the last try at it failed: that is said, with when the next one is, in place of a spinner that would look like thought.
+    const failed = s.trouble !== null && (word === 'thinking' || word === 'waking') ? s.trouble : null;
+    const wait = failed === null || failed.retryAt === null ? '' : failed.retryAt > now ? `next try in ${Math.max(1, Math.ceil((failed.retryAt - now) / 60_000))} min` : 'trying again';
+    const activity: Line | null = failed !== null
+      ? [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} cannot get an answer from the model`, style: { fg: 'warn', bold: true } },
+        { text: ` ${g.sep} ${failed.failures} in a row${wait === '' ? '' : ` ${g.sep} ${wait}`} ${g.sep} ${failed.message}`, style: { fg: 'dim' } }]
+      : active
       ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 

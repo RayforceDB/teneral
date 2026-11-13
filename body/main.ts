@@ -159,6 +159,15 @@ for (;;) {
       continue;
     }
     const delay = retryDelayMs(failures);
+    // For the owner and the record: the turn is still owed, and whoever reads the journal should see why nothing
+    // is coming and when the next try is, rather than take the silence for thought. Nothing reads it back.
+    appendEvent(journal, gen, {
+      type: 'note', kind: 'turn.failed',
+      data: {
+        kind, failures, message: (error instanceof Error ? error.message : String(error)).slice(0, 600),
+        retryAt: arrived !== before ? null : new Date(Date.now() + delay).toISOString(),
+      },
+    });
     if (arrived !== before) {
       // Nobody was listening for it while the turn ran; it gets its try now, once.
       console.error(`[retry] ${failures} in a row; something arrived meanwhile, trying again now`);
