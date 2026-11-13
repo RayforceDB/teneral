@@ -348,7 +348,7 @@ test('send names the peers file when it is malformed', async () => {
 // --- look ---
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { buildMessages } from '../../body/context';
+import { buildMessages } from '../../brain/memory';
 import { imageStore } from '../../body/images';
 import { appendEvent } from '../../kernel/journal';
 

@@ -1,8 +1,8 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
-import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './context';
+import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
-import type { Tool, ToolContext } from './tools';
+import type { Tool, ToolContext } from '../body/tools';
 
 export interface TurnDeps {
   journal: string;
@@ -27,7 +27,7 @@ export interface TurnDeps {
 }
 
 const ABANDON_MS = 2000;
-/** The two marks body/context.ts gives a call that a stopped process left unanswered, as journaled here when it was the owner who stopped the turn. */
+/** The two marks brain/memory.ts gives a call that a stopped process left unanswered, as journaled here when it was the owner who stopped the turn. */
 const CUT_BY_OWNER =
   '[interrupted] Your owner interrupted this turn while this tool was running. It may have partly run. Check the current state before repeating it.';
 const NOT_RUN_FOR_OWNER = '[not started] Your owner interrupted this turn before this tool ran.';

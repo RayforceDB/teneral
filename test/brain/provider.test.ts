@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { openAiProvider, ProviderError, toChatMessages, type ChatMessage } from '../../body/provider';
+import { openAiProvider, ProviderError, toChatMessages, type ChatMessage } from '../../brain/provider';
 
 function fakeFetch(status: number, body: unknown, seen: { url?: string; init?: RequestInit } = {}) {
   return (async (url: string, init?: RequestInit) => {
@@ -159,7 +159,7 @@ test('every way a request can fail is a ProviderError that carries the status an
 });
 
 test('both adapters propagate caller cancellation to fetch', async () => {
- const { responsesProvider } = await import('../../body/provider');
+ const { responsesProvider } = await import('../../brain/provider');
  for (const responses of [false, true]) {
   const controller = new AbortController();
   let entered!: () => void;
@@ -180,7 +180,7 @@ test('both adapters propagate caller cancellation to fetch', async () => {
 });
 
 test('Responses never posts after cancellation during token acquisition or refresh', async () => {
- const { responsesProvider } = await import('../../body/provider');
+ const { responsesProvider } = await import('../../brain/provider');
  for (const refresh of [false,true]) {
   const controller = new AbortController(); let posts=0;
   const provider = responsesProvider({baseUrl:()=>cfg.baseUrl, model:'m',
@@ -192,7 +192,7 @@ test('Responses never posts after cancellation during token acquisition or refre
 });
 
 test('pre-aborted calls do not acquire credentials or fetch', async () => {
- const { responsesProvider } = await import('../../body/provider');
+ const { responsesProvider } = await import('../../brain/provider');
  let calls=0; const controller=new AbortController(); controller.abort();
  const send=(async()=>{calls++;return new Response('{}');}) as unknown as typeof fetch;
  const providers=[openAiProvider({...cfg,fetch:send}), responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=>{calls++;return 'k';},fetch:send})];
@@ -273,7 +273,7 @@ test('reasoning the endpoint shows with the message is returned, under either of
 // --- cancelled by the caller ---
 
 test('a cancelled call is always a ProviderError saying so, with no status: before it began, and while it waited', async () => {
-  const { responsesProvider } = await import('../../body/provider');
+  const { responsesProvider } = await import('../../brain/provider');
   const hung = ((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)))) as unknown as typeof fetch;
   const make = [
     () => openAiProvider({ ...cfg, fetch: hung }),
@@ -314,7 +314,7 @@ test('a call that is not cancelled is as it was: the option changes nothing, and
 });
 
 test('a request that carries images is cancelled like any other', async () => {
-  const { responsesProvider } = await import('../../body/provider');
+  const { responsesProvider } = await import('../../brain/provider');
   const picture = { name: `${'a'.repeat(64)}.png`, mime: 'image/png', data: 'AAAA' };
   const messages = [{ role: 'user' as const, content: 'look', images: [picture] }, { role: 'tool' as const, tool_call_id: 'c1', content: 'seen', images: [picture] }];
   for (const responses of [false, true]) {
@@ -334,7 +334,7 @@ test('a request that carries images is cancelled like any other', async () => {
 });
 
 test('Responses, refused a reasoning summary and then cancelled, does not ask again without one', async () => {
-  const { responsesProvider } = await import('../../body/provider');
+  const { responsesProvider } = await import('../../brain/provider');
   const controller = new AbortController();
   let posts = 0;
   const refusal = (): Response => new Response(JSON.stringify({ error: { message: 'reasoning.summary is not supported', param: 'reasoning.summary' } }), { status: 400 });

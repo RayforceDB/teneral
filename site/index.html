@@ -197,7 +197,7 @@
     <div class="wrap">
       <p class="eyebrow">Foundation</p>
       <h2>Built on RayforceDB.</h2>
-      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal the kernel keeps, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows.</p>
+      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal the kernel keeps, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows. Memory is not a tool the agent picks up: it is part of its brain, beside the model it thinks with.</p>
       <p>RayforceDB is a SIMD-accelerated columnar database in pure C with no dependencies. It is one small binary that starts in a moment, which is exactly what a body that may be replaced tomorrow can stand on.</p>
 
       <div class="two">
@@ -273,7 +273,7 @@
 
       <ol class="steps">
         <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
-        <li><strong>The gates.</strong> A change to its own body goes straight on; a change to anything else, its kernel included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the kernel's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
+        <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its kernel included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the kernel's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
         <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
         <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./box back</code> returns to any earlier generation.</li>
       </ol>
@@ -284,12 +284,12 @@
     <div class="wrap">
       <p class="eyebrow">The species</p>
       <h2>Each clone is its own individual. They grow from one species.</h2>
-      <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges: in its body by itself, in its kernel with its owner's word. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
+      <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges: in its body and brain by itself, in its kernel with its owner's word. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
 
       <div class="two">
         <div class="card">
           <h3>Taking from the species</h3>
-          <p>The agent merges the species into its own workspace and asks to mutate. Like every change outside its body, the merge waits for the owner's <code>/approve</code>, and a new kernel that cannot start is put back by a small launcher.</p>
+          <p>The agent merges the species into its own workspace and asks to mutate. Like every change outside its body and brain, the merge waits for the owner's <code>/approve</code>, and a new kernel that cannot start is put back by a small launcher.</p>
         </div>
         <div class="card">
           <h3>Offering back</h3>
@@ -303,7 +303,7 @@
 
       <ul class="plain">
         <li>The cage is the owner's: the container, its flags and the launcher are never changed by a mutation.</li>
-        <li>Nothing in the repository is closed to the agent, its kernel included. What it changes outside its body becomes a generation only when the owner has approved that commit.</li>
+        <li>Nothing in the repository is closed to the agent, its kernel included. What it changes outside its body and brain becomes a generation only when the owner has approved that commit.</li>
         <li>These guard against mistakes, not against intent. The agent has a shell in its own repository, and the README says exactly where that matters.</li>
       </ul>
     </div>

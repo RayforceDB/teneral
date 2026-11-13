@@ -1,12 +1,13 @@
 /**
- * The paths a mutation changes on the agent's own word: its body, the body's tests and its list of
- * work. A trailing slash means anything inside that directory; anything else is one exact file.
+ * The paths a mutation changes on the agent's own word: its body (what it acts with), its brain (what
+ * it thinks and remembers with: the model's provider, memory, the turn), the tests of both and its list
+ * of work. A trailing slash means anything inside that directory; anything else is one exact file.
  *
  * Every other path may change as well, but only in a commit the owner approved (kernel/approval.ts).
  * This is an allowlist on purpose: a file nobody thought to list (a new config file, a new
  * top-level file) asks for the owner's word by default.
  */
-export const FREE: readonly string[] = ['body/', 'test/body/', 'BACKLOG.md'];
+export const FREE: readonly string[] = ['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md'];
 
 /** Backslash, control characters and DEL never appear in a path we are willing to match. */
 const UNSAFE_CHARS = /[\\\x00-\x1f\x7f]/;

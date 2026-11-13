@@ -1,8 +1,8 @@
 import type { ToolCall, Usage } from '../kernel/journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
 import { accessToken, apiBase } from '../kernel/signin';
-import type { Image } from './images';
-import { clip } from './text';
+import type { Image } from '../body/images';
+import { clip } from '../body/text';
 
 export interface WireToolCall {
   id: string;
@@ -17,7 +17,7 @@ export interface ChatMessage {
   tool_call_id?: string;
   /**
    * Images that go with this message: on a user message what the owner sent, on a tool message
-   * what `look` returned (body/context.ts puts them nowhere else). Not a wire field: each protocol
+   * what `look` returned (brain/memory.ts puts them nowhere else). Not a wire field: each protocol
    * turns it into its own image parts, below.
    */
   images?: Image[];
@@ -112,7 +112,7 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 
 /**
  * A request that failed on the provider's side or on the way there. Anything else thrown during a
- * turn is this code's own fault, and the two are handled differently (see body/retry.ts).
+ * turn is this code's own fault, and the two are handled differently (see brain/retry.ts).
  */
 export class ProviderError extends Error {
   /** The HTTP status, or null when no answer came: not reachable, or timed out. */

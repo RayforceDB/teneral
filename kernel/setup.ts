@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
-import { ProviderError, connect, type Provider } from '../body/provider';
+import { ProviderError, connect, type Provider } from '../brain/provider';
 import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, userAgent, type ProviderEntry } from './providers';
 import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } from './signin';
 
@@ -10,7 +10,7 @@ import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } f
 // the code the body will use, and only when both come back right writes `.env`.
 //
 // It is in kernel/ because it is the owner's tool. The one thing it takes from the body is
-// `connect` in body/provider.ts, so that what is tested here is what the agent will run.
+// `connect` in brain/provider.ts, so that what is tested here is what the agent will run.
 //
 // A key or a token is never shown: not when typed, not in an error, not in what is said at the end.
 

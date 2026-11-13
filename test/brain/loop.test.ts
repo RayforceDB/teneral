@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runTurn } from '../../body/loop';
-import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../body/provider';
+import { runTurn } from '../../brain/loop';
+import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
-import { needsTurn } from '../../body/context';
+import { needsTurn } from '../../brain/memory';
 import { appendEvent, readEvents } from '../../kernel/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {

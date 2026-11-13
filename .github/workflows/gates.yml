@@ -30,7 +30,7 @@ jobs:
       - name: the kernel's tests
         run: bun test test/kernel
       - name: the body's tests
-        run: bun test test/body
+        run: bun test test/body test/brain
       # Once more as the kernel itself runs them on a candidate, in a fresh checkout with a bare
       # environment, ending with the smoke run: the body is started against a stand-in for the model.
       - name: the gates as the kernel runs them, smoke run included
@@ -51,11 +51,11 @@ jobs:
       - name: report them
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-          FREE: '^(body/|test/body/|BACKLOG\.md$)'
+          FREE: '^(body/|brain/|test/body/|test/brain/|BACKLOG\.md$)'
         run: |
           outside="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD | grep -v -E "$FREE" || true)"
           if [ -z "$outside" ]; then
-            echo "This pull request changes only what a mutation changes without asking its owner: body/, test/body/ and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "This pull request changes only what a mutation changes without asking its owner: body/, brain/, their tests and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             count="$(printf '%s\n' "$outside" | wc -l | tr -d ' ')"
             echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation changes only with its owner's approval: the kernel, its tests or the project's own files."

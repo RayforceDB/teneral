@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import {
   DEFAULT_CHECKS, git, runGates, sh, startStubProvider, type GateOptions,
 } from '../../kernel/gates';
-import { readResponsesStream } from '../../body/provider';
+import { readResponsesStream } from '../../brain/provider';
 import { PROVIDERS } from '../../kernel/providers';
 import { commitAll, makeLineage, makeRepo, writeFiles } from './helpers';
 
@@ -626,7 +626,7 @@ test('smoke: run for a sign-in provider, the body is told the provider, handed a
 function ownRepo(): { dir: string; seed: string } {
   const here = join(import.meta.dir, '..', '..');
   const { dir } = makeRepo({});
-  for (const name of ['body', 'kernel', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
+  for (const name of ['body', 'brain', 'kernel', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
   // A lineage that pins organs runs these tests too, in its gates. Its body is smoked here with the organs the
   // gate run was given: the copy is shown the same cache. Run by hand with nothing given, it is smoked without them.
   const given = process.env.TENERAL_ORGANS;
@@ -658,7 +658,7 @@ test('smoke: this project\'s own body passes under every provider in the table, 
 
 test('smoke: a body whose Responses path is broken is rejected when the configuration uses that protocol, where it would pass as chat', async () => {
   const breakResponses = (dir: string) => {
-    const file = join(dir, 'body', 'provider.ts');
+    const file = join(dir, 'brain', 'provider.ts');
     const code = readFileSync(file, 'utf8');
     expect(code).toContain('}/responses`');
     writeFileSync(file, code.replace('}/responses`', '}/responsesX`'));

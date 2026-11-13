@@ -24,7 +24,7 @@ export function saysTooLong(err: unknown): boolean {
 /**
  * The provider's way of saying it will not take the images in a request: the model has no vision, or the route
  * does not carry them (the ChatGPT plan route answers with its unsupported-capability code). Only asked about a
- * request that held images; the loop then asks again with a note in their place (body/loop.ts).
+ * request that held images; the loop then asks again with a note in their place (brain/loop.ts).
  */
 export function saysNoImages(err: unknown): boolean {
   return err instanceof ProviderError && (err.status === 400 || err.status === 415 || err.status === 422)
@@ -36,7 +36,7 @@ export function saysNoImages(err: unknown): boolean {
  * - 'own': not the provider at all. This code threw, which no waiting will mend.
  * - 'refused': the provider will not take this request and would not take it again.
  * - 'long': the provider says the request is too long. The loop has by then asked again at half the
- *   budget (body/loop.ts), so the turn failed at both sizes and would fail again unchanged.
+ *   budget (brain/loop.ts), so the turn failed at both sizes and would fail again unchanged.
  * - 'passing': the same request may be accepted later, or once the owner mends something outside
  *   (the key, the account): no answer, a timeout, a rate limit, a server fault, a bad key.
  */

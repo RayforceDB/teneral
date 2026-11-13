@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["kernel", "body", "test"]
+  "include": ["kernel", "body", "brain", "test"]
 }

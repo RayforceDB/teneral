@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../kernel/journal';
-import { needsTurn } from './context';
+import { needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
-import { runTurn } from './loop';
-import { ProviderError, connect, type Provider } from './provider';
-import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
+import { runTurn } from '../brain/loop';
+import { ProviderError, connect, type Provider } from '../brain/provider';
+import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
 import { TOOLS, type ToolContext } from './tools';
@@ -22,7 +22,7 @@ function env(name: string): string {
 const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 const workspace = env('TENERAL_WORKSPACE');
-// Which provider, over which protocol, with which credentials: body/provider.ts reads that from the environment.
+// Which provider, over which protocol, with which credentials: brain/provider.ts reads that from the environment.
 let provider: Provider;
 try {
   provider = connect(process.env);
@@ -31,7 +31,7 @@ try {
   process.exit(1);
 }
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
-// Characters per request. Not a positive number, or not set: the default in body/context.ts.
+// Characters per request. Not a positive number, or not set: the default in brain/memory.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
@@ -61,7 +61,7 @@ function emit(s: Stimulus): void {
 
 /**
  * The owner asked for the work in progress to stop: only the owner's channel can (body/sensors.ts).
- * A turn that is running is aborted, and journals that itself (body/loop.ts). A turn that is owed
+ * A turn that is running is aborted, and journals that itself (brain/loop.ts). A turn that is owed
  * but not running, because it failed and waits to be tried again or is only about to begin, is
  * ended here. When nothing is owed there is nothing to stop and the request is dropped: it is
  * never kept for a turn that has not been asked for yet.
@@ -124,7 +124,7 @@ const firstWords = birth(readEvents(journal), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
 
-// Failed turns in a row, and how many of the latest kind. What each kind leads to is in body/retry.ts.
+// Failed turns in a row, and how many of the latest kind. What each kind leads to is in brain/retry.ts.
 let failures = 0;
 let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 };
 for (;;) {

@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test';
 import { FREE, isProtected, protectedChanges } from '../../kernel/protected';
 
 const free = [
-  'body/loop.ts',
+  'body/main.ts',
+  'brain/loop.ts',
+  'test/brain/loop.test.ts',
   'body/deep/x.ts',
   'test/body/loop.test.ts',
   'BACKLOG.md',
@@ -24,6 +26,9 @@ const protectedPaths = [
   'README.md',
   'newfile.ts',
   'Body/x.ts',
+  'Brain/x.ts',
+  'brain',
+  'brains/x.ts',
   'BODY/x.ts',
   'backlog.md',
   'BACKLOG.md.bak',
@@ -44,7 +49,7 @@ const protectedPaths = [
 ];
 
 test('the allowlist is the agent, its tests and its notes', () => {
-  expect(FREE).toEqual(['body/', 'test/body/', 'BACKLOG.md']);
+  expect(FREE).toEqual(['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md']);
 });
 
 test.each(free)('free: %j', (path) => {

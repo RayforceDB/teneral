@@ -21,9 +21,9 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
 import { OWNER_REASON } from '../../kernel/back';
 import { FREE } from '../../kernel/protected';
 import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
-import { ProviderError } from '../../body/provider';
-import { PATIENCE, refusalNote } from '../../body/retry';
-import { buildMessages } from '../../body/context';
+import { ProviderError } from '../../brain/provider';
+import { PATIENCE, refusalNote } from '../../brain/retry';
+import { buildMessages } from '../../brain/memory';
 import { DEFAULT_IMAGES, IMAGE_MAX_BYTES } from '../../body/images';
 import { TOOLS } from '../../body/tools';
 
@@ -75,7 +75,7 @@ test('it says how crashes are counted and that a rollback is the last step back'
 test('it lists what a mutation must pass, in the kernel\'s order', () => {
   const order = [
     'nothing uncommitted', 'changes only', 'only plain files', '`bun x tsc --noEmit`',
-    '`bun test test/kernel`', '`bun test test/body`', 'at least one test and no failure', 'the smoke gate',
+    '`bun test test/kernel`', '`bun test test/body test/brain`', 'at least one test and no failure', 'the smoke gate',
   ].map((phrase) => flat.indexOf(phrase));
   expect(order.every((at) => at !== -1)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -152,7 +152,7 @@ test('it says the owner can send it back to an earlier generation, and how that 
 });
 
 // The model provider: which protocols exist, and whose the sign-in credentials are.
-import * as providerCode from '../../body/provider';
+import * as providerCode from '../../brain/provider';
 import { PROVIDERS } from '../../kernel/providers';
 import * as signinCode from '../../kernel/signin';
 
@@ -253,13 +253,13 @@ test('it says what a note is and the rule it exists for', () => {
 
 test('it says that everything outside the body is its own to change, and that such a change waits for the owner\'s approval', () => {
   expect(flat).toMatch(/A kernel supervises you\. It is code in this same repository, in `kernel\/`, and you may change it as you change yourself/);
-  expect(flat).toMatch(/Everything outside `body\/`, `test\/body\/` and `BACKLOG\.md` \(the kernel, its tests, the project files\) is yours to change as well/);
+  expect(flat).toMatch(/Everything outside `body\/`, `brain\/`, their tests and `BACKLOG\.md` \(the kernel, its tests, the project files\) is yours to change as well/);
   expect(flat).toContain('`TENERAL_KERNEL`');
   for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
-  expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body/);
+  expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body and brain/);
   expect(flat).toMatch(/`\/approve` in their terminal or `\.\/box approve`/);
   expect(flat).toMatch(/you call `mutate` again for the same commit/);
-  expect(flat).toMatch(/a later commit that changes only your body passes on it/);
+  expect(flat).toMatch(/a later commit that changes only your body and brain passes on it/);
   expect(flat).toMatch(/With `off` such a commit is refused at gate `kernel`/);
   expect(flat).toMatch(/it is not counted against the commit/);
   expect(flat).toMatch(/`site\/`, `docs\/`, `\.github\/`, `README\.md` and `LICENSE` are run by no kernel/);

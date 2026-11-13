@@ -55,7 +55,7 @@ test('ask: a commit that changes the kernel waits at gate approval, undecided, w
   const next = change(work, { 'kernel/k.ts': 'export const k = 2;\n', 'kernel/new.ts': 'export const n = 1;\n', 'package.json': '{}\n', 'body/a.ts': 'export const a = 2;\n' });
   const r = await gate(work, seed, next, { mode: 'ask' });
   expect(r).toMatchObject({ ok: false, gate: 'approval', undecided: true });
-  expect(r.output.split('\n')[0]).toBe('this commit changes 3 paths outside `body/`, `test/body/`, `BACKLOG.md`: kernel/k.ts, kernel/new.ts, package.json');
+  expect(r.output.split('\n')[0]).toBe('this commit changes 3 paths outside `body/`, `brain/`, `test/body/`, `test/brain/`, `BACKLOG.md`: kernel/k.ts, kernel/new.ts, package.json');
   expect(r.output).toContain(`./box approve ${next.slice(0, 12)}`);
   expect(r.output).toContain('/approve in ./box talk');
   expect(r.output).toContain('ask again for this same commit');

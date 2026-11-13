@@ -5,7 +5,7 @@ import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Enve
 import { git } from '../kernel/gates';
 import { appendEvent } from '../kernel/journal';
 import { keepImage, rootOf } from './images';
-import type { ToolSpec } from './provider';
+import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
 
 export interface ToolContext {
@@ -25,7 +25,7 @@ export interface ToolContext {
 
 export interface Tool {
   spec: ToolSpec;
-  /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (body/loop.ts). */
+  /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (brain/loop.ts). */
   run(args: unknown, ctx: ToolContext, signal?: AbortSignal): Promise<string>;
 }
 
@@ -105,7 +105,7 @@ const look: Tool = {
   },
   async run(args, ctx) {
     const kept = keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
-    // The last line is what body/context.ts shows the image by; it is honoured only in the result of this tool.
+    // The last line is what brain/memory.ts shows the image by; it is honoured only in the result of this tool.
     return `${str(args, 'path')}: ${kept.mime}, ${kept.bytes} bytes\n${kept.marker}`;
   },
 };

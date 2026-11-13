@@ -10,10 +10,11 @@ The question behind it is whether an agent can get better by rewriting its harne
 
 ## How it works
 
-Two halves in one repository, and three directories that belong to one individual and are never committed.
+Three parts in one repository, and three directories that belong to one individual and are never committed.
 
 - `kernel/` is a small supervisor. It starts the agent, checks every new generation, and puts back the previous one when a new one fails. The agent may change it as well, but a mutation that changes anything [outside the body](#outside-the-body) waits for your approval; and the launcher that starts a kernel, and goes back from one that does not work, is yours alone.
-- `body/` is everything the agent may rewrite: how it calls the model, its tools, its sensors, how it builds its context. Nothing limits its size: how much of itself the agent can hold in mind is the agent's to manage.
+- `brain/` is what the agent thinks and remembers with: how it calls the model (`brain/provider.ts`), its memory, which decides what of the journal is in mind for a request (`brain/memory.ts`), and the turn itself (`brain/loop.ts`).
+- `body/` is what it acts and senses with: its tools, its sensors, and `body/main.ts`, where the kernel starts it. Brain and body are the agent's own: it rewrites both on its own word. Nothing limits their size: how much of itself the agent can hold in mind is the agent's to manage.
 - `memory/journal.jsonl` is the agent's history, append-only. Every event carries the commit of the code that wrote it, so generations can be compared.
 - `soul/` holds a few Markdown files the agent writes about who it is and who it works with. They are part of every request to the model.
 - `inbox/` is where other programs leave messages for it.
@@ -23,10 +24,10 @@ One commit of the agent's code is a *generation*. Asking the kernel to switch to
 1. The agent edits a second checkout of this repository, `.teneral/candidate`, on the branch `lineage/local`. The code it is running is a third checkout, `.teneral/live`, which the kernel resets to the exact commit before every start.
 2. The agent calls its `mutate` tool. The tool commits the candidate, journals the request, and the process exits with code 75 when the turn ends.
 3. The kernel checks the commit:
-   - compared with the running generation, a commit that changes only `body/`, `test/body/` and `BACKLOG.md` goes on at once. This is an allowlist: a commit that changes any other path, the kernel's own files and any new file included, waits here for [your approval](#outside-the-body) and goes on when it has it;
+   - compared with the running generation, a commit that changes only `body/`, `brain/`, their tests (`test/body/`, `test/brain/`) and `BACKLOG.md` goes on at once. This is an allowlist: a commit that changes any other path, the kernel's own files and any new file included, waits here for [your approval](#outside-the-body) and goes on when it has it;
    - `body/` may hold only regular files;
    - every organ the commit pins (see [Organs](#organs)) is in the cache with exactly the pinned hash, unpacks safely, and passes its own check. A body that pins none skips this;
-   - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the body's tests must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
+   - in a fresh checkout the kernel makes of exactly that commit, the type check, the kernel's tests and the agent's own tests, of its body and its brain, must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the kernel's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
    - last, the smoke run: in the same checkout the kernel starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the kernel serves on a local port. The stand-in speaks both wire protocols, and the candidate is run as the provider you configured, with a dummy key: never with your key or your sign-in. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
 4. If a check fails, the same generation starts again and is told which check and what it printed. If all pass, the kernel switches to the new commit and starts it.
 5. A new generation has 60 seconds to report that it is ready, and 10 minutes to produce its first reply: the note about its promotion is waiting for it, so a working one answers. If it exits abnormally before it is ready, or is not ready in time, or is alive but silent after those 10 minutes (being interrupted by you is not silence: see [Interrupting](#interrupting)), or later crashes three times in a row without producing a reply, or needs more than ten restarts, the kernel returns to the generation before it and tells the agent why, with the end of what the failed generation wrote to stderr. There is one step back, not a history: if that generation fails too, or there is none because this is the first, the kernel stops.
@@ -86,9 +87,9 @@ It is there for one rule: **anything the body keeps outside the journal must be 
 
 ## Outside the body
 
-The agent may change anything in its repository: its body, and also the kernel that supervises it, the kernel's tests and the project's files. What it changes in its body it mutates into on its own word. A mutation that changes anything else waits for yours, and that is the only difference.
+The agent may change anything in its repository: its body, and also the kernel that supervises it, the kernel's tests and the project's files. What it changes in its own code, `body/` and `brain/` with their tests, it mutates into on its own word. A mutation that changes anything else waits for yours, and that is the only difference. "The body" below is short for that own code, brain included.
 
-**The rule.** A candidate that differs from the running generation outside `body/`, `test/body/` and `BACKLOG.md` passes only when, outside those paths, it holds exactly what a commit you approved holds. So an approval is for what a commit holds outside the body: a later commit that changes only the body passes on it, also after a rollback, and a commit that changes anything else again waits again. A candidate that leaves everything outside those paths as the running generation has it is an ordinary mutation and is not looked at here.
+**The rule.** A candidate that differs from the running generation outside `body/`, `brain/`, `test/body/`, `test/brain/` and `BACKLOG.md` passes only when, outside those paths, it holds exactly what a commit you approved holds. So an approval is for what a commit holds outside the body: a later commit that changes only the body passes on it, also after a rollback, and a commit that changes anything else again waits again. A candidate that leaves everything outside those paths as the running generation has it is an ordinary mutation and is not looked at here.
 
 **Your approval.** `TENERAL_KERNEL` in `.env` says what you allow:
 
@@ -406,7 +407,7 @@ Both lie in `.teneral/auth/`, readable only by your user.
 
 ### CI
 
-`.github/workflows/gates.yml` runs on every pull request, on its head: the type check, the kernel's tests, the body's tests, and then `bun kernel/offer.ts gates`, which is the gate run of a mutation as the kernel does it, ending with the smoke run against the stand-in for the model. It has read-only permissions and uses no secret. A second job lists the paths the pull request changes outside `body/`, `test/body/` and `BACKLOG.md`, as a warning on the run and in its summary, so that a change to the kernel is seen at a glance; it never fails. What runs is the pull request's own workflow, code and tests: a green run says the change is consistent with itself, and a change to the kernel, or to the workflow, is exactly where that says least.
+`.github/workflows/gates.yml` runs on every pull request, on its head: the type check, the kernel's tests, the body's tests, and then `bun kernel/offer.ts gates`, which is the gate run of a mutation as the kernel does it, ending with the smoke run against the stand-in for the model. It has read-only permissions and uses no secret. A second job lists the paths the pull request changes outside `body/`, `brain/`, their tests and `BACKLOG.md`, as a warning on the run and in its summary, so that a change to the kernel is seen at a glance; it never fails. What runs is the pull request's own workflow, code and tests: a green run says the change is consistent with itself, and a change to the kernel, or to the workflow, is exactly where that says least.
 
 ### Maintainer
 

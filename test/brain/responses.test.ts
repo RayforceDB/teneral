@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   ProviderError, connect, readResponsesStream, responsesProvider, tidyReasoning, toResponsesInput, toResponsesTools, type ChatMessage,
-} from '../../body/provider';
-import { failureKind, saysTooLong, verdict } from '../../body/retry';
+} from '../../brain/provider';
+import { failureKind, saysTooLong, verdict } from '../../brain/retry';
 import { bashEnv } from '../../body/tools';
 import { saveCredentials, type Credentials } from '../../kernel/signin';
 

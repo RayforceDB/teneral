@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildMessages, needsTurn } from '../../body/context';
+import { buildMessages, needsTurn } from '../../brain/memory';
 import type { EventBody, JournalEvent } from '../../kernel/journal';
 
 let n = 0;
@@ -399,7 +399,7 @@ test('a coarse step never drops the newest stimulus, however large it is', () =>
 // --- images ---
 
 import { IMAGE_CHARS } from '../../body/images';
-import type { Sight } from '../../body/context';
+import type { Sight } from '../../brain/memory';
 
 const marker = (n: number, ext = 'png') => `[image: memory/images/${n.toString(16).padStart(64, '0')}.${ext}]`;
 const fileOf = (n: number, ext = 'png') => `${n.toString(16).padStart(64, '0')}.${ext}`;

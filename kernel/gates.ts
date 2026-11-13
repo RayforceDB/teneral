@@ -26,9 +26,10 @@ export interface Check {
 
 export const DEFAULT_CHECKS: readonly Check[] = [
   { gate: 'types', cmd: ['bun', 'x', 'tsc', '--noEmit'] },
-  // Two runs, so the kernel's tests and the body's each have to show up and pass on their own.
+  // Two runs, so the kernel's tests and the agent's own, of its body and its brain, each have to show up and pass on their own.
+  // A lineage from before there was a brain has no test/brain, and bun then runs what test/body holds.
   { gate: 'tests-kernel', cmd: ['bun', 'test', 'test/kernel'], bunSummary: true },
-  { gate: 'tests-body', cmd: ['bun', 'test', 'test/body'], bunSummary: true },
+  { gate: 'tests-body', cmd: ['bun', 'test', 'test/body', 'test/brain'], bunSummary: true },
 ];
 
 /** The command a generation is started with, by the supervisor and by the smoke gate alike. */
@@ -157,17 +158,17 @@ export interface BodyEntry {
   size: number;
 }
 
-/** What `commit` holds under body/, read from the commit itself, never from a worktree. */
+/** What `commit` holds under body/ and brain/, read from the commit itself, never from a worktree. */
 export function bodyEntries(dir: string, commit: string): BodyEntry[] {
   // Each record is `<mode> <type> <object> <size>\t<path>`, the size padded with spaces.
-  return gitPaths(dir, 'ls-tree', '-r', '-l', '-z', commit, '--', 'body').map((record) => {
+  return gitPaths(dir, 'ls-tree', '-r', '-l', '-z', commit, '--', 'body', 'brain').map((record) => {
     const tab = record.indexOf('\t');
     const [mode = '', , , size = ''] = record.slice(0, tab).split(/ +/);
     return { path: record.slice(tab + 1), mode, size: Number(size) || 0 };
   });
 }
 
-/** Bytes of the files `commit` holds under body/. */
+/** Bytes of the files `commit` holds under body/ and brain/. */
 export function bodySize(dir: string, commit = 'HEAD'): number {
   return bodyEntries(dir, commit).reduce((total, entry) => total + entry.size, 0);
 }
@@ -580,7 +581,7 @@ export async function runGates(
     const entries = bodyEntries(dir, to);
     const odd = entries.filter((entry) => !PLAIN_MODES.has(entry.mode));
     if (odd.length > 0) {
-      return fail('body', `body/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
+      return fail('body', `body/ and brain/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
     }
     pins = organsAt(dir, to);
   } catch (err) {

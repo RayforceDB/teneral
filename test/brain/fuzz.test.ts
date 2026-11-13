@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import { buildMessages, needsTurn, type Sight } from '../../body/context';
+import { buildMessages, needsTurn, type Sight } from '../../brain/memory';
 import { IMAGE_CHARS } from '../../body/images';
-import { toChatMessages, toResponsesInput } from '../../body/provider';
+import { toChatMessages, toResponsesInput } from '../../brain/provider';
 import type { JournalEvent } from '../../kernel/journal';
 
 /** mulberry32: small, seeded, the same on every run. */

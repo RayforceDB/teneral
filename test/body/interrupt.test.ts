@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { needsTurn } from '../../body/context';
+import { needsTurn } from '../../brain/memory';
 import { appendEvent, readEvents, type JournalEvent } from '../../kernel/journal';
 import { interrupt, tell } from '../../kernel/owner';
 

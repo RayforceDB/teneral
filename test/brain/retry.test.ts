@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { ProviderError } from '../../body/provider';
-import { describeDelay, failureKind, refusalNote, retryDelayMs, saysNoImages, saysTooLong, verdict } from '../../body/retry';
+import { ProviderError } from '../../brain/provider';
+import { describeDelay, failureKind, refusalNote, retryDelayMs, saysNoImages, saysTooLong, verdict } from '../../brain/retry';
 
 test('the wait after a failed turn grows: 10 s, 1 min, 5 min, then every 15 min', () => {
   expect([1, 2, 3, 4, 5, 100].map(retryDelayMs)).toEqual([10_000, 60_000, 300_000, 900_000, 900_000, 900_000]);
@@ -100,7 +100,7 @@ test('a call its caller cancelled is not read as too long or as a refusal of ima
   const cancelled = new ProviderError('provider request cancelled', null);
   expect(saysTooLong(cancelled)).toBe(false);
   expect(saysNoImages(cancelled)).toBe(false);
-  // Should one ever reach the patience loop, it is not counted towards an exit: the loop itself ends an interrupted turn before that (body/loop.ts).
+  // Should one ever reach the patience loop, it is not counted towards an exit: the loop itself ends an interrupted turn before that (brain/loop.ts).
   expect(failureKind(cancelled)).toBe('passing');
   expect(verdict(failureKind(cancelled), 100)).toBe('retry');
 });

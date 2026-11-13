@@ -5,7 +5,7 @@ import { basename, dirname, join, sep } from 'node:path';
 // Images the model is shown. They live as files under `<root>/memory/images/`, named by the SHA-256
 // of their bytes, where `<root>` is the directory that holds `memory/`. The owner's terminal puts
 // a file there and ends the message with a line naming it; `look` (body/tools.ts) puts one there
-// for the agent itself. The journal holds only the line: body/context.ts decides which lines are
+// for the agent itself. The journal holds only the line: brain/memory.ts decides which lines are
 // honoured (the owner's, and the results of `look`), and nothing else ever makes a file be read.
 
 export interface Image {
