@@ -1,7 +1,7 @@
 {
   "name": "teneral",
   "version": "0.0.0",
-  "description": "A minimal agent that rewrites its own code, one measured generation at a time.",
+  "description": "Someone, not something: an individual made of code that rebuilds every part of itself, one measured generation at a time.",
   "author": "Rayforce Technologies Inc.",
   "license": "MIT",
   "homepage": "https://rayforcedb.github.io/teneral/",
