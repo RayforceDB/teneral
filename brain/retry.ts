@@ -67,7 +67,7 @@ export const PATIENCE = 3;
  * What to do after `inARow` failures of `kind` in a row.
  * - 'record': journal a reply saying the provider refused, or that the request stays too long, so the turn is
  *   no longer owed and the owner sees it. Without that the same request would be sent every 15 minutes for ever.
- * - 'exit': leave with a failure, so the kernel counts a crash and can roll this generation back.
+ * - 'exit': leave with a failure, so the stem counts a crash and can roll this generation back.
  */
 export function verdict(kind: FailureKind, inARow: number): 'retry' | 'record' | 'exit' {
   if (kind === 'passing' || inARow < PATIENCE) return 'retry';

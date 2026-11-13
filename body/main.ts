@@ -77,7 +77,7 @@ function interrupt(): void {
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
-  // The owner's lines from `./box talk`, which may come and go while this process lives.
+  // The owner's lines from `./nest talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
@@ -128,7 +128,7 @@ const stops = sensors.map((start) => start(emit));
 let failures = 0;
 let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 };
 for (;;) {
-  // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
+  // Also true right after a restart: an unfinished turn or a stem note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
     const before = arrived;
     const failed = await turn();
@@ -145,8 +145,8 @@ for (;;) {
     console.error(`[turn failed] ${error instanceof Error ? (kind === 'own' ? error.stack ?? error.message : error.message) : String(error)}`);
     const next = verdict(kind, streak.count);
     if (next === 'exit') {
-      // Not the provider: waiting mends nothing. As a crash the kernel counts it, and rolls this generation back if it goes on.
-      console.error(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the kernel can act`);
+      // Not the provider: waiting mends nothing. As a crash the stem counts it, and rolls this generation back if it goes on.
+      console.error(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the stem can act`);
       process.exit(1);
     }
     if (next === 'record' && error instanceof ProviderError) {

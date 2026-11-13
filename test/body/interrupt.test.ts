@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
-import { interrupt, tell } from '../../kernel/owner';
+import { interrupt, tell } from '../../keeper/owner';
 
-// The body as the kernel starts it, `bun body/main.ts`, with a stand-in for the model on a local
-// port. What is typed and the interrupt go in through the real owner channel (kernel/owner.ts),
+// The body as the stem starts it, `bun body/main.ts`, with a stand-in for the model on a local
+// port. What is typed and the interrupt go in through the real owner channel (keeper/owner.ts),
 // and what happened is read from the journal: these are the paths the owner's Esc takes.
 
 const ROOT = join(import.meta.dir, '..', '..');

@@ -1,0 +1,60 @@
+╭─────────────────────────────────────────────────────────────────────────────╮
+│                                                                             │
+│   ▚▖  ▗▞   Talking with your teneral agent                                  │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.    │
+│    ░▒▒░                                                                     │
+│                                                                             │
+│   Directory    /home/owner/work/teneral                                     │
+│   Individual   5e1f0a9c                                                     │
+│   Generation   1st · a1b2c3d · has lived in 1                               │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                     │
+│   Version      teneral 0.0.0                                                │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                             │
+│   Sensors      clock every 30 min · inbox · your terminal                   │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯
+
+◆ The agent is awake · resting
+  Leaving this client stops nothing: the agent goes on.
+
+◆ Images: /image <path> attaches a file this client can read. The clipboard and
+  files of your machine need ./nest talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+› look around
+
+  ▪ bash  command: ls                                                   ✓ 250ms
+  ▪ read  path: missing.ts                                         ✗ failed 12s
+
+● Twenty files, and one that is not there.
+
+  ── what the last 2 tool calls returned ───────────────────────────────
+  From now on each tool call is shown with a few rows of what it returned. Tab
+  or /tools hides that again.
+
+  ▪ bash  command: ls                                                   ✓ 250ms
+      file-0.ts
+      file-1.ts
+      file-2.ts
+      file-3.ts
+      file-4.ts
+      file-5.ts
+      … 14 more lines
+  ▪ read  path: missing.ts                                         ✗ failed 12s
+      … 7 more lines
+      trace line
+      trace line
+      trace line
+      trace line
+      trace line
+      error: ENOENT: no such file or directory, open 'missing.ts'
+
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d

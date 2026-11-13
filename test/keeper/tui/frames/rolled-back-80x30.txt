@@ -1,0 +1,53 @@
+╭─────────────────────────────────────────────────────────────────────────────╮
+│                                                                             │
+│   ▚▖  ▗▞   Talking with your teneral agent                                  │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.    │
+│    ░▒▒░                                                                     │
+│                                                                             │
+│   Directory    /home/owner/work/teneral                                     │
+│   Individual   5e1f0a9c                                                     │
+│   Generation   1st · a1b2c3d · has lived in 2                               │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                     │
+│   Version      teneral 0.0.0                                                │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                             │
+│   Sensors      clock every 30 min · inbox · your terminal                   │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯
+
+◆ The agent is awake · thinking
+  Leaving this client stops nothing: the agent goes on.
+
+◆ Images: /image <path> attaches a file this client can read. The clipboard and
+  files of your machine need ./nest talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+┃ mutation accepted  a1b2c3d → e5f6a7b
+
+┃ rolled back  e5f6a7b → a1b2c3d
+┃   crashed 3 times without a reply. Its stderr ended with:
+┃   … 22 earlier rows; the journal has all of it
+┃   [retry] 22 in a row; trying again
+┃   [retry] 23 in a row; trying again
+┃   [retry] 24 in a row; trying again
+┃   [retry] 25 in a row; trying again
+┃   [retry] 26 in a row; trying again
+┃   [retry] 27 in a row; trying again
+┃   [retry] 28 in a row; trying again
+┃   [retry] 29 in a row; trying again
+┃   [turn failed] TypeError: undefined is not an object (evaluating
+┃   'reply.toolCalls.length')
+┃       at runTurn (/teneral/.teneral/live/body/loop.ts:52:15)
+┃       at processTicksAndRejections (native:7:39)
+┃   [giving up] 3 turns in a row failed in this generation's own code; exiting
+┃   so the stem can act
+
+⠋ The agent is thinking · 0:11 · esc to interrupt
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol  …/work/teneral  gen 1 a1b2c3d

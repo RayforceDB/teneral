@@ -27,17 +27,17 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: types
         run: bun x tsc --noEmit
-      - name: the kernel's tests
-        run: bun test test/kernel
+      - name: the stem's tests
+        run: bun test test/stem test/immune test/species test/keeper
       - name: the body's tests
         run: bun test test/body test/brain
-      # Once more as the kernel itself runs them on a candidate, in a fresh checkout with a bare
+      # Once more as the stem itself runs them on a candidate, in a fresh checkout with a bare
       # environment, ending with the smoke run: the body is started against a stand-in for the model.
       # What the seed pins, fetched into the cache and kept only with the pinned hash, as an install does when it starts.
       - name: the pinned archives
-        run: bun kernel/organs.ts fetch
-      - name: the gates as the kernel runs them, smoke run included
-        run: bun kernel/offer.ts gates HEAD
+        run: bun immune/organs.ts fetch
+      - name: the gates as the stem runs them, smoke run included
+        run: bun species/offer.ts gates HEAD
 
   paths:
     name: paths outside the body
@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # A report, not a verdict: it never fails. These are the paths a mutation changes only with its owner's
-      # approval. The list is kernel/protected.ts, and a test keeps the two the same.
+      # approval. The list is immune/protected.ts, and a test keeps the two the same.
       - name: report them
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
@@ -63,10 +63,10 @@ jobs:
             echo "This pull request changes only what a mutation changes without asking its owner: body/, brain/, their tests and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             count="$(printf '%s\n' "$outside" | wc -l | tr -d ' ')"
-            echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation changes only with its owner's approval: the kernel, its tests or the project's own files."
+            echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation changes only with its owner's approval: the stem, its tests or the project's own files."
             {
               echo "### This pull request changes $count path(s) outside the body"
-              echo "A mutation makes these changes only with its owner's approval: the kernel, its tests, the project's own files."
+              echo "A mutation makes these changes only with its owner's approval: the stem, its tests, the project's own files."
               echo
               printf '%s\n' "$outside" | sed 's/^/- `/; s/$/`/'
             } | tee -a "$GITHUB_STEP_SUMMARY"

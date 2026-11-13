@@ -209,7 +209,7 @@ test('a journal from before notes reads as it did, and notes among its lines dis
   expect(after.slice(0, 2)).toEqual(before);
   expect(after[2]).toEqual(note);
   expect(readEventsFrom(path, mark)).toEqual([note]);
-  // A note is read back as it lies there, even one a later kernel would not have taken: reading never refuses.
+  // A note is read back as it lies there, even one a later stem would not have taken: reading never refuses.
   appendFileSync(path, '{"type":"note","kind":"Not A Kind","v":1,"id":"c","ts":"2026-01-01T00:00:02.000Z","gen":"gen-2"}\n');
   expect(readEvents(path)).toHaveLength(4);
 });

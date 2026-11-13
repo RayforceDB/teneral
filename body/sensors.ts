@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { archive, collect, type Arrival } from '../kernel/envelope';
+import { archive, collect, type Arrival } from './envelope';
 import type { JournalEvent } from '../brain/journal';
-import { INTERRUPT_SUFFIX } from '../kernel/owner';
+import { INTERRUPT_SUFFIX } from '../keeper/owner';
 
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
@@ -119,8 +119,8 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
 }
 
 /**
- * Lines the owner typed somewhere else: `./box talk` leaves each as a plain-text file in `dir`
- * (see kernel/owner.ts). They are the owner's words exactly as typed lines are, so the source is
+ * Lines the owner typed somewhere else: `./nest talk` leaves each as a plain-text file in `dir`
+ * (see keeper/owner.ts). They are the owner's words exactly as typed lines are, so the source is
  * 'terminal'. A name starting with a dot is a line still being written.
  *
  * A file whose name ends in `.interrupt` is not a line: the owner asks for the turn in progress to

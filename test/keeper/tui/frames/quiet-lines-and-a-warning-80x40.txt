@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────────────────────────╮
+│                                                                             │
+│   ▚▖  ▗▞   Talking with your teneral agent                                  │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.    │
+│    ░▒▒░                                                                     │
+│                                                                             │
+│   Directory    /home/owner/work/teneral                                     │
+│   Individual   5e1f0a9c                                                     │
+│   Generation   1st · a1b2c3d · has lived in 1                               │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                     │
+│   Version      teneral 0.0.0                                                │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                             │
+│   Sensors      clock every 30 min · inbox · your terminal                   │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯
+
+◆ The agent is awake · resting
+  Leaving this client stops nothing: the agent goes on.
+
+◆ Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage
+◆ Images: /image <path> attaches a file this client can read. The clipboard and
+  files of your machine need ./nest talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+› typed in the other window  from another terminal
+
+● I see it.
+
+  ◦ clock  It is 12:00. Nothing has arrived since 11:30.
+  ◦ from alice  (message m1) can you hear me?
+
+! not from the model
+  The provider refused the request 3 times in a row with status 400: context
+  too long
+  What helps: a shorter context.
+
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d

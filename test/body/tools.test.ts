@@ -3,10 +3,10 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bashEnv, runBash, TOOLS, type ToolContext } from '../../body/tools';
-import { MAX_HOPS, archive, collect, deliver } from '../../kernel/envelope';
-import { git } from '../../kernel/gates';
+import { MAX_HOPS, archive, collect, deliver } from '../../body/envelope';
+import { git } from '../../immune/gates';
 import { readEvents } from '../../brain/journal';
-import { makeRepo, writeFiles } from '../kernel/helpers';
+import { makeRepo, writeFiles } from '../helpers';
 
 function tool(name: string) {
   const found = TOOLS.find((t) => t.spec.name === name);

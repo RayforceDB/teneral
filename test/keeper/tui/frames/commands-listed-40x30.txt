@@ -1,0 +1,48 @@
+╭─────────────────────────────────────╮
+│                                     │
+│   ▚▖  ▗▞   Talking with your tener… │
+│    ▜██▛    Type to talk, Enter sen… │
+│    ░▒▒░                             │
+│                                     │
+│   Directory    /home/owner/work/ten │
+│                eral                 │
+│   Individual   5e1f0a9c             │
+│   Generation   1st · a1b2c3d · has  │
+│                lived in 1           │
+│   Model        gpt-6.1-sol ·        │
+│                OpenAI-compatible    │
+│                endpoint             │
+│   Version      teneral 0.0.0        │
+│   Born         2027-01-15 07:59 UTC │
+│                · 1 min ago          │
+│   Sensors      clock every 30 min · │
+│                inbox · your         │
+│                terminal             │
+│                                     │
+╰─────────────────────────────────────╯
+
+◆ The agent is awake · resting
+  Leaving this client stops nothing:
+  the agent goes on.
+
+◆ Images: /image <path> attaches a file
+  this client can read. The clipboard
+  and files of your machine need ./nest
+  talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+╭─────────────────────────────────────╮
+│ › /                                 │
+╰─────────────────────────────────────╯
+  ▸ /help              the keys and co…
+    /image <path>      attach an image…
+    /stop              interrupt what …
+    /approve [commit]  approve the mut…
+    /tools             show or hide wh…
+    /generations       the generations…
+ Tab completes · Enter runs     1 of 12

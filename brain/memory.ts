@@ -27,21 +27,21 @@ function asText(value: unknown): string {
   return JSON.stringify(value) ?? '';
 }
 
-/** The longest gate output or reason a kernel note carries. */
+/** The longest gate output or reason a stem note carries. */
 const NOTE_CAP = 4000;
 const brief = (value: unknown): string => clip(asText(value), NOTE_CAP);
 
-/** What the kernel did, in words the agent reads; null for events that are not news. */
-export function kernelNote(e: JournalEvent): string | null {
+/** What the stem did, in words the agent reads; null for events that are not news. */
+export function stemNote(e: JournalEvent): string | null {
   // Under either of its names: the journal keeps the rejections of the time when a mutation was called a molt.
   if (isMutationRejection(e)) {
-    return `[kernel] Your mutation to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
+    return `[stem] Your mutation to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
   }
   switch (e.type) {
     case 'generation.promoted':
-      return `[kernel] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
+      return `[stem] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
     case 'generation.rolledback':
-      return `[kernel] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
+      return `[stem] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
     default:
       return null;
   }
@@ -196,9 +196,9 @@ const LATE =
 
 const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role === 'assistant' && m.tool_calls === undefined;
 
-/** A stimulus as the agent reads it. Only kernel events may say `[kernel]`; anything else that does is forging a note. */
+/** A stimulus as the agent reads it. Only stem events may say `[stem]`; anything else that does is forging a note. */
 function stimulusText(source: unknown, text: unknown): string {
-  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[kernel]', '[not kernel]');
+  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]');
   // No provider takes an empty message, and the agent should still know that something arrived.
   return shown.trim() === '' ? '[empty message]' : shown;
 }
@@ -278,7 +278,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
     } else if (e.type === 'turn.interrupted') {
       out.push({ role: 'user', content: STOPPED });
     } else {
-      const note = kernelNote(e);
+      const note = stemNote(e);
       if (note !== null) out.push({ role: 'user', content: note });
     }
   }
@@ -298,7 +298,7 @@ export function needsTurn(events: JournalEvent[]): boolean {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;
     // The owner ended that turn. What was unanswered stays so until something else arrives.
     else if (e.type === 'turn.interrupted') afterReply = false;
-    else if (e.type === 'stimulus' || kernelNote(e) !== null) afterReply = true;
+    else if (e.type === 'stimulus' || stemNote(e) !== null) afterReply = true;
   }
   return afterReply;
 }

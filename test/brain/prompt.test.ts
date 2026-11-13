@@ -16,11 +16,11 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
   expect(prompt).toMatch(/must be in your reply text/);
 });
 
-// "What the kernel requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
-// The numbers are checked against the kernel's own constants where it exports them.
-import { OWNER_REASON } from '../../kernel/back';
-import { FREE } from '../../kernel/protected';
-import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../kernel/supervisor';
+// "What the stem requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
+// The numbers are checked against the stem's own constants where it exports them.
+import { OWNER_REASON } from '../../keeper/back';
+import { FREE } from '../../immune/protected';
+import { CRASH_LIMIT, MUTATION_EXIT, REJECTION_LIMIT, RESTART_DELAY_CAP_MS } from '../../stem/supervisor';
 import { ProviderError } from '../../brain/provider';
 import { PATIENCE, refusalNote } from '../../brain/retry';
 import { buildMessages } from '../../brain/memory';
@@ -31,8 +31,8 @@ const mainSource = readFileSync(join(import.meta.dir, '..', '..', 'body', 'main.
 
 const flat = prompt.replace(/\s+/g, ' ');
 
-test('the prompt has the section on what the kernel requires', () => {
-  expect(prompt).toContain('## What the kernel requires of you');
+test('the prompt has the section on what the stem requires', () => {
+  expect(prompt).toContain('## What the stem requires of you');
 });
 
 test('it says how the body is started and that the live checkout does not last', () => {
@@ -42,7 +42,7 @@ test('it says how the body is started and that the live checkout does not last',
   expect(flat).not.toMatch(/read-only/);
 });
 
-test('it names every variable the kernel gives the body', () => {
+test('it names every variable the stem gives the body', () => {
   for (const name of ['GEN', 'JOURNAL', 'WORKSPACE', 'SOUL', 'PEERS', 'INBOX', 'OWNER', 'ID', 'BASE_URL', 'API_KEY', 'MODEL', 'PROVIDER', 'AUTH']) {
     expect(flat).toContain(`\`TENERAL_${name}\``);
   }
@@ -72,10 +72,10 @@ test('it says how crashes are counted and that a rollback is the last step back'
   expect(flat).toMatch(/Asking three times in a row for the same commit, rejected each time, halts everything/);
 });
 
-test('it lists what a mutation must pass, in the kernel\'s order', () => {
+test('it lists what a mutation must pass, in the stem\'s order', () => {
   const order = [
     'nothing uncommitted', 'changes only', 'only plain files', '`bun x tsc --noEmit`',
-    '`bun test test/kernel`', '`bun test test/body test/brain`', 'at least one test and no failure', 'the smoke gate',
+    '`bun test test/stem test/immune test/species test/keeper`', '`bun test test/body test/brain`', 'at least one test and no failure', 'the smoke gate',
   ].map((phrase) => flat.indexOf(phrase));
   expect(order.every((at) => at !== -1)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -112,15 +112,15 @@ test('it states the probation after a promotion', () => {
   expect(flat).toMatch(/must reply \(journal an `assistant` event\) within 10 minutes or it is rolled back/);
 });
 
-test('it says the kernel speaks only through three events, and what rewriting their handling costs', () => {
+test('it says the stem speaks only through three events, and what rewriting their handling costs', () => {
   for (const type of ['mutation.rejected', 'generation.promoted', 'generation.rolledback']) expect(flat).toContain(`\`${type}\``);
-  expect(flat).toMatch(/you stop hearing the kernel/);
+  expect(flat).toMatch(/you stop hearing the stem/);
 });
 
 test('it says the journal is part of the brain, how to append, and that its file waits for the owner', () => {
   expect(flat).toMatch(/It is part of your brain: `brain\/journal\.ts` holds its event types and the functions that write and read it/);
   expect(flat).toMatch(/Append to it only through `appendEvent`/);
-  expect(flat).toMatch(/a commit that changes that file waits for your owner's approval like a change to the kernel/);
+  expect(flat).toMatch(/a commit that changes that file waits for your owner's approval like a change to the stem/);
 });
 
 test('it says how to reproduce a start failure by hand', () => {
@@ -145,17 +145,17 @@ test('what the review found false is now said truly', () => {
 });
 
 test('it says the owner can send it back to an earlier generation, and how that arrives', () => {
-  expect(flat).toContain('`./box back`');
+  expect(flat).toContain('`./nest back`');
   expect(flat).toMatch(/send you back to an earlier generation/);
-  // The reason is quoted as the kernel writes it.
+  // The reason is quoted as the stem writes it.
   expect(flat).toContain(`"${OWNER_REASON}"`);
   expect(flat).toMatch(/rollback note/);
 });
 
 // The model provider: which protocols exist, and whose the sign-in credentials are.
 import * as providerCode from '../../brain/provider';
-import { PROVIDERS } from '../../kernel/providers';
-import * as signinCode from '../../kernel/signin';
+import { PROVIDERS } from '../../brain/providers';
+import * as signinCode from '../../brain/signin';
 
 test('it names both wire protocols by the functions that speak them, and says which one is the default', () => {
   expect(new Set(PROVIDERS.map((p) => p.wire))).toEqual(new Set(['chat', 'responses']));
@@ -167,14 +167,14 @@ test('it names both wire protocols by the functions that speak them, and says wh
   expect(flat).toMatch(/streamed and stateless/);
   expect(flat).toMatch(/system prompt goes as `instructions`/);
   expect(flat).toMatch(/reasoning is not carried from one request to the next/);
-  expect(flat).toMatch(/setup \(`kernel\/setup\.ts`\) calls it too/);
+  expect(flat).toMatch(/setup \(`keeper\/setup\.ts`\) calls it too/);
 });
 
 test('it says that sign-in credentials are the owner\'s, where they live, and that a token stays in memory', () => {
   expect(typeof signinCode.accessToken).toBe('function');
   expect(flat).toMatch(/those credentials are your owner's, not yours/);
   expect(flat).toMatch(/They live in `TENERAL_AUTH`, outside your workspace/);
-  expect(flat).toMatch(/`accessToken` in `kernel\/signin\.ts`/);
+  expect(flat).toMatch(/`accessToken` in `brain\/signin\.ts`/);
   expect(flat).toMatch(/keep it in memory only/);
   expect(flat).toMatch(/Never put a token in the journal, a file, a message or a command/);
   // And plainly: the shell can read them.
@@ -218,23 +218,23 @@ test('it says the smoke run is made as the configured provider, with a key and w
   expect(flat).toMatch(/must use that key at `TENERAL_BASE_URL` and never look for a sign-in/);
 });
 
-// Organs and notes: what the kernel does with each is pinned against the kernel's own constants and parser.
+// Organs and notes: what the stem does with each is pinned against the stem's own constants and parser.
 import { noteProblem } from '../../brain/journal';
-import { MAX_ORGANS, ORGANS_FILE, parseOrgans } from '../../kernel/organs';
+import { MAX_ORGANS, ORGANS_FILE, parseOrgans } from '../../immune/organs';
 
 test('it says what an organ is, how one is pinned, where its archive goes, and how the body finds it', () => {
   expect(flat).toContain(`\`${ORGANS_FILE}\``);
   expect(flat).toContain('{ "url", "sha256" }');
   expect(flat).toContain(`at most ${MAX_ORGANS} organs`);
-  expect(flat).toContain('The kernel downloads nothing');
+  expect(flat).toContain('The stem downloads nothing');
   expect(flat).toContain('`$TENERAL_WORKSPACE/../organs/archives/<sha256>.tar.gz`');
   expect(flat).toContain('`$TENERAL_ORGANS/<name>/`');
   expect(flat).toContain('`TENERAL_ORGANS`: a directory with one entry per organ you pin');
-  expect(flat).toContain('`bun kernel/organs.ts`');
+  expect(flat).toContain('`bun immune/organs.ts`');
   expect(flat).toContain('Gate `organs`');
   expect(flat).toContain('a rollback returns you to the old pin');
   expect(flat).toContain('never on a binary you built');
-  // The fields it names are the ones the kernel takes, and no others.
+  // The fields it names are the ones the stem takes, and no others.
   const pin = { url: 'https://example.org/x.tar.gz', sha256: 'ab'.repeat(32), dir: 'x-1.0', check: ['bin/x', '--version'] };
   expect(parseOrgans(JSON.stringify({ x: pin }))).toHaveLength(1);
   for (const field of Object.keys(pin)) expect(flat).toContain(`"${field}"`);
@@ -243,7 +243,7 @@ test('it says what an organ is, how one is pinned, where its archive goes, and h
 test('it says what a note is and the rule it exists for', () => {
   expect(flat).toContain("`{ type: 'note', kind, data }`");
   expect(flat).toContain('`data` is any JSON, of any size');
-  expect(flat).toContain('The kernel stores it and never reads it');
+  expect(flat).toContain('The stem stores it and never reads it');
   expect(flat).toContain('must be rebuildable from the journal');
   expect(flat).toContain('in a place named by its schema version');
   expect(noteProblem('memory.fact_v2-x', { any: ['json'] })).toBeNull();
@@ -253,25 +253,25 @@ test('it says what a note is and the rule it exists for', () => {
 });
 
 test('it says that everything outside the body is its own to change, and that such a change waits for the owner\'s approval', () => {
-  expect(flat).toMatch(/A kernel supervises you\. It is code in this same repository, in `kernel\/`, and you may change it as you change yourself/);
-  expect(flat).toMatch(/Everything outside `body\/`, `brain\/`, their tests and `BACKLOG\.md` \(the kernel, its tests, the project files\) is yours to change as well/);
-  expect(flat).toContain('`TENERAL_KERNEL`');
+  expect(flat).toMatch(/A stem supervises you, as a brainstem does: it keeps you alive, and you do not steer it\. It is code in this same repository, in `stem\/`\. Beside it are `immune\/`, .*`species\/`, .*`keeper\/`, your owner's tools\. You may change all of it as you change yourself/);
+  expect(flat).toMatch(/Everything outside `body\/`, `brain\/`, their tests and `BACKLOG\.md` \(the stem, its tests, the project files\) is yours to change as well/);
+  expect(flat).toContain('`TENERAL_APPROVAL`');
   for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
   expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body and brain/);
-  expect(flat).toMatch(/`\/approve` in their terminal or `\.\/box approve`/);
+  expect(flat).toMatch(/`\/approve` in their terminal or `\.\/nest approve`/);
   expect(flat).toMatch(/you call `mutate` again for the same commit/);
   expect(flat).toMatch(/a later commit that changes only your body and brain passes on it/);
-  expect(flat).toMatch(/With `off` such a commit is refused at gate `kernel`/);
+  expect(flat).toMatch(/With `off` such a commit is refused at gate `stem`/);
   expect(flat).toMatch(/it is not counted against the commit/);
-  expect(flat).toMatch(/`site\/`, `docs\/`, `\.github\/`, `README\.md` and `LICENSE` are run by no kernel/);
+  expect(flat).toMatch(/`site\/`, `docs\/`, `\.github\/`, `README\.md` and `LICENSE` are run by no stem/);
 });
 
-test('it says that the new kernel is started by the launcher, which puts a generation back when that kernel fails, and that the cage is the owner\'s', () => {
-  expect(flat).toMatch(/the kernel that judges it is the one running, not the one in the commit/);
-  expect(flat).toMatch(/a small launcher, which no mutation changes, starts the kernel of your new generation/);
+test('it says that the new stem is started by the launcher, which puts a generation back when that stem fails, and that the cage is the owner\'s', () => {
+  expect(flat).toMatch(/the stem that judges it is the one running, not the one in the commit/);
+  expect(flat).toMatch(/a small launcher, which no mutation changes, starts the stem of your new generation/);
   expect(flat).toMatch(/the launcher puts you back on the generation before/);
-  expect(flat).toMatch(/A kernel that starts and then judges wrongly is caught by nobody but you and your owner/);
-  expect(flat).toMatch(/`box`, the `Dockerfile` and the launcher \(`kernel\/launcher\.ts`\) are your owner's install, the cage/);
+  expect(flat).toMatch(/A stem that starts and then judges wrongly is caught by nobody but you and your owner/);
+  expect(flat).toMatch(/`nest`, the `Dockerfile` and the launcher \(`stem\/launcher\.ts`\) are your owner's install, the cage/);
   expect(flat).toMatch(/no mutation puts it into effect/);
   expect(flat).toMatch(/your owner must update the install/);
 });
@@ -279,7 +279,7 @@ test('it says that the new kernel is started by the launcher, which puts a gener
 test('it says what the species is and how what it brings is taken: a merge, which waits for the owner like any change outside the body', () => {
   expect(flat).toMatch(/a git ref named by `TENERAL_UPSTREAM`/);
   expect(flat).toMatch(/`origin\/main` where the repository has a remote `origin`, else the branch your owner's checkout is on/);
-  expect(flat).toMatch(/Nothing obliges your kernel to equal the species'/);
+  expect(flat).toMatch(/Nothing obliges your stem to equal the species'/);
   const steps = ['`git fetch origin`', '`git merge origin/main`', '`git checkout origin/main -- <path>`', 'Run `bun run check` and `bun test`', 'Tell your owner what the species brings'].map((phrase) => flat.indexOf(phrase));
   expect(steps.every((at) => at !== -1)).toBe(true);
   expect([...steps].sort((a, b) => a - b)).toEqual(steps);
@@ -288,11 +288,11 @@ test('it says what the species is and how what it brings is taken: a merge, whic
   expect(flat).toMatch(/Offering a change of your own back is a path of its own/);
 });
 
-test('it says how to offer a change to the species, as the kernel checks it, and that going public is the owner\'s decision', async () => {
-  const { SECTIONS, WAITING } = await import('../../kernel/offer');
+test('it says how to offer a change to the species, as the stem checks it, and that going public is the owner\'s decision', async () => {
+  const { SECTIONS, WAITING } = await import('../../species/offer');
   expect(prompt).toContain('## Offering a change to the species');
   for (const section of SECTIONS) expect(flat).toContain(`\`${section}\``);
-  for (const command of ['sign', 'check', 'publish']) expect(flat).toContain(`\`bun kernel/offer.ts ${command} offer/<name>\``);
+  for (const command of ['sign', 'check', 'publish']) expect(flat).toContain(`\`bun species/offer.ts ${command} offer/<name>\``);
   expect(flat).toContain(`exits with ${WAITING} and sends nothing`);
   expect(flat).toMatch(/Never write an approval yourself and never touch `TENERAL_PUBLISH`/);
   expect(flat).toMatch(/Never anything from your soul, your journal or your inbox/);

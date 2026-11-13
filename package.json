@@ -12,8 +12,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun kernel/launcher.ts",
-    "box": "./box",
+    "start": "bun stem/launcher.ts",
+    "nest": "./nest",
     "test": "bun test",
     "check": "tsc --noEmit"
   },

@@ -115,7 +115,7 @@ test('a stimulus that arrives while the last reply is on its way gets another ro
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'stimulus', 'assistant', 'assistant']);
 });
 
-test('a kernel note that arrives while the last reply is on its way gets another round; other events do not', async () => {
+test('a stem note that arrives while the last reply is on its way gets another round; other events do not', async () => {
   const during = async (body: Parameters<typeof appendEvent>[2]) => {
     const s = setup([]);
     let calls = 0;

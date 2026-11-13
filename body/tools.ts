@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from '../kernel/envelope';
-import { git } from '../kernel/gates';
+import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
+import { git } from '../immune/gates';
 import { appendEvent } from '../brain/journal';
 import { keepImage, rootOf } from './images';
 import type { ToolSpec } from '../brain/provider';
@@ -208,7 +208,7 @@ const mutate: Tool = {
   spec: {
     name: 'mutate',
     description:
-      'Commit your workspace and ask the kernel to switch you onto it. The kernel runs the gates when this turn ends; ' +
+      'Commit your workspace and ask the stem to switch you onto it. The stem runs the gates when this turn ends; ' +
       'if they pass you restart on the new code, otherwise you restart on the current code with the reason. ' +
       'Everything in the workspace is committed, untracked files included, unless .gitignore names it.',
     parameters: params({ motive: 'One line: what changed and how you will know it helped' }),
@@ -238,7 +238,7 @@ const mutate: Tool = {
     ctx.mutationCommit = commit;
     // Shown so that a file committed by accident is noticed now, not at the gates.
     const changed = clip(git(ctx.workspace, 'diff', '--name-status', '--no-renames', ctx.gen, commit), 4000);
-    return `Mutation requested for ${commit}. The kernel runs the gates when this turn ends.\nChanged from the running generation:\n${changed}`;
+    return `Mutation requested for ${commit}. The stem runs the gates when this turn ends.\nChanged from the running generation:\n${changed}`;
   },
 };
 

@@ -1,5 +1,5 @@
 import { appendEvent, readEvents, type JournalEvent } from './journal';
-import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './memory';
+import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import type { Tool, ToolContext } from '../body/tools';
@@ -47,7 +47,7 @@ function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEF
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */
 function arrivedSince(journal: string, shown: number): boolean {
-  return readEvents(journal).slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || kernelNote(e) !== null);
+  return readEvents(journal).slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || stemNote(e) !== null);
 }
 
 /**
@@ -154,7 +154,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
       // Well-formed, too: half of a character pair in the journal would go into every later request.
       appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok, output: output.toWellFormed() });
     }
-    // A mutation that was requested before the interruption is the kernel's to judge now; the interruption is dropped.
+    // A mutation that was requested before the interruption is the stem's to judge now; the interruption is dropped.
     if (d.ctx.mutationCommit !== null) return 'mutation';
     if (d.signal?.aborted) return interrupted();
   }

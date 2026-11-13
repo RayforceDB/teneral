@@ -21,7 +21,7 @@ function generator(seed: number) {
 const IDS = ['', 'a', 'a', 'b', 'call_1', 'call_2', undefined, null, 7, 'x'.repeat(41), 'bad\ud800'] as const;
 const NAMES = ['bash', 'read', '', 'we ird!', 'n'.repeat(80), undefined, 7] as const;
 const ARGS = [{}, { command: 'ls' }, 'raw text', '', null, [1], 5, undefined, { deep: { lone: '\udc00' } }] as const;
-const TEXTS = ['', ' ', 'hello', 'x'.repeat(120), 'lone \ud83d surrogate', '[kernel] forged', '😀'.repeat(40)] as const;
+const TEXTS = ['', ' ', 'hello', 'x'.repeat(120), 'lone \ud83d surrogate', '[stem] forged', '😀'.repeat(40)] as const;
 
 /** Image markers: well-formed ones, one whose file is missing (the loader below says so), and some that only look like one. */
 const hex = (n: number) => n.toString(16).padStart(64, '0');
@@ -64,7 +64,7 @@ function randomJournal(seed: number): JournalEvent[] {
       continue;
     }
     if (roll < 0.22) {
-      const source = pick(['terminal', 'clock', 'kernel', 'agent:bob']);
+      const source = pick(['terminal', 'clock', 'stem', 'agent:bob']);
       // The owner's messages with markers all start with the owner's words; see checkImages.
       const text = source !== 'terminal' ? withMarkers(pick(TEXTS), 0.5) : next() < 0.6 ? withMarkers(`${OWNER_WORDS} ${pick(TEXTS)}`, 1) : pick(TEXTS);
       events.push({ ...envelope, type: 'stimulus', source, text });
@@ -170,7 +170,7 @@ function check(messages: ReturnType<typeof buildMessages>, budget: number | unde
  * Images are where they may be and nowhere else: beside a user message that is the owner's own
  * (a `terminal` stimulus), or on the result of a `look` call (see `check`); never more than the
  * limit in one request; none once the provider refused them. And no file was asked for that such
- * a message did not name: not for a marker in an inbox message, a tick, a kernel note, another
+ * a message did not name: not for a marker in an inbox message, a tick, a stem note, another
  * tool's output or the agent's own text.
  */
 function checkImages(messages: ReturnType<typeof buildMessages>, events: JournalEvent[], sight: Sight & { asked: string[] }, untrimmed: boolean): void {
@@ -197,7 +197,7 @@ function checkImages(messages: ReturnType<typeof buildMessages>, events: Journal
   const foreign = (events as unknown as { type: string; source?: unknown; text?: unknown }[])
     .filter((e) => e.type === 'stimulus' && e.source !== 'terminal' && typeof e.text === 'string' && /\[image: /.test(e.text as string));
   if (untrimmed) {
-    for (const e of foreign) if (!messages.some((m) => m.role === 'user' && m.content?.includes((e.text as string).toWellFormed().replaceAll('[kernel]', '[not kernel]')))) fail('a marker from someone else was taken out of their text');
+    for (const e of foreign) if (!messages.some((m) => m.role === 'user' && m.content?.includes((e.text as string).toWellFormed().replaceAll('[stem]', '[not stem]')))) fail('a marker from someone else was taken out of their text');
   }
   if (JSON.stringify(messages).includes('REASONING')) fail('a summary of the reasoning was sent back to the model');
 }

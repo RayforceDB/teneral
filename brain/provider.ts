@@ -1,6 +1,6 @@
 import type { ToolCall, Usage } from './journal';
-import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
-import { accessToken, apiBase } from '../kernel/signin';
+import { CHATGPT_USAGE_URL, providerFor, userAgent } from './providers';
+import { accessToken, apiBase } from './signin';
 import type { Image } from '../body/images';
 import { clip } from '../body/text';
 
@@ -229,7 +229,7 @@ export interface ResponsesConfig {
   /** The bearer token. Asked for before each request, and once more, naming the token refused, after a 401. */
   token: (rejected?: string) => Promise<string>;
   model: string;
-  /** Set where the provider wants function tools grouped in a namespace (kernel/providers.ts). */
+  /** Set where the provider wants function tools grouped in a namespace (brain/providers.ts). */
   namespace?: string;
   /** False where a summary of the reasoning must not be asked for. Default: asked for, and no longer once the provider refuses the field. */
   summaries?: boolean;
@@ -373,7 +373,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         if (options?.signal?.aborted) throw cancelled();
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
-          // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
+          // The user agent is teneral's own name and version (brain/providers.ts): the truth about who is asking.
           headers: { 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
           body: JSON.stringify(body),
           signal,
@@ -412,8 +412,8 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
 }
 
 /**
- * The provider this environment describes. `TENERAL_PROVIDER` names an entry of the kernel's table
- * (kernel/providers.ts); unset or unknown, it is chat-completions with a key, as it always was.
+ * The provider this environment describes. `TENERAL_PROVIDER` names an entry of the stem's table
+ * (brain/providers.ts); unset or unknown, it is chat-completions with a key, as it always was.
  *
  * A key in `TENERAL_API_KEY` is always used as it is, at `TENERAL_BASE_URL`: that is how the smoke
  * gate hands a body a dummy token. Only with no key does a sign-in provider open the owner's
@@ -421,7 +421,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
  * so the owner's token cannot be pointed anywhere else by a variable. The token is held in memory
  * only: never in the environment, the journal or the workspace.
  *
- * The kernel's setup (kernel/setup.ts) calls this too, for its test request. Keep its shape.
+ * The stem's setup (keeper/setup.ts) calls this too, for its test request. Keep its shape.
  */
 export function connect(env: Record<string, string | undefined>, send?: typeof fetch): Provider {
   const need = (name: string): string => {

@@ -37,7 +37,7 @@ test('a failure is the body\'s own, a refusal of this request, or something that
   expect(failureKind(refused(413, 'too many tokens'))).toBe('long');
 });
 
-test('three of a kind in a row: a refusal is put on the record, the body\'s own fault goes to the kernel, the rest is retried', () => {
+test('three of a kind in a row: a refusal is put on the record, the body\'s own fault goes to the stem, the rest is retried', () => {
   expect([1, 2, 3, 4].map((n) => verdict('refused', n))).toEqual(['retry', 'retry', 'record', 'record']);
   expect([1, 2, 3, 4].map((n) => verdict('own', n))).toEqual(['retry', 'retry', 'exit', 'exit']);
   expect([1, 2, 3, 50].map((n) => verdict('passing', n))).toEqual(['retry', 'retry', 'retry', 'retry']);

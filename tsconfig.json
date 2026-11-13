@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["kernel", "body", "brain", "test"]
+  "include": ["stem", "immune", "species", "keeper", "body", "brain", "test"]
 }

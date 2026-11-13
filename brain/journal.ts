@@ -5,14 +5,14 @@ import {
 import { dirname } from 'node:path';
 
 // The journal: the agent's memory as it lies on disk, one event a line, appended and never
-// rewritten. It is part of the brain. The kernel writes its own events here as well, with the
+// rewritten. It is part of the brain. The stem writes its own events here as well, with the
 // functions below, and reads the file to know what a generation did.
 //
 // This file is in brain/ and is the agent's to change, but not on its own word like the rest of
-// the brain: a change here waits for the owner's approval (HELD in kernel/protected.ts), as a
-// change to the kernel does. The journal is never rolled back with the code, so a form that was
+// the brain: a change here waits for the owner's approval (HELD in immune/protected.ts), as a
+// change to the stem does. The journal is never rolled back with the code, so a form that was
 // written once is read for good: by every later generation, by the one before this after a
-// rollback, by the kernel and by the owner's terminal. Add a field as optional, add a type that
+// rollback, by the stem and by the owner's terminal. Add a field as optional, add a type that
 // older readers pass over, and never change what an existing one means.
 
 /** Bump only with a reader that still understands every older version. */
@@ -38,20 +38,20 @@ export type BrainEvent =
   | { type: 'assistant'; text: string; toolCalls: ToolCall[]; usage?: Usage; reasoning?: string }
   | { type: 'tool.intent'; callId: string; name: string; args: unknown }
   | { type: 'tool.result'; callId: string; ok: boolean; output: string }
-  // The owner stopped the turn in progress (kernel/owner.ts). It ends that turn: nothing is owed after it.
+  // The owner stopped the turn in progress (keeper/owner.ts). It ends that turn: nothing is owed after it.
   // It came later too: a journal without one reads as before, and a reader from before it passes it by.
   | { type: 'turn.interrupted' }
   // The body's own record, for whatever it keeps outside the journal and must be able to build again
-  // from it. The kernel stores a note and never reads one; `noteProblem` says what it takes. It came
+  // from it. The stem stores a note and never reads one; `noteProblem` says what it takes. It came
   // later: no older journal holds one, and a reader that does not know the type passes it over.
   | { type: 'note'; kind: string; data: unknown };
 
 // What the journal holds is written by two hands: what the agent lives through, in the events of
-// BrainEvent above, and what the kernel did to it, in those of KernelEvent below.
-export type EventBody = BrainEvent | KernelEvent;
+// BrainEvent above, and what the stem did to it, in those of StemEvent below.
+export type EventBody = BrainEvent | StemEvent;
 
-export type KernelEvent =
-  // The body asks to be switched onto `commit`, and the kernel says no. (Yes is `generation.promoted`.)
+export type StemEvent =
+  // The body asks to be switched onto `commit`, and the stem says no. (Yes is `generation.promoted`.)
   | { type: 'mutation.requested'; commit: string; motive: string }
   | { type: 'mutation.rejected'; commit: string; gate: string; output: string }
   // The same two under the names they were first written by. Every journal from before the change
@@ -63,14 +63,14 @@ export type KernelEvent =
   | { type: 'generation.ready'; commit: string }
   | { type: 'generation.promoted'; commit: string; previous: string }
   | { type: 'generation.rolledback'; commit: string; to: string; reason: string }
-  // The owner approved a mutation that changes something outside the body (kernel/approval.ts).
-  // `route` says how: `./box approve`, or `/approve` in a talk client. It is a record: nothing is
+  // The owner approved a mutation that changes something outside the body (immune/approval.ts).
+  // `route` says how: `nest` for `./nest approve` (`box` while that script had that name), or `talk` for `/approve` in a talk client. It is a record: nothing is
   // owed for it, and a reader from before it passes it by.
-  | { type: 'mutation.approved'; commit: string; route: 'box' | 'talk' }
-  // The same record from when the kernel changed only by a merge of the species, and the owner
+  | { type: 'mutation.approved'; commit: string; route: 'nest' | 'box' | 'talk' }
+  // The same record from when the stem changed only by a merge of the species, and the owner
   // accepted the species commit. Older journals hold it; nothing writes it any more.
   | { type: 'species.accepted'; commit: string; route: 'box' | 'talk' }
-  // What this individual sent out to the species (kernel/offer.ts): a commit offered as a pull request,
+  // What this individual sent out to the species (species/offer.ts): a commit offered as a pull request,
   // and a witness report posted on somebody's. A record for the owner; neither wakes the body nor is a reply.
   | { type: 'offer.published'; commit: string; branch: string; url: string }
   | { type: 'offer.witnessed'; commit: string; pr: number; ok: boolean; url: string };
@@ -126,7 +126,7 @@ export function isMutationRequest(e: JournalEvent): e is MutationRequest {
   return eventName(e.type) === 'mutation.requested';
 }
 
-/** Whether `e` is the kernel rejecting one, under either name. */
+/** Whether `e` is the stem rejecting one, under either name. */
 export function isMutationRejection(e: JournalEvent): e is MutationRejection {
   return eventName(e.type) === 'mutation.rejected';
 }

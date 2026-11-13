@@ -3,10 +3,10 @@ FROM oven/bun:1.4.4
 # The repo is mounted here at run time; the image holds no project files.
 WORKDIR /teneral
 # git for the worktrees; procps because the body's tests look for processes with pgrep and pkill.
-# For organs (kernel/organs.ts), the release archives of native dependencies the agent adopts: curl,
+# For organs (immune/organs.ts), the release archives of native dependencies the agent adopts: curl,
 # tar and gzip to fetch one and look into it, and a C toolchain to build such a dependency from its
 # source when the agent works on a patch for it: clang with its sanitizer runtimes, and make.
-# openssh-client for ssh-keygen alone: the individual's signing key and its signatures (kernel/offerkey.ts).
+# openssh-client for ssh-keygen alone: the individual's signing key and its signatures (species/offerkey.ts).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates procps \
     curl tar gzip clang libclang-rt-dev libc6-dev make openssh-client \
@@ -25,5 +25,5 @@ RUN git config --global --add safe.directory '*' \
  && git config --global user.name teneral \
  && git config --global user.email teneral@localhost
 
-# The launcher, from the owner's checkout. It starts the kernel of whichever generation is current.
-CMD ["bun", "kernel/launcher.ts"]
+# The launcher, from the owner's checkout. It starts the stem of whichever generation is current.
+CMD ["bun", "stem/launcher.ts"]

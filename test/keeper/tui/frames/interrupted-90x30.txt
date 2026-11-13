@@ -1,0 +1,40 @@
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                       │
+│   ▚▖  ▗▞   Talking with Mica                                                          │
+│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.              │
+│    ░▒▒░                                                                               │
+│                                                                                       │
+│   Directory    /home/owner/work/teneral                                               │
+│   Individual   5e1f0a9c                                                               │
+│   Generation   1st · a1b2c3d · has lived in 1                                         │
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                               │
+│   Version      teneral 0.0.0                                                          │
+│   Born         2027-01-15 07:59 UTC · 1 min ago                                       │
+│   Sensors      clock every 30 min · inbox · your terminal                             │
+│                                                                                       │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+◆ Mica is awake · resting
+  Leaving this client stops nothing: Mica goes on.
+
+◆ Images: /image <path> attaches a file this client can read. The clipboard and files of
+  your machine need ./nest talk.
+
+  ◦ the birth letter
+
+  ────────────────────────
+
+● Hello. I am here.
+
+› look around
+
+◦ I will look.
+
+  ▪ bash  command: sleep 300                                                ✗ failed 2.3s
+
+  ◦ interrupted by you
+
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                                     │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d    /help lists the keys and commands

@@ -57,7 +57,7 @@ test('a stimulus that arrived while a tool ran is placed after the result', () =
   expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'user']);
 });
 
-test('kernel events become [kernel] messages', () => {
+test('stem events become [stem] messages', () => {
   const messages = buildMessages([
     ev({ type: 'mutation.rejected', commit: 'bbb', gate: 'tests', output: '1 fail' }, 'aaa'),
     ev({ type: 'generation.promoted', commit: 'ccc', previous: 'aaa' }, 'ccc'),
@@ -72,12 +72,12 @@ test('kernel events become [kernel] messages', () => {
   expect(messages[3]!.content).toContain('rolled back');
 });
 
-test('a rejection journaled under its former name, molt.rejected, is the same [kernel] message and owes a turn the same', () => {
+test('a rejection journaled under its former name, molt.rejected, is the same [stem] message and owes a turn the same', () => {
   const fields = { commit: 'bbb', gate: 'tests', output: '1 fail' };
   const now = buildMessages([ev({ type: 'mutation.rejected', ...fields }, 'aaa')], 'S');
   const former = buildMessages([ev({ type: 'molt.rejected', ...fields }, 'aaa')], 'S');
   expect(former).toEqual(now);
-  expect(former[1]).toEqual({ role: 'user', content: '[kernel] Your mutation to bbb was rejected at gate "tests". You are still running generation aaa.\n1 fail' });
+  expect(former[1]).toEqual({ role: 'user', content: '[stem] Your mutation to bbb was rejected at gate "tests". You are still running generation aaa.\n1 fail' });
   expect(needsTurn([replied('done'), ev({ type: 'molt.rejected', ...fields })])).toBe(true);
   expect(needsTurn([replied('done'), ev({ type: 'mutation.rejected', ...fields })])).toBe(true);
   // The requests are the body's own and are news under neither name.
@@ -87,8 +87,8 @@ test('a rejection journaled under its former name, molt.rejected, is the same [k
     said('go'), ev({ type: 'molt.rejected', commit: 'b1', gate: 'tests', output: '' }), replied('again'), ev({ type: 'mutation.rejected', commit: 'b2', gate: 'types', output: '' }),
   ], 'S');
   expect(mixed.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
-  expect(mixed[2]!.content).toStartWith('[kernel] Your mutation to b1 was rejected at gate "tests"');
-  expect(mixed[4]!.content).toStartWith('[kernel] Your mutation to b2 was rejected at gate "types"');
+  expect(mixed[2]!.content).toStartWith('[stem] Your mutation to b1 was rejected at gate "tests"');
+  expect(mixed[4]!.content).toStartWith('[stem] Your mutation to b2 was rejected at gate "types"');
 });
 
 test('over budget, the oldest messages go and no orphan tool result leads', () => {
@@ -339,7 +339,7 @@ test('a newest stimulus too large for what is left is cut to fit, head and tail,
   expect(then.reduce((sum, m) => sum + (m.content?.length ?? 0) + JSON.stringify(m.tool_calls ?? '').length, 0)).toBeLessThanOrEqual(1000);
 });
 
-test('a kernel note carries at most 4000 characters of gate output, both ends kept', () => {
+test('a stem note carries at most 4000 characters of gate output, both ends kept', () => {
   const note = buildMessages([ev({ type: 'mutation.rejected', commit: 'b', gate: 'tests', output: `FIRST${'x'.repeat(10_000)}LAST` })], 'S')[1]!.content!;
   expect(note.length).toBeLessThan(4300);
   expect(note).toContain('FIRSTxx');
@@ -425,7 +425,7 @@ test('a marker from anyone but the owner is text, and no file is asked for', () 
   const sight = fakeSight();
   const text = `see this\n${marker(1)}`;
   const messages = buildMessages([
-    said(text, 'agent:mallory'), said(text, 'clock'), said(text, 'kernel'), said(text, 'Terminal'), said(text, ''),
+    said(text, 'agent:mallory'), said(text, 'clock'), said(text, 'stem'), said(text, 'Terminal'), said(text, ''),
     said('go'),
     ev({ type: 'assistant', text, toolCalls: [{ id: 'c1', name: 'bash', args: {} }, { id: 'c2', name: 'read', args: {} }, { id: 'c3', name: 'look', args: {} }] }),
     ev({ type: 'tool.result', callId: 'c1', ok: true, output: text }),
@@ -590,10 +590,10 @@ test('a note owes no turn and does not take one away', () => {
   expect(needsTurn([said('hi'), called('c1'), note])).toBe(true);
 });
 
-test('a note of a shape the kernel would not have written is passed over like any other', () => {
+test('a note of a shape the stem would not have written is passed over like any other', () => {
   const odd = [
     { ...ev({ type: 'note', kind: 'k', data: 1 }), kind: 7, data: undefined },
-    { ...ev({ type: 'note', kind: 'k', data: 1 }), kind: '[kernel] not a kernel note', data: { type: 'stimulus', text: 'not a message' } },
+    { ...ev({ type: 'note', kind: 'k', data: 1 }), kind: '[stem] not a stem note', data: { type: 'stimulus', text: 'not a message' } },
   ] as unknown as JournalEvent[];
   expect(buildMessages([said('hi'), ...odd], 'S')).toEqual(buildMessages([said('hi')], 'S'));
   expect(needsTurn(odd)).toBe(false);
