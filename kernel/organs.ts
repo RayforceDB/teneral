@@ -18,9 +18,15 @@ import { createGunzip } from 'node:zlib';
 //
 // Nothing here reaches the network, and nothing here deletes an archive or a tree.
 
-/** Where the pins are, in every commit that has any. */
+/** Where the body's pins are, in every commit that has any: what it acts with. */
 export const ORGANS_FILE = 'body/organs.json';
-/** Organs one body may pin. */
+/**
+ * Where the brain's pins are: the engines it remembers and thinks with, such as the database its
+ * memory lives in. They are no organs of the body, but they are pinned, cached, checked, handed
+ * over and rolled back by exactly the same means, and found by name in the same directory.
+ */
+export const ENGINES_FILE = 'brain/engines.json';
+/** Organs and engines one individual may pin, together. */
 export const MAX_ORGANS = 16;
 /** Bytes of one archive as it lies in the cache. */
 export const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
@@ -54,14 +60,33 @@ function inside(path: string): string[] | null {
   return parts.includes('..') ? null : parts;
 }
 
+/** What one commit pins: the text of its body/organs.json and of its brain/engines.json, each null when the commit has no such file. */
+export interface Pins {
+  organs: string | null;
+  engines: string | null;
+}
+
+/**
+ * Everything a commit pins, the body's organs and the brain's engines, as one list: each is found
+ * by its name in TENERAL_ORGANS, so a name stands for one thing. Throws as `parseOrgans` does.
+ */
+export function parsePins(pins: Pins): Organ[] {
+  const organs = parseOrgans(pins.organs);
+  const engines = parseOrgans(pins.engines, ENGINES_FILE);
+  const twice = engines.find((engine) => organs.some((organ) => organ.name === engine.name));
+  if (twice !== undefined) throw new Error(`${ENGINES_FILE}: ${twice.name} is pinned in ${ORGANS_FILE} as well; a name stands for one thing`);
+  if (organs.length + engines.length > MAX_ORGANS) throw new Error(`${ORGANS_FILE} and ${ENGINES_FILE} pin ${organs.length + engines.length} together; the limit is ${MAX_ORGANS}`);
+  return [...organs, ...engines];
+}
+
 /**
  * The pins a body holds. `text` is what `body/organs.json` contains, or null when the commit has
  * no such file: that, and `{}`, mean no organs. Throws, naming the organ and the field, for
  * anything that is not exactly the shape; a field nobody defined is refused, not ignored.
  */
-export function parseOrgans(text: string | null): Organ[] {
+export function parseOrgans(text: string | null, file: string = ORGANS_FILE): Organ[] {
   if (text === null) return [];
-  const bad = (what: string): never => { throw new Error(`${ORGANS_FILE}: ${what}`); };
+  const bad = (what: string): never => { throw new Error(`${file}: ${what}`); };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -494,19 +519,20 @@ export async function provideOrgans(root: string, organs: readonly Organ[], o: {
   }
 }
 
-// `bun kernel/organs.ts`, run in a checkout: does for the pins in its body/organs.json, as the file
-// stands there, what the gate will do for the commit, and prints the directory to use as TENERAL_ORGANS.
+// `bun kernel/organs.ts`, run in a checkout: does for the pins in its body/organs.json and brain/engines.json,
+// as the files stand there, what the gate will do for the commit, and prints the directory to use as TENERAL_ORGANS.
 if (import.meta.main) {
   // Loaded here, not at the top: gates.ts builds on this file.
   const { repoRoot, tryOrgans } = await import('./gates');
   const file = join(process.cwd(), ORGANS_FILE);
+  const read = (path: string): string | null => (existsSync(join(process.cwd(), path)) ? readFileSync(join(process.cwd(), path), 'utf8') : null);
   const tmp = mkdtempSync(join(tmpdir(), 'teneral-organs-'));
   let status = 1;
   try {
     const root = repoRoot(process.cwd());
-    const tried = await tryOrgans(root, parseOrgans(existsSync(file) ? readFileSync(file, 'utf8') : null), tmp);
+    const tried = await tryOrgans(root, parsePins({ organs: read(ORGANS_FILE), engines: read(ENGINES_FILE) }), tmp);
     if (tried.problem !== undefined) console.error(tried.problem);
-    else if (tried.dir === null) console.error(`${file} pins no organs. Archives go to ${organCache(root).archives}/<sha256>.tar.gz`);
+    else if (tried.dir === null) console.error(`${file} pins no organs, and ${ENGINES_FILE} no engines. Archives go to ${organCache(root).archives}/<sha256>.tar.gz`);
     else console.log(tried.dir);
     status = tried.problem === undefined ? 0 : 1;
   } catch (err) {

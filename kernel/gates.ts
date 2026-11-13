@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEvent, readEvents } from './journal';
-import { ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parseOrgans, provideOrgans, type Organ } from './organs';
+import { ENGINES_FILE, ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parsePins, provideOrgans, type Organ, type Pins } from './organs';
 import { protectedChanges } from './protected';
 import { judgeApproval, type ApprovalOptions } from './approval';
 
@@ -196,9 +196,14 @@ export function linkModules(root: string, dir: string): void {
 }
 
 /** What `commit` pins as its organs: the text of its body/organs.json, or null when it has no such file. */
-export function organsAt(dir: string, commit: string): string | null {
-  if (gitPaths(dir, 'ls-tree', '-z', '--name-only', commit, '--', ORGANS_FILE).length === 0) return null;
-  return gitRaw(dir, 'show', `${commit}:${ORGANS_FILE}`);
+export function organsAt(dir: string, commit: string, file: string = ORGANS_FILE): string | null {
+  if (gitPaths(dir, 'ls-tree', '-z', '--name-only', commit, '--', file).length === 0) return null;
+  return gitRaw(dir, 'show', `${commit}:${file}`);
+}
+
+/** Everything `commit` pins: its body's organs and its brain's engines (kernel/organs.ts). */
+export function pinsAt(dir: string, commit: string): Pins {
+  return { organs: organsAt(dir, commit), engines: organsAt(dir, commit, ENGINES_FILE) };
 }
 
 /** The main checkout of the repo that `dir` (possibly one of its worktrees) belongs to. */
@@ -566,7 +571,7 @@ export async function runGates(
   const smoke = opts.smoke ?? checks === DEFAULT_CHECKS;
   const graceMs = opts.killGraceMs ?? 5_000;
   let root: string;
-  let pins: string | null;
+  let pins: Pins;
   try {
     // These two say early, in the agent's own terms, why its worktree is not what it asked for.
     if (git(dir, 'rev-parse', 'HEAD') !== to) return fail('head', `the candidate is not at ${to}`);
@@ -583,13 +588,13 @@ export async function runGates(
     if (odd.length > 0) {
       return fail('body', `body/ and brain/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
     }
-    pins = organsAt(dir, to);
+    pins = pinsAt(dir, to);
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));
   }
   let organs: Organ[];
   try {
-    organs = parseOrgans(pins);
+    organs = parsePins(pins);
   } catch (err) {
     return fail('organs', err instanceof Error ? err.message : String(err));
   }

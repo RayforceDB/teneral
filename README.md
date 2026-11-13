@@ -13,7 +13,7 @@ The question behind it is whether an agent can get better by rewriting its harne
 Three parts in one repository, and three directories that belong to one individual and are never committed.
 
 - `kernel/` is a small supervisor. It starts the agent, checks every new generation, and puts back the previous one when a new one fails. The agent may change it as well, but a mutation that changes anything [outside the body](#outside-the-body) waits for your approval; and the launcher that starts a kernel, and goes back from one that does not work, is yours alone.
-- `brain/` is what the agent thinks and remembers with: how it calls the model (`brain/provider.ts`), its memory, which decides what of the journal is in mind for a request (`brain/memory.ts`), and the turn itself (`brain/loop.ts`).
+- `brain/` is what the agent thinks and remembers with: how it calls the model (`brain/provider.ts`), its memory, which decides what of the journal is in mind for a request (`brain/memory.ts`), the turn itself (`brain/loop.ts`), and the prompt it is given with its soul (`brain/prompt.md`, `brain/soul.ts`). One file there is not changed on its word alone: `brain/journal.ts`, the form of what it writes into its journal, waits for your approval like a change to the kernel, because a journal is never rewritten and never rolled back with the code.
 - `body/` is what it acts and senses with: its tools, its sensors, and `body/main.ts`, where the kernel starts it. Brain and body are the agent's own: it rewrites both on its own word. Nothing limits their size: how much of itself the agent can hold in mind is the agent's to manage.
 - `memory/journal.jsonl` is the agent's history, append-only. Every event carries the commit of the code that wrote it, so generations can be compared.
 - `soul/` holds a few Markdown files the agent writes about who it is and who it works with. They are part of every request to the model.
@@ -46,7 +46,9 @@ The agent is woken by sensors, not only by you typing: your lines are one, a clo
 
 ## Organs
 
-An organ is a native dependency the agent adopts for its body: a program or a library that somebody else publishes as release archives, such as a database to build its memory on. The agent chooses it, pins it, and later upgrades it by itself. The mechanism knows nothing about any particular one.
+An organ is a native dependency the agent adopts for its body: a program or a library that somebody else publishes as release archives. The agent chooses it, pins it, and later upgrades it by itself. The mechanism knows nothing about any particular one.
+
+**The brain's engines.** What the agent remembers and thinks with is no organ of its body: the database its memory lives in belongs to its brain. Such an engine is pinned in `brain/engines.json`, in the same shape and by everything said below of an organ: the same cache, the same gate, the same directory in `TENERAL_ORGANS`, the same rollback. A name stands for one thing, so none may be pinned in both files, and the limit of 16 pins counts both.
 
 **The pin** is `body/organs.json`, a file of the body like any other, so it mutates and rolls back with the code that uses it:
 

@@ -7,7 +7,7 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
-import { birth, composeSystem } from './soul';
+import { birth, composeSystem } from '../brain/soul';
 import { TOOLS, type ToolContext } from './tools';
 
 function env(name: string): string {
@@ -38,7 +38,7 @@ const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
 const sight = { load: imageStore(rootOf(journal)), max: /^\d+$/.test(imagesSet) ? Number(imagesSet) : DEFAULT_IMAGES };
-const prompt = readFileSync(join(import.meta.dir, 'prompt.md'), 'utf8');
+const prompt = readFileSync(join(import.meta.dir, '..', 'brain', 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');

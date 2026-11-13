@@ -4,12 +4,12 @@ import {
 import { dirname, join } from 'node:path';
 import { identity } from './envelope';
 import {
-  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, protectedDiff, runGates, sh, type GateResult,
+  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, pinsAt, protectedDiff, runGates, sh, type GateResult,
 } from './gates';
 import {
   appendEvent, isMutationRejection, isMutationRequest, journalSize, readEvents, readEventsFrom, rejectionFor, type JournalEvent,
 } from './journal';
-import { parseOrgans, provideOrgans } from './organs';
+import { parsePins, provideOrgans } from './organs';
 import { authDir } from './providers';
 import { cageNotice, takeApprovals } from './approval';
 import { isInert } from './protected';
@@ -612,7 +612,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       // crash, and going back a generation would give up a sound one for a file the owner can put back.
       let organs: string | null;
       try {
-        const provided = await provideOrgans(p.root, parseOrgans(organsAt(p.root, gen)), { verify: false });
+        const provided = await provideOrgans(p.root, parsePins(pinsAt(p.root, gen)), { verify: false });
         if (provided.problem !== undefined) throw new Error(provided.problem);
         organs = provided.dir;
       } catch (err) {

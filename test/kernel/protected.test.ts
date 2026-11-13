@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { FREE, isProtected, protectedChanges } from '../../kernel/protected';
+import { FREE, HELD, isProtected, protectedChanges } from '../../kernel/protected';
 
 const free = [
   'body/main.ts',
@@ -13,6 +13,7 @@ const free = [
 
 const protectedPaths = [
   'kernel/gates.ts',
+  'brain/journal.ts',
   'test/kernel/a.test.ts',
   'probes/p1.json',
   'package.json',
@@ -50,6 +51,11 @@ const protectedPaths = [
 
 test('the allowlist is the agent, its tests and its notes', () => {
   expect(FREE).toEqual(['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md']);
+});
+
+test('the form of memory is held for the owner inside the brain, and nothing else there is', () => {
+  expect(HELD).toEqual(['brain/journal.ts']);
+  for (const path of ['brain/journal.ts.bak', 'brain/journal/x.ts', 'brain/memory.ts', 'body/journal.ts']) expect(isProtected(path)).toBe(false);
 });
 
 test.each(free)('free: %j', (path) => {

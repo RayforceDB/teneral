@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { JournalEvent } from '../kernel/journal';
-import type { Stimulus } from './sensors';
+import type { Stimulus } from '../body/sensors';
 
 /** Characters of soul shown per turn. The files themselves may be longer. */
 export const SOUL_CAP = 20_000;

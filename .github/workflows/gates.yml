@@ -52,8 +52,10 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           FREE: '^(body/|brain/|test/body/|test/brain/|BACKLOG\.md$)'
+          HELD: '^(brain/journal\.ts$)'
         run: |
-          outside="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD | grep -v -E "$FREE" || true)"
+          changed="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD)"
+          outside="$({ printf '%s\n' "$changed" | grep -v -E "$FREE" || true; printf '%s\n' "$changed" | grep -E "$HELD" || true; } | sed '/^$/d' | sort -u)"
           if [ -z "$outside" ]; then
             echo "This pull request changes only what a mutation changes without asking its owner: body/, brain/, their tests and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else

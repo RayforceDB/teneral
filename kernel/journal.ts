@@ -3,33 +3,19 @@ import {
   closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import type { BrainEvent } from '../brain/journal';
 
 /** Bump only with a reader that still understands every older version. */
 export const SCHEMA_VERSION = 1;
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  args: unknown;
-}
+export type { ToolCall, Usage } from '../brain/journal';
 
-/** What a provider said one request cost, in tokens. `cached` is the part of `input` it had kept from an earlier request. */
-export interface Usage {
-  input: number;
-  output: number;
-  cached?: number;
-}
+// What the journal holds is written by two hands. What the agent lives through, its memory, is in
+// the form its brain gives it (brain/journal.ts). What the kernel did to it is in the form below.
+// The envelope around both, and the file itself, are this module's.
+export type EventBody = BrainEvent | KernelEvent;
 
-export type EventBody =
-  | { type: 'stimulus'; source: string; text: string }
-  // `usage` and `reasoning` (a summary of the model's reasoning, for the owner to read) came later
-  // and are optional: every journal written before them, and any reply without them, reads as before.
-  | { type: 'assistant'; text: string; toolCalls: ToolCall[]; usage?: Usage; reasoning?: string }
-  | { type: 'tool.intent'; callId: string; name: string; args: unknown }
-  | { type: 'tool.result'; callId: string; ok: boolean; output: string }
-  // The owner stopped the turn in progress (kernel/owner.ts). It ends that turn: nothing is owed after it.
-  // It came later too: a journal without one reads as before, and a reader from before it passes it by.
-  | { type: 'turn.interrupted' }
+export type KernelEvent =
   // The body asks to be switched onto `commit`, and the kernel says no. (Yes is `generation.promoted`.)
   | { type: 'mutation.requested'; commit: string; motive: string }
   | { type: 'mutation.rejected'; commit: string; gate: string; output: string }
@@ -49,10 +35,6 @@ export type EventBody =
   // The same record from when the kernel changed only by a merge of the species, and the owner
   // accepted the species commit. Older journals hold it; nothing writes it any more.
   | { type: 'species.accepted'; commit: string; route: 'box' | 'talk' }
-  // The body's own record, for whatever it keeps outside the journal and must be able to build again
-  // from it. The kernel stores a note and never reads one; `noteProblem` says what it takes. It came
-  // later: no older journal holds one, and a reader that does not know the type passes it over.
-  | { type: 'note'; kind: string; data: unknown }
   // What this individual sent out to the species (kernel/offer.ts): a commit offered as a pull request,
   // and a witness report posted on somebody's. A record for the owner; neither wakes the body nor is a reply.
   | { type: 'offer.published'; commit: string; branch: string; url: string }

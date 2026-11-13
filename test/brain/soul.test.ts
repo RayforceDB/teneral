@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SOUL_CAP, birth, composeSystem, loadSoul } from '../../body/soul';
+import { SOUL_CAP, birth, composeSystem, loadSoul } from '../../brain/soul';
 import type { EventBody, JournalEvent } from '../../kernel/journal';
 
 function soulDir(files: Record<string, string> = {}): string {

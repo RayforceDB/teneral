@@ -9,6 +9,13 @@
  */
 export const FREE: readonly string[] = ['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md'];
 
+/**
+ * Paths inside the free directories that wait for the owner's approval all the same: the form of
+ * the agent's memory. What is written in it stays in the journal for good, whatever the code is
+ * rolled back to, so it is not changed on the agent's word alone.
+ */
+export const HELD: readonly string[] = ['brain/journal.ts'];
+
 /** Backslash, control characters and DEL never appear in a path we are willing to match. */
 const UNSAFE_CHARS = /[\\\x00-\x1f\x7f]/;
 
@@ -22,7 +29,7 @@ function isSuspect(path: string): boolean {
 
 /** Whether a change to `path` waits for the owner's approval: every path that is not one of the free ones. */
 export function isProtected(path: string): boolean {
-  if (isSuspect(path)) return true;
+  if (isSuspect(path) || HELD.includes(path)) return true;
   return !FREE.some((entry) => (
     entry.endsWith('/') ? path.startsWith(entry) && path.length > entry.length : path === entry
   ));

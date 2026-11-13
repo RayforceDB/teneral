@@ -7,11 +7,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { bodyEnv, git, organsAt, runGates, tryOrgans, type GateResult } from '../../kernel/gates';
+import { bodyEnv, git, organsAt, pinsAt, runGates, tryOrgans, type GateResult } from '../../kernel/gates';
 import { readEvents } from '../../kernel/journal';
 import {
-  MAX_ARCHIVE_BYTES, MAX_ENTRIES, MAX_ORGANS, MAX_UNPACKED_BYTES, ORGANS_FILE, archivePath, organCache, parseOrgans,
-  provideOrgans, treePath, type Organ,
+  ENGINES_FILE, MAX_ARCHIVE_BYTES, MAX_ENTRIES, MAX_ORGANS, MAX_UNPACKED_BYTES, ORGANS_FILE, archivePath, organCache, parseOrgans,
+  parsePins, provideOrgans, treePath, type Organ,
 } from '../../kernel/organs';
 import { init, paths, supervise } from '../../kernel/supervisor';
 import { commitAll, makeLineage, makeRepo, writeFiles } from './helpers';
@@ -652,7 +652,7 @@ test('bun kernel/organs.ts does for the workspace\'s pins what the gate will do,
   };
   const none = run(dir);
   expect(none).toMatchObject({ code: 0, out: '' });
-  expect(none.err).toContain(`pins no organs. Archives go to ${organCache(dir).archives}/<sha256>.tar.gz`);
+  expect(none.err).toContain(`pins no organs, and brain/engines.json no engines. Archives go to ${organCache(dir).archives}/<sha256>.tar.gz`);
 
   // Not committed yet: it is the file as it stands that is tried. From a worktree, the cache is the install's.
   init(dir);
@@ -692,3 +692,41 @@ test('the set of links is made again when it is not what the pins say', async ()
   const other = await provideOrgans(dir, parseOrgans(JSON.stringify(pinOf('other', sha(bytes)))), { verify: false });
   expect((other as { dir: string }).dir).not.toBe(set);
 });
+
+// --- the brain's engines ---
+
+test('the brain pins its engines in a file of its own, by the same shape; with the body\'s organs they are one list, and a name stands for one thing', () => {
+  expect(ENGINES_FILE).toBe('brain/engines.json');
+  const a = 'a'.repeat(64);
+  const b = 'b'.repeat(64);
+  expect(parsePins({ organs: null, engines: null })).toEqual([]);
+  expect(parsePins({ organs: JSON.stringify(pinOf('tool', a)), engines: JSON.stringify(pinOf('rayforce', b)) }).map((pin) => pin.name)).toEqual(['tool', 'rayforce']);
+  expect(() => parsePins({ organs: JSON.stringify(pinOf('rayforce', a)), engines: JSON.stringify(pinOf('rayforce', b)) })).toThrow('brain/engines.json: rayforce is pinned in body/organs.json as well');
+  expect(() => parsePins({ organs: null, engines: '{"rayforce": {"url": "http://example.org/x.tar.gz", "sha256": "no"}}' })).toThrow(/^brain\/engines\.json: organ rayforce: "url"/);
+  const many = (prefix: string, count: number) => JSON.stringify(Object.assign({}, ...Array.from({ length: count }, (_, i) => pinOf(`${prefix}${i}`, a))));
+  expect(() => parsePins({ organs: many('o', MAX_ORGANS - 1), engines: many('e', 2) })).toThrow(`pin ${MAX_ORGANS + 1} together`);
+});
+
+test('an engine pinned by the brain is judged, unpacked and handed over as an organ is, beside the body\'s own', async () => {
+  const engine = tarGz(tool('engine'));
+  const organ = tarGz(tool('organ'));
+  const { dir, seed } = makeLineage({ 'body/a.ts': 'export const a = 1;\n' });
+  writeFiles(dir, {
+    [ORGANS_FILE]: JSON.stringify(pinOf('tool', sha(organ), { dir: 'tool' })),
+    [ENGINES_FILE]: JSON.stringify(pinOf('rayforce', sha(engine), { dir: 'tool', check: ['bin/check'] })),
+  });
+  const next = commitAll(dir, 'pin both');
+  expect(pinsAt(dir, seed)).toEqual({ organs: null, engines: null });
+  expect(parsePins(pinsAt(dir, next)).map((pin) => pin.name)).toEqual(['tool', 'rayforce']);
+  // The engine's archive is not in the cache yet: the mutation is refused at the same gate, by the same words.
+  stock(dir, organ);
+  const missing = await runGates(dir, seed, next, NO_CHECKS);
+  expect(missing).toMatchObject({ ok: false, gate: 'organs' });
+  expect(missing.output).toContain('rayforce');
+  stock(dir, engine);
+  expect(await runGates(dir, seed, next, NO_CHECKS)).toEqual(OK);
+  const provided = await provideOrgans(dir, parsePins(pinsAt(dir, next)), { verify: false });
+  if (provided.problem !== undefined) throw new Error(provided.problem);
+  expect(readFileSync(join(provided.dir!, 'rayforce', 'hello.txt'), 'utf8')).toBe('engine\n');
+  expect(readFileSync(join(provided.dir!, 'tool', 'hello.txt'), 'utf8')).toBe('organ\n');
+}, SLOW);

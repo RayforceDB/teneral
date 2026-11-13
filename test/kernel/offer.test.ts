@@ -12,7 +12,7 @@ import {
 } from '../../kernel/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../kernel/offerkey';
 import { APPROVALS_DIR, APPROVAL_SUFFIX, approve, approved, tell } from '../../kernel/owner';
-import { FREE, isProtected } from '../../kernel/protected';
+import { FREE, HELD, isProtected } from '../../kernel/protected';
 import { userAgent } from '../../kernel/providers';
 import { talk } from '../../kernel/talk';
 import { startFakeHub, type FakeHub } from './fakehub';
@@ -784,11 +784,13 @@ test('the workflow that reports paths outside the body draws the line where the 
   const workflow = readFileSync(join(PROJECT, '.github', 'workflows', 'gates.yml'), 'utf8');
   const pattern = /FREE: '(.+)'/.exec(workflow)![1]!;
   const inside = new RegExp(pattern);
+  const held = new RegExp(/HELD: '(.+)'/.exec(workflow)![1]!);
   const samples = [
     ...FREE.flatMap((entry) => (entry.endsWith('/') ? [`${entry}x.ts`, `${entry}deep/x.ts`, entry.slice(0, -1), `x/${entry}y`] : [entry, `${entry}.bak`, `x/${entry}`])),
     'kernel/gates.ts', 'test/kernel/x.test.ts', 'README.md', 'BIRTH.md', 'box', '.github/workflows/gates.yml', 'bodyx/a.ts', 'test/bodyx.ts', 'BACKLOG.mdx',
+    ...HELD, ...HELD.map((path) => `${path}.bak`), 'body/journal.ts',
   ];
-  for (const path of samples) expect(`${path} ${inside.test(path)}`).toBe(`${path} ${!isProtected(path)}`);
+  for (const path of samples) expect(`${path} ${inside.test(path) && !held.test(path)}`).toBe(`${path} ${!isProtected(path)}`);
   const uses = [...workflow.matchAll(/uses: (\S+)/g)].map((m) => m[1]!);
   expect(uses.length).toBeGreaterThan(0);
   for (const action of uses) expect(action).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
