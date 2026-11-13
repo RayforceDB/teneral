@@ -52,7 +52,7 @@ export interface LaunchOptions {
 }
 
 const COMMIT = /^[0-9a-f]{40}$/;
-const UPDATE = 'the owner must update the install (git pull, then ./nest down and ./nest up)';
+const UPDATE = 'the owner must update the install (git pull, then ./one down and ./one up)';
 
 /** Null for what is not JSON: a file that is not there, a line that was torn. */
 function parsed(text: string): unknown {
@@ -261,7 +261,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.length === 0) process.exit(await launch({ root }));
   if (args.length === 1 && args[0] === 'home') {
-    // For ./nest: where the stem is that answers the owner's commands now, relative to the install.
+    // For ./one: where the stem is that answers the owner's commands now, relative to the install.
     // The checkout is taken as it stands, because a supervisor may be running from it.
     const stem = stemOf(root, join(root, '.teneral', 'live'));
     if (stem.problem !== null) console.error(`[teneral] launcher: the current generation's own stem is not used: ${stem.problem}`);

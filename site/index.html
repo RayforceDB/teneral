@@ -275,7 +275,7 @@
         <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
         <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its stem included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the stem's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
         <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
-        <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./nest back</code> returns to any earlier generation.</li>
+        <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./one back</code> returns to any earlier generation.</li>
       </ol>
     </div>
   </section>
@@ -318,9 +318,9 @@
 git clone https://github.com/RayforceDB/teneral.git
 cd teneral
 
-./nest up      <span class="c"># choose a model, then it is born</span>
-./nest talk    <span class="c"># attach a terminal; Ctrl+C leaves it running</span>
-./nest back    <span class="c"># return it to the generation before</span></pre>
+./one up      <span class="c"># choose a model, then it is born</span>
+./one talk    <span class="c"># attach a terminal; Ctrl+C leaves it running</span>
+./one back    <span class="c"># return it to the generation before</span></pre>
       <p style="margin-top:26px">The agent keeps running whether or not anyone is watching. It is woken by your words, a clock, messages from other individuals, and whatever senses it builds for itself.</p>
     </div>
   </section>

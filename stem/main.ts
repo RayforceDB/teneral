@@ -30,7 +30,7 @@ if (process.argv[2] === '--prepare') {
 const missing = missingConfig(process.env, root);
 if (missing.length > 0) {
   console.error(`Not configured: ${missing.join(', ')}.`);
-  console.error('Run ./nest setup to choose a model provider and test it, then start it again.');
+  console.error('Run ./one setup to choose a model provider and test it, then start it again.');
   process.exit(1);
 }
 

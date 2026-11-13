@@ -15,9 +15,9 @@
   Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage
 
   Next
-    ./nest up starts the agent with it.
-    One that is already running keeps its old configuration until ./nest down
-    and ./nest up.
+    ./one up starts the agent with it.
+    One that is already running keeps its old configuration until ./one down
+    and ./one up.
 
 
 

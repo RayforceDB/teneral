@@ -64,9 +64,9 @@ export type StemEvent =
   | { type: 'generation.promoted'; commit: string; previous: string }
   | { type: 'generation.rolledback'; commit: string; to: string; reason: string }
   // The owner approved a mutation that changes something outside the body (immune/approval.ts).
-  // `route` says how: `nest` for `./nest approve` (`box` while that script had that name), or `talk` for `/approve` in a talk client. It is a record: nothing is
+  // `route` says how: `one` for `./one approve` (`box` while that script had that name), or `talk` for `/approve` in a talk client. It is a record: nothing is
   // owed for it, and a reader from before it passes it by.
-  | { type: 'mutation.approved'; commit: string; route: 'nest' | 'box' | 'talk' }
+  | { type: 'mutation.approved'; commit: string; route: 'one' | 'box' | 'talk' }
   // The same record from when the stem changed only by a merge of the species, and the owner
   // accepted the species commit. Older journals hold it; nothing writes it any more.
   | { type: 'species.accepted'; commit: string; route: 'box' | 'talk' }

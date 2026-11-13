@@ -3,7 +3,7 @@ import { approveMutation, approvedSummary, chooseApproval } from '../immune/appr
 import { approvedLine, tell } from './owner';
 import { installRoot, paths, readState } from '../stem/supervisor';
 
-// `./nest approve`: the owner approves a mutation that changes something outside the agent's body,
+// `./one approve`: the owner approves a mutation that changes something outside the agent's body,
 // the stem included. With TENERAL_APPROVAL=ask, which is the default, the gate lets no such
 // mutation through until this, or `/approve` in a talk client, has been said for a commit that
 // holds outside the body what the candidate holds (immune/approval.ts). It can be said while the
@@ -36,7 +36,7 @@ export function main(args: string[], root: string, out: (line: string) => void, 
       err(`Not done: ${chosen.why}.`);
       return 1;
     }
-    approveMutation(root, p.journal, running, chosen.commit, 'nest');
+    approveMutation(root, p.journal, running, chosen.commit, 'one');
     tell(p.owner, approvedLine(chosen.commit));
     out(approvedSummary(chosen));
     out('A mutation that holds the same outside the body now goes on to the checks. The agent was told to ask again.');

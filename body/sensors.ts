@@ -119,7 +119,7 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
 }
 
 /**
- * Lines the owner typed somewhere else: `./nest talk` leaves each as a plain-text file in `dir`
+ * Lines the owner typed somewhere else: `./one talk` leaves each as a plain-text file in `dir`
  * (see keeper/owner.ts). They are the owner's words exactly as typed lines are, so the source is
  * 'terminal'. A name starting with a dot is a line still being written.
  *

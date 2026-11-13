@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 // The journal holds only the line; a body that knows the line shows the model the picture.
 //
 // The client runs inside the container, where there is no clipboard and no file of the owner's
-// machine. `./nest talk` therefore starts a helper on the host, and the two talk through files in
+// machine. `./one talk` therefore starts a helper on the host, and the two talk through files in
 // a directory of their own under the owner's channel: `Clip` below is the client's end of it.
 
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -335,12 +335,12 @@ export class Clip {
 /** What to install or do when the helper has no way to read the clipboard, in words for the owner. */
 export function whyNoClipboard(tool: ClipTool | null, there: boolean): string | null {
   if (!there) {
-    return 'This client was started without its helper on your machine (./nest talk starts one; a plain docker exec or bun keeper/talk.ts does not), so it cannot reach your clipboard. /image <path> still takes a file this client can read itself.';
+    return 'This client was started without its helper on your machine (./one talk starts one; a plain docker exec or bun keeper/talk.ts does not), so it cannot reach your clipboard. /image <path> still takes a file this client can read itself.';
   }
   switch (tool) {
-    case 'none wayland': return 'Your machine has no tool to read the clipboard with. On Wayland that is wl-paste: install the package wl-clipboard, then run ./nest talk again. /image <path> and dragging a file in work without it.';
-    case 'none x11': return 'Your machine has no tool to read the clipboard with. On X11 that is xclip: install the package xclip, then run ./nest talk again. /image <path> and dragging a file in work without it.';
-    case 'none headless': return 'The shell that ran ./nest talk has no display (neither WAYLAND_DISPLAY nor DISPLAY is set, as over SSH), so there is no clipboard to read. /image <path> and dragging a file in still work.';
+    case 'none wayland': return 'Your machine has no tool to read the clipboard with. On Wayland that is wl-paste: install the package wl-clipboard, then run ./one talk again. /image <path> and dragging a file in work without it.';
+    case 'none x11': return 'Your machine has no tool to read the clipboard with. On X11 that is xclip: install the package xclip, then run ./one talk again. /image <path> and dragging a file in work without it.';
+    case 'none headless': return 'The shell that ran ./one talk has no display (neither WAYLAND_DISPLAY nor DISPLAY is set, as over SSH), so there is no clipboard to read. /image <path> and dragging a file in still work.';
     case null: return 'The helper on your machine has not answered yet. Try again in a moment.';
     default: return null;
   }

@@ -54,8 +54,8 @@ export function someOf(paths: readonly string[], most = 8): string {
 
 // --- the owner's word ---
 
-/** How an approval reached the stem: `./nest approve`, or `/approve` in a talk client. */
-export type ApprovalRoute = 'nest' | 'talk';
+/** How an approval reached the stem: `./one approve`, or `/approve` in a talk client. */
+export type ApprovalRoute = 'one' | 'talk';
 
 /** What `.teneral/approval.json` holds. */
 export interface Approval {
@@ -80,7 +80,7 @@ export function readApproval(root: string): Approval {
   const commit = (v: unknown): string | undefined => (typeof v === 'string' && COMMIT.test(v) ? v : undefined);
   return {
     asked: commit(parsed.asked), approved: commit(parsed.approved),
-    route: parsed.route === 'nest' || parsed.route === 'talk' ? parsed.route : parsed.route === 'box' ? 'nest' : undefined,
+    route: parsed.route === 'one' || parsed.route === 'talk' ? parsed.route : parsed.route === 'box' ? 'one' : undefined,
     at: typeof parsed.at === 'string' ? parsed.at : undefined,
   };
 }
@@ -171,7 +171,7 @@ export function takeApprovals(root: string, owner: string, journal: string, gen:
         continue;
       }
       taken.push(commit);
-      // Said twice, or said here after `./nest approve` said it: it stands already, and the journal has it once.
+      // Said twice, or said here after `./one approve` said it: it stands already, and the journal has it once.
       if (readApproval(root).approved === commit) continue;
       approveMutation(root, journal, gen, commit, 'talk');
     } catch (err) {
@@ -209,7 +209,7 @@ export function launcherNeeded(dir: string, commit: string): number | null | { p
 }
 
 const AREA = FREE.map((entry) => `\`${entry}\``).join(', ');
-const UPDATE = 'your owner must update the install on their machine (git pull in the checkout, then ./nest down and ./nest up)';
+const UPDATE = 'your owner must update the install on their machine (git pull in the checkout, then ./one down and ./one up)';
 
 /**
  * Judge a candidate `to` that differs from the generation `from` in `changed`, paths outside the
@@ -248,7 +248,7 @@ export function judgeApproval(root: string, from: string, to: string, changed: s
       return { ok: false, gate: APPROVAL_GATE, undecided: true, output: `this commit changes ${stem.length === 1 ? '1 path' : `${stem.length} paths`} outside ${AREA}: ${someOf(stem)}\n`
         + `That is yours to change, but it becomes a generation only when your owner has approved it, and they have not approved this commit${approval.approved === undefined ? '' : ` (the last one approved is ${short(approval.approved)}, which holds something else there)`}. `
         + 'Nothing has been checked or run yet, and nothing is wrong with the commit so far.\n'
-        + `Ask your owner to approve commit ${short(to)}: /approve in ./nest talk, or ./nest approve ${short(to)} on their machine. Tell them which files you changed outside your body and why, and that you ran the tests. `
+        + `Ask your owner to approve commit ${short(to)}: /approve in ./one talk, or ./one approve ${short(to)} on their machine. Tell them which files you changed outside your body and why, and that you ran the tests. `
         + `When they have, ask again for this same commit; asking again before that only gets this answer again. A later commit that changes only ${AREA} needs no new approval.` };
     }
   }
@@ -262,7 +262,7 @@ export function judgeApproval(root: string, from: string, to: string, changed: s
  * generation's commit holds: the script that builds and runs the container, the image, and the
  * launcher the container starts.
  */
-export const CAGE: readonly string[] = ['nest', 'Dockerfile', '.dockerignore', 'stem/launcher.ts'];
+export const CAGE: readonly string[] = ['one', 'Dockerfile', '.dockerignore', 'stem/launcher.ts'];
 
 /**
  * Which cage files of the stem at `home` differ from the install's own at `root`. Only a stem
@@ -281,6 +281,6 @@ export function cageNotice(root: string, home: string): string | null {
   let differ: string[] = [];
   try { differ = cageDifferences(root, home); } catch { /* nothing to say */ }
   if (differ.length === 0) return null;
-  return `The running generation has other versions of ${differ.join(', ')} than this install. They are yours and were not changed: `
-    + 'look at the difference with git diff HEAD lineage/local, and take the species\' versions with git pull in this directory, then ./nest down and ./nest up.';
+  return `The running generation has other versions of these files than this install: ${differ.map((path) => `./${path}`).join(', ')}. They are yours and were not changed: `
+    + 'look at the difference with git diff HEAD lineage/local, and take the species\' versions with git pull in this directory, then ./one down and ./one up.';
 }

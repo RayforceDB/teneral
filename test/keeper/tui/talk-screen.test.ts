@@ -711,9 +711,9 @@ test('without a helper, or without a clipboard tool, Ctrl+V says precisely why a
   const bare = stage(100, 30);
   settled(bare);
   const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
-  expect(flowed(bare)).toContain('◆ Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./nest talk.');
+  expect(flowed(bare)).toContain('◆ Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./one talk.');
   bare.type('\x16');
-  expect(flowed(bare)).toContain(' This client was started without its helper on your machine (./nest talk starts one; a plain docker exec or bun keeper/talk.ts does not), so it cannot reach your clipboard.');
+  expect(flowed(bare)).toContain(' This client was started without its helper on your machine (./one talk starts one; a plain docker exec or bun keeper/talk.ts does not), so it cannot reach your clipboard.');
   // A file where the client itself can read it: under the repo, say.
   const local = join(bare.p.root, 'shot.png');
   writeFileSync(local, png(640, 480));
@@ -736,7 +736,7 @@ test('without a helper, or without a clipboard tool, Ctrl+V says precisely why a
   settled(gone);
   gone.type('\x16');
   gone.clock.at = 9000;
-  expect(gone.all()).toContain('  The helper on your machine did not answer. Leave and run ./nest talk again to start a new one.');
+  expect(gone.all()).toContain('  The helper on your machine did not answer. Leave and run ./one talk again to start a new one.');
   expect(readdirSync(gone.clip)).toEqual(['helper']);
 });
 
@@ -803,7 +803,7 @@ test('/quit, Ctrl-D on an empty line and Ctrl-C each leave the client only: the 
   for (const leave of ['/quit\r', '\x04', '\x03']) {
     const s = stage(80, 30, { open: false, name: 'Mica' });
     settled(s);
-    s.term.vt.write('$ ./nest talk\r\n');
+    s.term.vt.write('$ ./one talk\r\n');
     const done = s.app.run();
     s.say('hello again', 1000);
     s.journal({ type: 'assistant', text: 'Hello. Still here.', toolCalls: [] }, 2000);
@@ -820,8 +820,8 @@ test('/quit, Ctrl-D on an empty line and Ctrl-C each leave the client only: the 
     const left = s.term.vt.all();
     transcripts.push(left);
     // What was on the terminal before is still there, then the conversation, then one line saying what leaving meant. No box, no footer.
-    expect(left.startsWith('$ ./nest talk\n╭')).toBe(true);
-    expect(left.endsWith('› hello again\n\n● Hello. Still here.\n\n  You left. Mica goes on; ./nest talk attaches again.')).toBe(true);
+    expect(left.startsWith('$ ./one talk\n╭')).toBe(true);
+    expect(left.endsWith('› hello again\n\n● Hello. Still here.\n\n  You left. Mica goes on; ./one talk attaches again.')).toBe(true);
     expect(left).not.toMatch(/^│ ›|gpt-6\.1-sol  resting|\/quit/m);
     expect(left.match(/╭/g)).toHaveLength(1);
     // The cursor is on the row under the last one, where the shell's prompt goes.
@@ -852,7 +852,7 @@ test('leaving in the middle of a turn, with a line half typed and an image attac
   s.type('\x03');
   expect(await done).toBe(0);
   const left = s.term.vt.all();
-  expect(left.endsWith('› look\n\n  You left. The agent goes on; ./nest talk attaches again.')).toBe(true);
+  expect(left.endsWith('› look\n\n  You left. The agent goes on; ./one talk attaches again.')).toBe(true);
   expect(left).not.toMatch(/half typed|sleep 60|\[image 1|running/);
   expect(sentFiles(s)).toEqual([]);
 });
@@ -908,7 +908,7 @@ test('the individual is named once its soul names it, whatever the file is calle
   settled(down);
   down.alive.supervisor = false;
   down.app.open();
-  expect(down.all()).toContain('◆ Nobody is running here.\n  ./nest up starts the agent. What you send now waits for it.');
+  expect(down.all()).toContain('◆ Nobody is running here.\n  ./one up starts the agent. What you send now waits for it.');
   expect(ago(30_000)).toBe('just now');
   expect([ago(5 * 60_000), ago(7 * 3_600_000), ago(72 * 3_600_000)]).toEqual(['5 min ago', '7 h ago', '3 days ago']);
 });
@@ -995,7 +995,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
   const list = s.all();
   expect(list).toMatch(/ {2}── generations, oldest first ─+\n {4}a1b2c3d4a1b2 {2}ready 2027-\S+ +1 reply\n {2}\* e5f6a7b8e5f6 {2}ready 2027-\S+ +1 reply {2}current/);
   s.type('/plain\r');
-  expect(s.all()).toContain('./nest talk --plain is the same conversation as plain text.');
+  expect(s.all()).toContain('./one talk --plain is the same conversation as plain text.');
   s.type('/nonsense\r');
   expect(s.all()).toContain('/nonsense is not a command here, and was not sent. /help lists them.');
   expect(sentFiles(s)).toEqual([]);
@@ -1020,7 +1020,7 @@ test('the footer turns through tips, each naming a real key or command, and give
     seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-1)!)?.[1] ?? '');
   }
   expect([...seen].sort()).toEqual([
-    './nest talk --plain is this as plain text', '/generations lists the bodies it has lived in', '/help lists the keys and commands', '/history prints the earlier conversation',
+    './one talk --plain is this as plain text', '/generations lists the bodies it has lived in', '/help lists the keys and commands', '/history prints the earlier conversation',
     '/image <path> attaches an image file', 'Alt+Enter starts a new line', 'Ctrl+V attaches the clipboard\'s image', 'Ctrl-C leaves; the agent goes on', 'Esc interrupts what it is doing',
     'Tab shows what the tool calls returned', 'Up brings back what you sent before', 'drag an image file in to attach it',
   ]);
@@ -1346,7 +1346,7 @@ test('an interrupt that nothing answers is said to be unanswered after a few sec
   s.clock.at = 8000;
   expect(s.live()).toMatch(/Mica is running bash · 0:06 · interrupting …/);
   s.clock.at = 9200;
-  expect(flowed(s)).toContain('Mica has not stopped. A body from before interruptions does not hear them. Esc asks again; ./nest down stops it for certain.');
+  expect(flowed(s)).toContain('Mica has not stopped. A body from before interruptions does not hear them. Esc asks again; ./one down stops it for certain.');
   expect(s.live()).toMatch(/Mica is running bash · 0:07 · esc to interrupt/);
   s.type('\x1b');
   expect(channel(s)).toEqual([['.interrupt', '']]);
@@ -1424,10 +1424,10 @@ test('a mutation that waits for the owner is a notice that says so, with what it
 });
 
 test('when the generation has other cage files than the install, the owner is told under the welcome panel', () => {
-  const cage = 'The running generation has other versions of nest, Dockerfile than this install. They are yours and were not changed: look at them with git diff, and take them with git pull in this directory, then ./nest down and ./nest up.';
+  const cage = 'The running generation has other versions of these files than this install: ./one, ./Dockerfile. They are yours and were not changed: look at them with git diff, and take them with git pull in this directory, then ./one down and ./one up.';
   const s = stage(100, 40, { name: 'Mica', cage });
   settled(s);
-  expect(flowed(s)).toContain('The running generation has other versions of nest, Dockerfile than this install.');
+  expect(flowed(s)).toContain('The running generation has other versions of these files than this install: ./one, ./Dockerfile.');
   expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('generation has other versions');
 });
 

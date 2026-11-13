@@ -19,7 +19,7 @@
 
 ◆ Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage
 ◆ Images: /image <path> attaches a file this client can read. The clipboard and
-  files of your machine need ./nest talk.
+  files of your machine need ./one talk.
 
   ◦ the birth letter
 

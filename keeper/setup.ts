@@ -5,7 +5,7 @@ import { ProviderError, connect, type Provider } from '../brain/provider';
 import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, userAgent, type ProviderEntry } from '../brain/providers';
 import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } from '../brain/signin';
 
-// The owner's first-run setup: `./nest setup`. It offers the providers in brain/providers.ts, asks
+// The owner's first-run setup: `./one setup`. It offers the providers in brain/providers.ts, asks
 // for what the chosen one needs (a key, or a sign-in at OpenAI), makes two real requests through
 // the code the body will use, and only when both come back right writes `.env`.
 //
@@ -21,13 +21,13 @@ export interface Io {
   ask: (question: string, o?: { hidden?: boolean }) => Promise<string | null>;
 }
 
-/** Exit status: the chosen provider signs in through a browser, and the port for its way back is not open yet. See `nest`. */
+/** Exit status: the chosen provider signs in through a browser, and the port for its way back is not open yet. See `one`. */
 export const NEEDS_CALLBACK = 76;
 
 /** The variables the setup decides. Everything else in an existing `.env` is the owner's and is kept. */
 const MANAGED = ['TENERAL_PROVIDER', 'TENERAL_BASE_URL', 'TENERAL_API_KEY', 'TENERAL_MODEL'];
 
-const FRESH = `# Written by ./nest setup. Run it again to change the provider.
+const FRESH = `# Written by ./one setup. Run it again to change the provider.
 # Values go in plain: no quotes, no comment after a value. Docker passes the line on as written.
 `;
 const OTHER_SETTINGS = `# Minutes between clock stimuli. 0 turns the clock off.
@@ -184,7 +184,7 @@ export interface Dialogue {
   key: (baseUrl: string) => Promise<string | null>;
   /** The last answer cannot be used; the question comes again. */
   problem: (why: string) => void;
-  /** The provider chosen signs in through a browser, and `nest` has to run the setup again with the way back open. */
+  /** The provider chosen signs in through a browser, and `one` has to run the setup again with the way back open. */
   handOver: () => void;
   /** Signed in here before: whether it is that account again. */
   sameAccount: (email: string) => Promise<boolean | null>;
@@ -284,7 +284,7 @@ export function plainDialogue(io: Io): Dialogue {
 
 /** Said once after a first sign-in: whose plan pays, and where that is managed. */
 export const PLAN_NOTICE = `You're using your ChatGPT plan: requests the agent makes use your plan or its credits. You can review and limit that in ChatGPT settings: ${CHATGPT_USAGE_URL}`;
-export const NEXT_STEP = './nest up starts the agent with it. One that is already running keeps its old configuration until ./nest down and ./nest up.';
+export const NEXT_STEP = './one up starts the agent with it. One that is already running keeps its old configuration until ./one down and ./one up.';
 
 export interface SetupOptions {
   root: string;
@@ -533,7 +533,7 @@ export function terminalIo(input: NodeJS.ReadStream = process.stdin, output: Nod
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (!process.stdin.isTTY) {
-    console.error('The setup asks questions and needs a terminal. Run ./nest setup from one.');
+    console.error('The setup asks questions and needs a terminal. Run ./one setup from one.');
     process.exit(1);
   }
   const options = { root: join(import.meta.dir, '..'), env: process.env, callback: !args.includes('--no-callback'), resume: args.includes('--resume') };

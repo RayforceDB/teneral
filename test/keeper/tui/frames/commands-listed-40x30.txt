@@ -27,7 +27,7 @@
 
 ◆ Images: /image <path> attaches a file
   this client can read. The clipboard
-  and files of your machine need ./nest
+  and files of your machine need ./one
   talk.
 
   ◦ the birth letter

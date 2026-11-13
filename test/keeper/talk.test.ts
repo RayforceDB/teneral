@@ -552,7 +552,7 @@ test('piped /stop with the agent at rest sends nothing, says so, and the lines a
 
 test('an approval prints as one stem line that says how it was given, and moves no turn; so does an acceptance in an older journal', () => {
   expect(render(ev({ type: 'mutation.approved', commit: B, route: 'talk' }))).toBe('[stem] mutation to bbbbbbbbbbbb approved by the owner (/approve)');
-  expect(render(ev({ type: 'mutation.approved', commit: B, route: 'nest' }))).toBe('[stem] mutation to bbbbbbbbbbbb approved by the owner (./nest approve)');
+  expect(render(ev({ type: 'mutation.approved', commit: B, route: 'one' }))).toBe('[stem] mutation to bbbbbbbbbbbb approved by the owner (./one approve)');
   expect(render(ev({ type: 'species.accepted', commit: B, route: 'talk' }))).toBe('[stem] species commit bbbbbbbbbbbb accepted by the owner (/accept)');
   for (const type of ['mutation.approved', 'species.accepted'] as const) {
     expect(track(AT_REST, ev({ type, commit: B, route: 'talk' }))).toEqual(AT_REST);
@@ -630,7 +630,7 @@ test('a line that only starts like /approve is a line for the agent', async () =
 
 test('when the generation has other cage files than the install, a person attaching is told once, after the banner; a script is not', async () => {
   const s = setup();
-  const cage = 'The running generation has other versions of nest than this install.';
+  const cage = 'The running generation has other versions of these files than this install: ./one.';
   expect(await talk({ ...s.base, lines: from('/quit'), interactive: true, banner: 'Using ChatGPT plan.', cage })).toBe(0);
   expect(s.notes.slice(0, 2)).toEqual(['Using ChatGPT plan.', cage]);
   const piped = setup();

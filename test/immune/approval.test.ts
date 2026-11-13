@@ -56,8 +56,8 @@ test('ask: a commit that changes the stem waits at gate approval, undecided, wit
   const r = await gate(work, seed, next, { mode: 'ask' });
   expect(r).toMatchObject({ ok: false, gate: 'approval', undecided: true });
   expect(r.output.split('\n')[0]).toBe('this commit changes 3 paths outside `body/`, `brain/`, `test/body/`, `test/brain/`, `BACKLOG.md`: package.json, stem/k.ts, stem/new.ts');
-  expect(r.output).toContain(`./nest approve ${next.slice(0, 12)}`);
-  expect(r.output).toContain('/approve in ./nest talk');
+  expect(r.output).toContain(`./one approve ${next.slice(0, 12)}`);
+  expect(r.output).toContain('/approve in ./one talk');
   expect(r.output).toContain('ask again for this same commit');
   expect(readApproval(root)).toMatchObject({ asked: next });
   expect(readApproval(root).approved).toBeUndefined();
@@ -69,7 +69,7 @@ test('an approval is for what a commit holds outside the body: a later commit th
   const { root, work, seed } = local();
   const p = paths(root);
   const next = change(work, { 'stem/k.ts': 'export const k = 2;\n' });
-  approveMutation(root, p.journal, seed, next, 'nest');
+  approveMutation(root, p.journal, seed, next, 'one');
   expect(await gate(work, seed, next, { mode: 'ask' })).toEqual(PASSED);
   const mended = change(work, { 'body/a.ts': 'export const a = 3;\n' });
   expect(await gate(work, seed, mended, { mode: 'ask' })).toEqual(PASSED);
@@ -88,7 +88,7 @@ test('an approval is for what a commit holds outside the body: a later commit th
 test('a merge of the species is a change outside the body like any other: it waits for the same word', async () => {
   const { root, work, seed } = local();
   const own = change(work, { 'stem/mine.ts': 'export const mine = 1;\n' });
-  approveMutation(root, paths(root).journal, seed, own, 'nest');
+  approveMutation(root, paths(root).journal, seed, own, 'one');
   expect(await gate(work, seed, own, { mode: 'ask' })).toEqual(PASSED);
   writeFiles(root, { 'stem/k.ts': 'export const k = 2;\n' });
   commitAll(root, 'the species moves');
@@ -97,7 +97,7 @@ test('a merge of the species is a change outside the body like any other: it wai
   // The lineage keeps its own stem file beside what the species brought.
   expect(stemDiff(root, own, merged)).toEqual(['stem/k.ts']);
   expect(await gate(work, own, merged, { mode: 'ask' })).toMatchObject({ ok: false, gate: 'approval', undecided: true });
-  approveMutation(root, paths(root).journal, own, merged, 'nest');
+  approveMutation(root, paths(root).journal, own, merged, 'one');
   expect(await gate(work, own, merged, { mode: 'ask' })).toEqual(PASSED);
 });
 
@@ -181,7 +181,7 @@ function waiting() {
   return { root, p, seed, b, ask };
 }
 
-test('./nest approve: with no commit it approves what was asked, says what that changes, writes it down, journals it with its route, and the gate lets the commit through', async () => {
+test('./one approve: with no commit it approves what was asked, says what that changes, writes it down, journals it with its route, and the gate lets the commit through', async () => {
   const { root, p, seed, b, ask } = waiting();
   const said: string[] = [];
   expect(approveMain([], root, (line) => said.push(line), (line) => said.push(line))).toBe(1);
@@ -190,18 +190,18 @@ test('./nest approve: with no commit it approves what was asked, says what that 
   said.length = 0;
   expect(approveMain([], root, (line) => said.push(line), (line) => said.push(line))).toBe(0);
   expect(said[0]).toBe(`Approved commit ${b.slice(0, 12)}, "the second stem". It changes 1 path outside the body: stem/k.ts.`);
-  expect(readApproval(root)).toMatchObject({ approved: b, route: 'nest' });
+  expect(readApproval(root)).toMatchObject({ approved: b, route: 'one' });
   expect(readApproval(root).asked).toBeUndefined();
   const events = readEvents(p.journal).filter((e) => e.type === 'mutation.approved');
   expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({ type: 'mutation.approved', commit: b, route: 'nest', gen: seed });
+  expect(events[0]).toMatchObject({ type: 'mutation.approved', commit: b, route: 'one', gen: seed });
   // The agent is told, as a line of the owner's.
   expect(readdirSync(p.owner).filter((name) => name.endsWith('.txt')).map((name) => readFileSync(join(p.owner, name), 'utf8')))
     .toEqual([`I approved commit ${b.slice(0, 12)}. Ask to mutate again for the same commit.`]);
   expect(await ask()).toEqual(PASSED);
 });
 
-test('./nest approve <commit>: a prefix is enough, anything that is no commit is refused, and an install never started has nothing to approve for', () => {
+test('./one approve <commit>: a prefix is enough, anything that is no commit is refused, and an install never started has nothing to approve for', () => {
   const { root, b } = waiting();
   const said: string[] = [];
   const run = (...args: string[]) => approveMain(args, root, (line) => said.push(line), (line) => said.push(line));
@@ -300,20 +300,20 @@ test('an approval file that is damaged, or names a commit that is gone, approves
 // --- the cage ---
 
 test('the cage is the install\'s: when the generation\'s checkout has other cage files, that is said, and nothing is changed', () => {
-  const { dir: root, seed } = makeRepo({ ...SEED, nest: 'one\n', Dockerfile: 'FROM one\n', 'stem/launcher.ts': '// one\n', 'body/main.ts': 'process.exit(0);\n' });
+  const { dir: root, seed } = makeRepo({ ...SEED, one: 'one\n', Dockerfile: 'FROM one\n', 'stem/launcher.ts': '// one\n', 'body/main.ts': 'process.exit(0);\n' });
   init(root);
   const p = paths(root);
-  expect(CAGE).toEqual(['nest', 'Dockerfile', '.dockerignore', 'stem/launcher.ts']);
+  expect(CAGE).toEqual(['one', 'Dockerfile', '.dockerignore', 'stem/launcher.ts']);
   expect(cageDifferences(root, p.live)).toEqual([]);
   expect(cageNotice(root, p.live)).toBeNull();
   // A commit moves the cage on; the lineage takes it; the generation's checkout has it.
-  writeFiles(root, { nest: 'two\n', '.dockerignore': '*\n' });
+  writeFiles(root, { one: 'two\n', '.dockerignore': '*\n' });
   commitAll(root, 'another cage');
   git(root, 'reset', '-q', '--hard', seed);
   git(p.live, 'checkout', '-q', '--detach', git(root, 'rev-parse', 'ORIG_HEAD'));
-  expect(cageDifferences(root, p.live)).toEqual(['nest', '.dockerignore']);
-  expect(cageNotice(root, p.live)).toContain('other versions of nest, .dockerignore than this install');
-  expect(readFileSync(join(root, 'nest'), 'utf8')).toBe('one\n');
+  expect(cageDifferences(root, p.live)).toEqual(['one', '.dockerignore']);
+  expect(cageNotice(root, p.live)).toContain('other versions of these files than this install: ./one, ./.dockerignore.');
+  expect(readFileSync(join(root, 'one'), 'utf8')).toBe('one\n');
   // A stem that is the install's own, or one run from anywhere else, has nothing to compare.
   expect(cageDifferences(root, root)).toEqual([]);
   expect(cageNotice(root, p.candidate)).toBeNull();

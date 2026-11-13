@@ -259,10 +259,10 @@ test('an error answer keeps its status and body; an unreachable provider and a m
   const down = responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch });
   await expect(down([{ role: 'user', content: 'x' }], [])).rejects.toMatchObject({ name: 'ProviderError', status: null });
 
-  const signedOut = responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => { throw new Error('sign in again with ./nest setup'); }, model: 'm', fetch: recorder([], []) });
+  const signedOut = responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => { throw new Error('sign in again with ./one setup'); }, model: 'm', fetch: recorder([], []) });
   const gone = await signedOut([{ role: 'user', content: 'x' }], []).catch((e: unknown) => e) as ProviderError;
   expect(gone).toBeInstanceOf(ProviderError);
-  expect(gone.message).toContain('./nest setup');
+  expect(gone.message).toContain('./one setup');
   expect(failureKind(gone)).toBe('passing');
 });
 

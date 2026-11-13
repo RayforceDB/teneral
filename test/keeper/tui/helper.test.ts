@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { Clip, IMAGE_MAX_BYTES, keep, type ClipReply } from '../../../keeper/tui/images';
 import { gif, jpeg, png, webp } from './pictures';
 
-// The helper that `./nest talk` runs on the owner's machine, the real one: its functions are taken
-// out of the `nest` script as they stand and run here, with the client's own end of the talk
+// The helper that `./one talk` runs on the owner's machine, the real one: its functions are taken
+// out of the `one` script as they stand and run here, with the client's own end of the talk
 // (`Clip`) on the other side. No clipboard is touched: a stand-in for the clipboard tool is put
 // first on the PATH where one is needed.
 
-const BOX = join(import.meta.dir, '..', '..', '..', 'nest');
+const BOX = join(import.meta.dir, '..', '..', '..', 'one');
 const source = readFileSync(BOX, 'utf8');
 const from = source.indexOf('clip_limit=');
 const to = source.indexOf('# Start the helper for one client');

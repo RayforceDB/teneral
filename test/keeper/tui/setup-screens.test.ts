@@ -95,7 +95,7 @@ test('a key provider from welcome to the last page: choose with the arrows, type
   expect(steady(done)).toContain('  · a reply       ok       N.Ns\n  · a tool call   ok       N.Ns');
   expect(done).toContain('    .env\n      readable only by you: TENERAL_PROVIDER=openai,');
   expect(flat(done)).toContain('TENERAL_API_KEY, TENERAL_MODEL=fake-key-small');
-  expect(done).toContain('    ./nest up starts the agent with it.');
+  expect(done).toContain('    ./one up starts the agent with it.');
   expect(dotEnv()).toContain('TENERAL_MODEL=fake-key-small');
   r.press('\r');
   expect(await r.status).toBe(0);
@@ -105,7 +105,7 @@ test('a key provider from welcome to the last page: choose with the arrows, type
   expect(r.term.vt.cursorVisible).toBe(true);
   expect([...r.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([]);
   expect(r.term.vt.text()).toContain('Wrote .env, readable only by you: TENERAL_PROVIDER=openai, TENERAL_BASE_URL=');
-  expect(r.term.vt.text()).toContain('./nest up starts the agent with it.');
+  expect(r.term.vt.text()).toContain('./one up starts the agent with it.');
   // The key reached the provider and the file, and never the screen.
   expect(dotEnv()).toContain('TENERAL_API_KEY=sk-fake-key');
   expect(r.term.written.join('')).not.toContain('sk-fake');
@@ -319,12 +319,12 @@ test('when the agent is started right after, the last page says so instead of na
   await r.see('Models this endpoint lists for you:');
   r.press('\r');
   const done = await r.see('Ready');
-  expect(done).toContain('    The agent starts now. ./nest talk attaches to it.');
-  expect(done).not.toContain('./nest up starts');
+  expect(done).toContain('    The agent starts now. ./one talk attaches to it.');
+  expect(done).not.toContain('./one up starts');
   r.press('\r');
   expect(await r.status).toBe(0);
   expect(r.term.vt.text()).toContain('Wrote .env, readable only by you:');
-  expect(r.term.vt.text()).not.toContain('./nest up starts');
+  expect(r.term.vt.text()).not.toContain('./one up starts');
 });
 
 test('a small terminal, a resize and a long list of models: the pages are laid out again and nothing breaks', async () => {
@@ -438,7 +438,7 @@ test('an address too long for the window is not shown in part: the screen says w
   const tight = r.term.vt.text().split('\n');
   expect(tight).toHaveLength(16);
   expect(tight[2]).toBe('  Ready');
-  expect(tight.slice(-4)).toEqual(['    ./nest up starts the agent with it.', '    One that is already running keeps its old', '    configuration until ./nest down and ./nest up.', ' Enter goes on']);
+  expect(tight.slice(-4)).toEqual(['    ./one up starts the agent with it.', '    One that is already running keeps its old', '    configuration until ./one down and ./one up.', ' Enter goes on']);
   r.press('\r');
   expect(await r.status).toBe(0);
 });

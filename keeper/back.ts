@@ -5,7 +5,7 @@ import {
   dropLock, installRoot, paths, readState, saveState, takeLock,
 } from '../stem/supervisor';
 
-// `./nest back`: the owner sends the agent back to a generation it lived in before.
+// `./one back`: the owner sends the agent back to a generation it lived in before.
 //
 // The stem rolls back by itself only what fails visibly. A generation that answers once and is
 // then useless is for the owner to judge, and after any rollback the state file no longer names
@@ -149,7 +149,7 @@ export function goBack(root: string, wanted: string | null, opts: { dryRun?: boo
     } catch (err) {
       return no(`the lock ${p.lock} could not be taken (${err instanceof Error ? err.message : String(err)})`);
     }
-    if (holder !== null) return no(`the agent is running (its supervisor is pid ${holder}). Stop it first; ./nest back does that by itself`);
+    if (holder !== null) return no(`the agent is running (its supervisor is pid ${holder}). Stop it first; ./one back does that by itself`);
   }
   try {
     const state = readState(p);

@@ -291,7 +291,7 @@ test('a refresh token that has ended gives a clear error, and the tokens go whil
     fake.knobs.refreshError = code;
     const err = await accessToken(dir, { now: () => cred.expires_at }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SignInNeeded);
-    expect((err as Error).message).toContain('sign in again with ./nest setup');
+    expect((err as Error).message).toContain('sign in again with ./one setup');
     expect((err as Error).message).toContain(code);
     expect((err as Error).message).not.toContain(cred.refresh_token);
     const left = readCredentials(dir, 'chatgpt')!;
@@ -299,13 +299,13 @@ test('a refresh token that has ended gives a clear error, and the tokens go whil
     expect(signedIn(dir, 'chatgpt')).toBe(false);
     // And from then on without asking the server again.
     const asked = fake.seen.length;
-    await expect(accessToken(dir)).rejects.toThrow(/sign in again with \.\/nest setup/);
+    await expect(accessToken(dir)).rejects.toThrow(/sign in again with \.\/one setup/);
     expect(fake.seen.length).toBe(asked);
   }
 });
 
 test('no sign-in at all gives the same clear error', async () => {
-  await expect(accessToken(dir)).rejects.toThrow(/sign in again with \.\/nest setup/);
+  await expect(accessToken(dir)).rejects.toThrow(/sign in again with \.\/one setup/);
   expect(() => apiBase(dir)).toThrow(SignInNeeded);
 });
 

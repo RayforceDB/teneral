@@ -77,7 +77,7 @@ function interrupt(): void {
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
-  // The owner's lines from `./nest talk`, which may come and go while this process lives.
+  // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),

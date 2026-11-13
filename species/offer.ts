@@ -476,8 +476,8 @@ export interface Outcome { status: 0 | 1 | 3; text: string }
 export const WAITING = 3;
 
 const OFF = 'TENERAL_PUBLISH is off in your owner\'s settings: nothing goes out from this install.';
-const askOwner = (commit: string): string => `Waiting for your owner. Nothing goes out until they approve exactly this commit:\n\n    ./nest offer approve ${short(commit)}\n\n`
-  + `(or /approve ${short(commit)} in ./nest talk; /offers shows what is waiting). Tell them what it is and why, then run this command again. A commit changed after the approval needs a new one.`;
+const askOwner = (commit: string): string => `Waiting for your owner. Nothing goes out until they approve exactly this commit:\n\n    ./one offer approve ${short(commit)}\n\n`
+  + `(or /approve ${short(commit)} in ./one talk; /offers shows what is waiting). Tell them what it is and why, then run this command again. A commit changed after the approval needs a new one.`;
 
 function resolve(root: string, name: string): string {
   const r = run(['git', 'rev-parse', '--verify', '--quiet', `${name}^{commit}`], { cwd: root });
@@ -572,7 +572,7 @@ export async function publish(i: Install, branch: string, o: NetOptions = {}): P
     return { status: 1, text: `The species moved to ${short(species)} since the check, and ${branch} is not built on that. Rebase it, sign and check again.` };
   }
   if (mode === 'ask' && !approved(i.owner, commit)) return { status: WAITING, text: askOwner(commit) };
-  if (!hasToken(i.auth)) return { status: 1, text: `No GitHub token is stored here, so nothing can be sent. Your owner stores one with ./nest offer token; it needs ${TOKEN_NEEDS}.` };
+  if (!hasToken(i.auth)) return { status: 1, text: `No GitHub token is stored here, so nothing can be sent. Your owner stores one with ./one offer token; it needs ${TOKEN_NEEDS}.` };
   const key = ensureKey(i.auth, i.id);
 
   // The species as it stands at its home, now: an offer built on an older head is one the maintainer would have to mend.
@@ -654,7 +654,7 @@ export interface WitnessOptions extends NetOptions {
 export async function witness(i: Install, pr: number, o: WitnessOptions = {}): Promise<Outcome> {
   const mode = consent(i.s);
   if (mode === 'off') return { status: 1, text: OFF };
-  if (!hasToken(i.auth)) return { status: 1, text: `No GitHub token is stored here, so a report could not be posted. Your owner stores one with ./nest offer token; it needs ${TOKEN_NEEDS}.` };
+  if (!hasToken(i.auth)) return { status: 1, text: `No GitHub token is stored here, so a report could not be posted. Your owner stores one with ./one offer token; it needs ${TOKEN_NEEDS}.` };
   const hub = hubOf(i.root, i.s);
   let pull: Pull;
   try {
@@ -789,7 +789,7 @@ export function ownerCommand(root: string, line: string): string[] | null {
 
 // --- the command line ---
 
-const USAGE = `usage: bun species/offer.ts <command>     (your owner: ./nest offer <command>)
+const USAGE = `usage: bun species/offer.ts <command>     (your owner: ./one offer <command>)
 
   check <branch>            look at a branch as an offer to the species: what it would publish, and whether it may
   sign <branch>             sign the branch's own commits with this individual's key
@@ -864,7 +864,7 @@ export async function main(
       case 'approve': {
         if (rest.length !== 1) break;
         if (!tty) {
-          err('An approval is the owner\'s, given at a terminal: ./nest offer approve <commit>, or /approve <commit> in ./nest talk. This is not a terminal, and nothing was approved.');
+          err('An approval is the owner\'s, given at a terminal: ./one offer approve <commit>, or /approve <commit> in ./one talk. This is not a terminal, and nothing was approved.');
           return 1;
         }
         const shown = showPending(i, rest[0]!);
@@ -883,7 +883,7 @@ export async function main(
       case 'token': {
         if (rest.length !== 0) break;
         if (!tty) {
-          err('The token is typed by the owner at a terminal: ./nest offer token. This is not a terminal, and nothing was stored.');
+          err('The token is typed by the owner at a terminal: ./one offer token. This is not a terminal, and nothing was stored.');
           return 1;
         }
         const hub = hubOf(i.root, i.s);

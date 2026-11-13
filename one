@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 usage() {
   cat <<'EOF'
-usage: ./nest <command>
+usage: ./one <command>
 
   setup           choose the model provider, sign in or enter a key, and test it; writes .env.
                   Run again to change provider or to sign in again
@@ -16,7 +16,7 @@ usage: ./nest <command>
                   the image in the clipboard, /help lists the rest; /quit, Ctrl-D or Ctrl-C
                   leaves. The agent goes on.
                   With its input from a pipe it is plain text, one line in and the reply out:
-                  echo "..." | ./nest talk [--wait <seconds>]
+                  echo "..." | ./one talk [--wait <seconds>]
   down            stop the agent
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
                   --list shows the generations it has lived in. A running agent is stopped
@@ -29,7 +29,7 @@ usage: ./nest <command>
                   what waits for you, `offer approve <commit>` lets exactly that commit go out,
                   `offer token` stores the GitHub token publishing needs, `offer key` prints
                   this individual's public signing key. `offer help` lists the rest
-  run <command>   run a command in a fresh container instead of the agent: ./nest run bun test
+  run <command>   run a command in a fresh container instead of the agent: ./one run bun test
   fg              run the agent in the foreground of this terminal, for debugging
 
 talk and setup take --plain: plain text at a terminal too, without the panel, the input box and
@@ -44,7 +44,7 @@ EOF
 # while `run` commands, which get no name, can run beside it.
 name="teneral-$(basename "$PWD")"
 # The image. A development checkout that must not replace the image of an install beside it names another.
-image="${NEST_IMAGE:-teneral}"
+image="${ONE_IMAGE:-teneral}"
 
 # What that container is doing: running, exited, ... or nothing when there is none.
 state() { docker container inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true; }
@@ -58,9 +58,9 @@ alive() {
 
 say_not_running() {
   if [ -n "$(state)" ]; then
-    echo "Not running: it stopped by itself, with status $(exit_code). ./nest logs shows its last lines, ./nest up starts it again." >&2
+    echo "Not running: it stopped by itself, with status $(exit_code). ./one logs shows its last lines, ./one up starts it again." >&2
   else
-    echo "Not running. ./nest up starts it." >&2
+    echo "Not running. ./one up starts it." >&2
   fi
 }
 
@@ -115,12 +115,12 @@ build() {
   # More options for `docker run`, split on spaces. Nothing here needs any; it is for an unusual
   # host, a limit such as --memory or --pids-limit, or a test that has to reach a model server on
   # the machine itself.
-  if [ -n "${NEST_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$NEST_DOCKER_ARGS"; fi
+  if [ -n "${ONE_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$ONE_DOCKER_ARGS"; fi
 }
 
 prepare() {
   if [ ! -f .env ]; then
-    echo "No .env here, so no model provider is configured. ./nest setup makes one." >&2
+    echo "No .env here, so no model provider is configured. ./one setup makes one." >&2
     exit 1
   fi
   build
@@ -128,7 +128,7 @@ prepare() {
 
 # --init puts a small init at pid 1: it passes signals on to the stem and reaps what the
 # agent's shell leaves behind.
-# No memory or process limit is set here; an owner who wants one passes it in NEST_DOCKER_ARGS.
+# No memory or process limit is set here; an owner who wants one passes it in ONE_DOCKER_ARGS.
 bare=(--init
   --volume "$PWD":/teneral
   --cap-drop ALL
@@ -373,7 +373,7 @@ restore_talk() { printf '\r\033[J\033[?2004l\033[0m\033[?25h'; }
 # the owner sees one setup, not two.
 setup() {
   if [ ! -t 0 ]; then
-    echo "./nest setup asks questions and needs a terminal." >&2
+    echo "./one setup asks questions and needs a terminal." >&2
     return 1
   fi
   build
@@ -409,7 +409,7 @@ setup() {
 configure() {
   [ ! -f .env ] || return 0
   if [ ! -t 0 ]; then
-    echo "No .env here, so no model provider is configured. Run ./nest setup from a terminal, then this again." >&2
+    echo "No .env here, so no model provider is configured. Run ./one setup from a terminal, then this again." >&2
     exit 1
   fi
   if ! screens; then echo "No configuration here yet (.env), so the setup comes first."; fi
@@ -429,7 +429,7 @@ install() {
 start() {
   # No restart policy. Docker's policies cannot tell a stem that gave up and needs its owner
   # from a crash: `on-failure` and `unless-stopped` would both start it again, the second
-  # without end. So after a reboot the agent is down until `./nest up`.
+  # without end. So after a reboot the agent is down until `./one up`.
   docker run --detach --name "$name" --restart no \
     "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" >/dev/null
   sleep 1
@@ -438,7 +438,7 @@ start() {
     docker logs --tail 20 "$name" 2>&1 | sed 's/^/  | /' >&2
     return 1
   fi
-  echo "Up, as $name. ./nest talk attaches to it, ./nest logs follows its output, ./nest down stops it."
+  echo "Up, as $name. ./one talk attaches to it, ./one logs follows its output, ./one down stops it."
 }
 
 # The stem gets SIGTERM, stops the agent and exits 0. It has 20 seconds before it is killed.
@@ -500,7 +500,7 @@ case "$command" in
 
   fg)
     if alive; then
-      echo "Already running in the background, as $name. ./nest talk attaches to it; ./nest down stops it." >&2
+      echo "Already running in the background, as $name. ./one talk attaches to it; ./one down stops it." >&2
       exit 1
     fi
     configure
@@ -513,7 +513,7 @@ case "$command" in
 
   run)
     if [ "$#" -eq 0 ]; then
-      echo "run what? For example: ./nest run bun test" >&2
+      echo "run what? For example: ./one run bun test" >&2
       exit 2
     fi
     prepare
@@ -539,13 +539,13 @@ case "$command" in
     status=0
     docker exec --interactive --tty "${term_env[@]}" "${clip_env[@]}" "$name" bun "$talk" "$@" || status=$?
     if [ "$status" -gt 128 ]; then
-      # The client was cut off in the middle of drawing: with `./nest down`, or when the stem
+      # The client was cut off in the middle of drawing: with `./one down`, or when the stem
       # gives up, the container goes and takes it along.
       restore_talk
       if alive; then
-        echo "The talk client was cut off, with status $status. The agent goes on; ./nest talk attaches again." >&2
+        echo "The talk client was cut off, with status $status. The agent goes on; ./one talk attaches again." >&2
       else
-        echo "The agent stopped, and this conversation with it. ./nest up starts it again." >&2
+        echo "The agent stopped, and this conversation with it. ./one up starts it again." >&2
       fi
     fi
     exit "$status"
@@ -584,7 +584,7 @@ case "$command" in
   back)
     prepare
     # The current generation's own stem does it. Should that one be what is broken,
-    # `./nest run bun keeper/back.ts` is this checkout's.
+    # `./one run bun keeper/back.ts` is this checkout's.
     back="$(owner_tool back)"
     # Looking changes nothing, so the agent can stay up for it.
     case " $* " in
@@ -628,7 +628,7 @@ case "$command" in
     ;;
 
   *)
-    echo "./nest: no such command: $command" >&2
+    echo "./one: no such command: $command" >&2
     usage >&2
     exit 2
     ;;

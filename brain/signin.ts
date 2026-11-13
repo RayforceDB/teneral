@@ -150,7 +150,7 @@ export function readCredentials(dir: string, id: string): Credentials | null {
 /** The sign-in is gone or was never made, and only the owner can make it again. */
 export class SignInNeeded extends Error {
   constructor(why: string) {
-    super(`${why}: sign in again with ./nest setup`);
+    super(`${why}: sign in again with ./one setup`);
     this.name = 'SignInNeeded';
   }
 }

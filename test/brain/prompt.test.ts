@@ -145,7 +145,7 @@ test('what the review found false is now said truly', () => {
 });
 
 test('it says the owner can send it back to an earlier generation, and how that arrives', () => {
-  expect(flat).toContain('`./nest back`');
+  expect(flat).toContain('`./one back`');
   expect(flat).toMatch(/send you back to an earlier generation/);
   // The reason is quoted as the stem writes it.
   expect(flat).toContain(`"${OWNER_REASON}"`);
@@ -258,7 +258,7 @@ test('it says that everything outside the body is its own to change, and that su
   expect(flat).toContain('`TENERAL_APPROVAL`');
   for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
   expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body and brain/);
-  expect(flat).toMatch(/`\/approve` in their terminal or `\.\/nest approve`/);
+  expect(flat).toMatch(/`\/approve` in their terminal or `\.\/one approve`/);
   expect(flat).toMatch(/you call `mutate` again for the same commit/);
   expect(flat).toMatch(/a later commit that changes only your body and brain passes on it/);
   expect(flat).toMatch(/With `off` such a commit is refused at gate `stem`/);
@@ -271,7 +271,7 @@ test('it says that the new stem is started by the launcher, which puts a generat
   expect(flat).toMatch(/a small launcher, which no mutation changes, starts the stem of your new generation/);
   expect(flat).toMatch(/the launcher puts you back on the generation before/);
   expect(flat).toMatch(/A stem that starts and then judges wrongly is caught by nobody but you and your owner/);
-  expect(flat).toMatch(/`nest`, the `Dockerfile` and the launcher \(`stem\/launcher\.ts`\) are your owner's install, the cage/);
+  expect(flat).toMatch(/`one` \(the script your owner addresses you by: `\.\/one up`, `\.\/one talk`\), the `Dockerfile` and the launcher \(`stem\/launcher\.ts`\) are your owner's install, the cage/);
   expect(flat).toMatch(/no mutation puts it into effect/);
   expect(flat).toMatch(/your owner must update the install/);
 });

@@ -139,7 +139,7 @@ test('anything else is text: words, a path among words, a relative path, an addr
 
 // --- the talk with the helper on the owner's machine ---
 
-/** A helper as `./nest talk` runs one, for a test: it answers every request waiting in `dir` with what `answer` gives. */
+/** A helper as `./one talk` runs one, for a test: it answers every request waiting in `dir` with what `answer` gives. */
 function helper(dir: string, answer: (action: string, path: string) => { first: string; data?: Buffer }): string[] {
   const seen: string[] = [];
   for (const name of readdirSync(dir).filter((file) => /^req-\d+$/.test(file)).sort()) {
@@ -229,7 +229,7 @@ test('a helper that does not answer is given up on after a while, and its reques
 test('without a helper nothing can be asked, and the owner is told exactly why and what to do', () => {
   const none = new Clip(null);
   expect([none.there, none.tool(), none.ask('clipboard')]).toEqual([false, null, null]);
-  expect(whyNoClipboard(null, false)).toContain('./nest talk starts one');
+  expect(whyNoClipboard(null, false)).toContain('./one talk starts one');
   expect(whyNoClipboard(null, false)).toContain('/image <path>');
   expect(whyNoClipboard('none x11', true)).toContain('install the package xclip');
   expect(whyNoClipboard('none wayland', true)).toContain('install the package wl-clipboard');

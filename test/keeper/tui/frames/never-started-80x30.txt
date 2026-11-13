@@ -13,10 +13,10 @@
 ╰─────────────────────────────────────────────────────────────────────────────╯
 
 ◆ Nobody is running here.
-  ./nest up starts the agent. What you send now waits for it.
+  ./one up starts the agent. What you send now waits for it.
 
 ◆ Images: /image <path> attaches a file this client can read. The clipboard and
-  files of your machine need ./nest talk.
+  files of your machine need ./one talk.
 
   Nothing has been said yet.
 

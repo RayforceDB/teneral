@@ -291,7 +291,7 @@ test('a generation whose stem needs a newer launcher is not started and not loop
   const r = await run(root);
   expect(r.code).toBe(OUTDATED_EXIT);
   expect(r.ran).toEqual([]);
-  expect(r.logs).toEqual([`generation ${b} cannot be run: its stem needs launcher version ${LAUNCHER + 1} and this install's launcher is version ${LAUNCHER}: the owner must update the install (git pull, then ./nest down and ./nest up)`]);
+  expect(r.logs).toEqual([`generation ${b} cannot be run: its stem needs launcher version ${LAUNCHER + 1} and this install's launcher is version ${LAUNCHER}: the owner must update the install (git pull, then ./one down and ./one up)`]);
   expect(r.state).toEqual({ current: b, previous: null });
 });
 

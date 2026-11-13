@@ -53,7 +53,7 @@ export function stage(cols: number, rows: number, o: { caps?: Partial<Caps>; env
   }
   const term = fakeTerm(cols, rows, o.caps);
   term.vt.reflow = o.reflow === true;
-  // A helper on the owner's machine, as ./nest talk starts one: its directory, and what it said of the clipboard.
+  // A helper on the owner's machine, as ./one talk starts one: its directory, and what it said of the clipboard.
   const clip = join(p.owner, '.clip', 'stage');
   if (o.helper !== undefined) {
     mkdirSync(clip, { recursive: true });

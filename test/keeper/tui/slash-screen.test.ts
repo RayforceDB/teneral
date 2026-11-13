@@ -139,7 +139,7 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   settled(s);
   // Part of a name, nothing follows the command: completed and run in one.
   s.type(`/pl${ENTER}`);
-  expect(s.all()).toContain('./nest talk --plain is the same conversation as plain text.');
+  expect(s.all()).toContain('./one talk --plain is the same conversation as plain text.');
   expect(typed(s)).toEqual(['›']);
   // The chosen one, not the first.
   s.type(`/h${DOWN}${ENTER}`);

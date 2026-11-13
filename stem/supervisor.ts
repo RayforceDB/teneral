@@ -321,7 +321,7 @@ function lockRecord(lock: string): { pid: number; cmd: string[] | null } {
 /**
  * The pid of the live supervisor that holds the lock, or null when nobody does. Only looks: for
  * the owner's screen, which says whether the agent is running. It has to be asked from where
- * the supervisor's pid means something, which `./nest talk` is: it runs in the same container.
+ * the supervisor's pid means something, which `./one talk` is: it runs in the same container.
  */
 export function holder(lock: string): number | null {
   const { pid, cmd } = lockRecord(lock);

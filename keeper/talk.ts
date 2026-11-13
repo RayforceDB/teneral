@@ -8,7 +8,7 @@ import { planNotice } from '../brain/providers';
 import { cageNotice } from '../immune/approval';
 import { installRoot, paths } from '../stem/supervisor';
 
-// The owner's terminal: `./nest talk` runs this inside the agent's container. What is typed goes to
+// The owner's terminal: `./one talk` runs this inside the agent's container. What is typed goes to
 // the agent as files in the owner directory (keeper/owner.ts); what the agent says is read back
 // from the journal. Nothing here talks to the agent's process, so any number of these can run at
 // once, and ending one ends nothing else. `/stop` asks the agent, over the same channel, to stop
@@ -87,9 +87,9 @@ export function render(e: JournalEvent): string | null {
     case 'turn.interrupted':
       return '[interrupted by the owner]';
     case 'mutation.approved':
-      return `[stem] mutation to ${short(f.commit)} approved by the owner (${f.route === 'talk' ? '/approve' : './nest approve'})`;
+      return `[stem] mutation to ${short(f.commit)} approved by the owner (${f.route === 'talk' ? '/approve' : './one approve'})`;
     case 'species.accepted':
-      return `[stem] species commit ${short(f.commit)} accepted by the owner (${f.route === 'talk' ? '/accept' : './nest accept'})`;
+      return `[stem] species commit ${short(f.commit)} accepted by the owner (${f.route === 'talk' ? '/accept' : './one accept'})`;
     default:
       return null;
   }

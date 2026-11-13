@@ -22,7 +22,7 @@ import { clean, type Line, type Span } from './text';
 import { SPIN_MS, glyphs, type Glyphs } from './theme';
 import { cacheUse, contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look, type Offered } from './view';
 
-// The talk client: `./nest talk` at a terminal. The owner's lines go out through the owner channel
+// The talk client: `./one talk` at a terminal. The owner's lines go out through the owner channel
 // (keeper/owner.ts) and everything shown is read back from the journal, exactly as the plain
 // client does it, so any number of these can be attached and leaving one ends nothing else.
 // Esc asks the agent, over that same channel, to stop the turn it is in. Nothing else here can stop
@@ -355,7 +355,7 @@ export class TalkScreen {
     this.closed = true;
     clearTimeout(this.escape);
     for (const stop of this.stops) stop();
-    this.inline.print([[], [{ text: `  You left. ${this.who === 'the agent' ? 'The agent' : this.who} goes on; ./nest talk attaches again.`, style: { fg: 'dim' } }]]);
+    this.inline.print([[], [{ text: `  You left. ${this.who === 'the agent' ? 'The agent' : this.who} goes on; ./one talk attaches again.`, style: { fg: 'dim' } }]]);
     this.inline.stop();
     this.finish?.(status);
   }
@@ -416,7 +416,7 @@ export class TalkScreen {
     const word = stateWord(this.standing, this.alive());
     const name: Span = { text: this.who === 'the agent' ? 'The agent' : this.who, style: { fg: 'brand', bold: true } };
     if (word === 'not running') {
-      lines.push(status([{ text: 'Nobody is running here.', style: { fg: 'warn', bold: true } }], ['./nest up starts the agent. What you send now waits for it.'], max, g, { fg: 'warn' }));
+      lines.push(status([{ text: 'Nobody is running here.', style: { fg: 'warn', bold: true } }], ['./one up starts the agent. What you send now waits for it.'], max, g, { fg: 'warn' }));
     } else {
       lines.push(status([name, { text: ' is awake', style: { bold: true } }, { text: ` ${g.sep} ${word}`, style: { fg: 'dim' } }], [`Leaving this client stops nothing: ${this.who} goes on.`], max, g));
     }
@@ -427,7 +427,7 @@ export class TalkScreen {
     }
     if (this.o.cage) lines.push(status([{ text: clean(this.o.cage), style: { fg: 'warn' } }], [], max, g, { fg: 'warn' }));
     const tool = this.clip.tool();
-    const images = !this.clip.there ? 'Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./nest talk.'
+    const images = !this.clip.there ? 'Images: /image <path> attaches a file this client can read. The clipboard and files of your machine need ./one talk.'
       : tool === null || tool.startsWith('none') ? `Images: drag a file in, or /image <path>. Ctrl+V needs ${tool === 'none wayland' ? 'wl-clipboard' : tool === 'none x11' ? 'xclip' : 'a display'} on your machine.`
         : 'Images: Ctrl+V attaches the clipboard\'s image; drag a file in, or /image <path>.';
     lines.push(status([{ text: images, style: { fg: 'dim' } }], [], max, g, { fg: 'faint' }));
@@ -716,7 +716,7 @@ export class TalkScreen {
       this.interrupting = null;
     } else if (this.now() - this.interrupting > INTERRUPT_MS) {
       this.interrupting = null;
-      this.say(`${this.who === 'the agent' ? 'The agent' : this.who} has not stopped. A body from before interruptions does not hear them. Esc asks again; ./nest down stops it for certain.`);
+      this.say(`${this.who === 'the agent' ? 'The agent' : this.who} has not stopped. A body from before interruptions does not hear them. Esc asks again; ./one down stops it for certain.`);
     } else return;
     this.dirty = true;
   }
@@ -752,9 +752,9 @@ export class TalkScreen {
       }
       case '/plain':
         return this.page('the plain client', [
-          './nest talk --plain is the same conversation as plain text. With its input from a pipe, ./nest talk is always plain:',
+          './one talk --plain is the same conversation as plain text. With its input from a pipe, ./one talk is always plain:',
           '',
-          '    echo "What are you working on?" | ./nest talk',
+          '    echo "What are you working on?" | ./one talk',
         ]);
       case '/history': {
         if (this.earlier.length === 0) return this.say('Nothing earlier was read from the journal. memory/journal.jsonl has all of it.');
@@ -829,7 +829,7 @@ export class TalkScreen {
     const why = whyNoClipboard(this.clip.tool(), this.clip.there);
     if (why !== null) return this.say(why);
     const n = this.clip.ask('clipboard');
-    if (n === null) return this.say('The request could not be left for the helper on your machine. ./nest talk starts a new one.');
+    if (n === null) return this.say('The request could not be left for the helper on your machine. ./one talk starts a new one.');
     this.asks.push({ n, origin: 'key', path: '', raw: '' });
   }
 
@@ -839,7 +839,7 @@ export class TalkScreen {
     if (paths === null) return false;
     if (!this.clip.there && !paths.some((path) => this.readable(path))) {
       if (!paths.some(namedLikeImage)) return false;
-      this.say(`This client was started without its helper on your machine (./nest talk starts one), so it cannot read ${paths.join(', ')} there. It was left as the text you pasted.`);
+      this.say(`This client was started without its helper on your machine (./one talk starts one), so it cannot read ${paths.join(', ')} there. It was left as the text you pasted.`);
       return false;
     }
     for (const path of paths) this.bring(path, paths.length === 1 ? text.trim() : path, 'paste');
@@ -863,7 +863,7 @@ export class TalkScreen {
       if (stat.size > IMAGE_MAX_BYTES) return this.failed(ask, 'too-large', String(stat.size));
       this.arrived(ask, readFileSync(file));
     } catch (err) {
-      const here = 'This client was started without its helper on your machine (./nest talk starts one), and the file is not where this client can read it.';
+      const here = 'This client was started without its helper on your machine (./one talk starts one), and the file is not where this client can read it.';
       this.failed(ask, (err as { code?: unknown }).code === 'ENOENT' ? 'not-found' : 'not-file', here);
     }
   }
@@ -908,7 +908,7 @@ export class TalkScreen {
       this.say(code === 'no-image' ? 'There is no image in the clipboard.'
         : code === 'too-large' ? `The clipboard's image is ${size}, and ${limit}. It was not attached.`
           : code === 'no-tool' ? whyNoClipboard(this.clip.tool(), true) ?? 'Your machine has no tool to read the clipboard with.'
-            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./nest talk again to start a new one.'
+            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./one talk again to start a new one.'
               : `The clipboard could not be read${detail === '' ? '' : `: ${detail}`}.`);
       return;
     }
@@ -917,7 +917,7 @@ export class TalkScreen {
       this.say(code === 'not-found' ? `No such file${this.clip.there ? ' on your machine' : ''}: ${ask.path}${!this.clip.there && detail !== '' ? `. ${detail}` : ''}`
         : code === 'not-image' ? `${ask.path} is not a PNG, JPEG, GIF or WebP image, so it was not attached.`
           : code === 'too-large' ? `${ask.path} is ${size}, and ${limit}. It was not attached.`
-            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./nest talk again to start a new one.'
+            : code === 'gone' ? 'The helper on your machine did not answer. Leave and run ./one talk again to start a new one.'
               : `${ask.path} is not a file that can be read.`);
     }
     this.release(ask, false);
@@ -1029,7 +1029,7 @@ export class TalkScreen {
       '/generations lists the bodies it has lived in',
       '/history prints the earlier conversation',
       `Ctrl-C leaves; ${this.who} goes on`,
-      './nest talk --plain is this as plain text',
+      './one talk --plain is this as plain text',
     ];
   }
 }

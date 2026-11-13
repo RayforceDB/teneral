@@ -51,7 +51,7 @@ function readToken(auth: string): string {
   try {
     token = readFileSync(join(auth, TOKEN_FILE), 'utf8').trim();
   } catch { /* none */ }
-  if (token === '') throw new GitHubError(0, 'no GitHub token is stored here. Your owner stores one with: ./nest offer token');
+  if (token === '') throw new GitHubError(0, 'no GitHub token is stored here. Your owner stores one with: ./one offer token');
   return token;
 }
 
@@ -84,7 +84,7 @@ export const TOKEN_NEEDS = 'a fine-grained personal access token for that one re
 
 function refusal(hub: Hub, status: number, said: string, limited: boolean): string {
   const tail = said === '' ? '' : `: ${said}`;
-  if (status === 401) return `GitHub did not accept the token (401${tail}). It was mistyped, has expired or was revoked: your owner makes a new one and stores it with ./nest offer token`;
+  if (status === 401) return `GitHub did not accept the token (401${tail}). It was mistyped, has expired or was revoked: your owner makes a new one and stores it with ./one offer token`;
   if (status === 403 || status === 429) {
     if (limited) return `GitHub is limiting requests (${status}${tail}). Wait and run this again; nothing was left half done that a second run does not finish`;
     return `GitHub refused (${status}${tail}). The token most likely lacks a permission on ${hub.slug}: it needs ${TOKEN_NEEDS}`;
@@ -156,7 +156,7 @@ export function gitRemote(dir: string, auth: string, args: string[]): Ran {
 export function remoteFailure(hub: Hub, what: string, r: Ran): string {
   const said = (r.stderr || r.stdout.toString()).trim().slice(-800);
   const hint = /authentication failed|could not read (username|password)|terminal prompts disabled|\b40[13]\b/i.test(said)
-    ? ` The token was not accepted for it: it needs ${TOKEN_NEEDS}; your owner stores one with ./nest offer token.`
+    ? ` The token was not accepted for it: it needs ${TOKEN_NEEDS}; your owner stores one with ./one offer token.`
     : '';
   return `${what} at ${hub.url} failed:\n${said}\n${hint}`.trimEnd();
 }

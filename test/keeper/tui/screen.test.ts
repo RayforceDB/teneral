@@ -156,7 +156,7 @@ const box = (cols: number, typed = ''): Line[] => lines('', `+${'-'.repeat(cols 
 
 test('finished rows are printed once and scroll away; the live region stays under them, and the cursor rests hidden on its first row', () => {
   const term = fakeTerm(30, 10);
-  term.vt.write('$ ./nest talk\r\n');
+  term.vt.write('$ ./one talk\r\n');
   const inline = new Inline(term);
   inline.paint(box(30));
   expect(term.written).toEqual([]);
@@ -164,7 +164,7 @@ test('finished rows are printed once and scroll away; the live region stays unde
   expect([term.vt.alt, term.vt.cursorVisible, term.vt.modes.has(2004)]).toEqual([false, false, true]);
   inline.print(lines('one', 'two'));
   inline.paint(box(30));
-  expect(term.vt.all()).toBe(['$ ./nest talk', 'one', 'two', ...box(30).map((row) => row[0]!.text.trimEnd())].join('\n'));
+  expect(term.vt.all()).toBe(['$ ./one talk', 'one', 'two', ...box(30).map((row) => row[0]!.text.trimEnd())].join('\n'));
   expect(term.vt.cursor).toEqual({ row: 3, col: 0 });
 
   // Nothing new: nothing written. One row of the region changed: that row only, one write, and the cursor is back.
@@ -185,7 +185,7 @@ test('finished rows are printed once and scroll away; the live region stays unde
   count = term.written.length;
   inline.paint(box(30, 'hello'));
   expect(term.written.length).toBe(count + 1);
-  expect(term.vt.all()).toBe(['$ ./nest talk', 'one', 'two', ...many, '', `+${'-'.repeat(27)}+`, `| ${'hello'.padEnd(25)} |`, `+${'-'.repeat(27)}+`, ' footer'].join('\n'));
+  expect(term.vt.all()).toBe(['$ ./one talk', 'one', 'two', ...many, '', `+${'-'.repeat(27)}+`, `| ${'hello'.padEnd(25)} |`, `+${'-'.repeat(27)}+`, ' footer'].join('\n'));
   // The region ends on the last row of the screen, and the cursor is still on its first.
   expect(term.vt.cursor).toEqual({ row: 5, col: 0 });
   expect(term.vt.text().split('\n').at(-1)).toBe(' footer');
@@ -245,14 +245,14 @@ test('a change of size leaves no debris, whether the terminal cuts its rows or w
 
 test('stopping prints what is still queued, takes the live region away and gives the terminal back with its cursor under the last row', () => {
   const term = fakeTerm(30, 8);
-  term.vt.write('$ ./nest talk\r\n');
+  term.vt.write('$ ./one talk\r\n');
   const inline = new Inline(term);
   inline.start();
   inline.print(lines('a reply'));
   inline.paint(box(30, 'half typed'));
   inline.print(lines('', 'You left.'));
   inline.stop();
-  expect(term.vt.all()).toBe('$ ./nest talk\na reply\n\nYou left.');
+  expect(term.vt.all()).toBe('$ ./one talk\na reply\n\nYou left.');
   expect(term.vt.cursor).toEqual({ row: 4, col: 0 });
   expect([term.vt.alt, term.vt.cursorVisible, [...term.vt.modes].filter((mode) => mode !== 2026)]).toEqual([false, true, []]);
   // Nothing more is written once it has stopped; stopping twice is one stop.

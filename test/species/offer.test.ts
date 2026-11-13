@@ -380,7 +380,7 @@ t('off: nothing goes out. ask: nothing goes out until the owner approves exactly
   const waits = async () => {
     const out = await publish(install(w.root), 'offer/greeting');
     expect(out.status).toBe(WAITING);
-    expect(out.text).toContain(`./nest offer approve ${commit.slice(0, 12)}`);
+    expect(out.text).toContain(`./one offer approve ${commit.slice(0, 12)}`);
     expect((await w.hub.state()).pushes).toEqual([]);
     expect(git(w.bare, 'for-each-ref', 'refs/heads/contrib')).toBe('');
   };
@@ -586,7 +586,7 @@ t('auto publishes without asking; without a token nothing is tried', async () =>
   rmSync(join(i.auth, TOKEN_FILE));
   const none = await publish(i, 'offer/greeting');
   expect(none.status).toBe(1);
-  expect(none.text).toContain('./nest offer token');
+  expect(none.text).toContain('./one offer token');
   expect(none.text).toContain('Contents: Read and write');
   saveToken(i.auth, TOKEN);
   expect((await publish(i, 'offer/greeting')).status).toBe(0);
@@ -621,10 +621,10 @@ t('a token GitHub does not accept, a missing permission, a limit and a dead netw
   let out = await publish(i, 'offer/greeting');
   expect(out.status).toBe(1);
   expect(out.text).toContain('Nothing was published');
-  expect(out.text).toContain('./nest offer token');
+  expect(out.text).toContain('./one offer token');
   expect(out.text).not.toContain('a-wrong-token-altogether');
   expect(git(w.bare, 'for-each-ref', 'refs/heads/contrib')).toBe('');
-  await expect(api(hubOf(w.root, i.s), i.auth, 'GET', `/repos/${SLUG}`)).rejects.toThrow(/did not accept the token \(401: Bad credentials\).*\.\/nest offer token/);
+  await expect(api(hubOf(w.root, i.s), i.auth, 'GET', `/repos/${SLUG}`)).rejects.toThrow(/did not accept the token \(401: Bad credentials\).*\.\/one offer token/);
   saveToken(i.auth, TOKEN);
 
   // 403: the token may push but not open a pull request.
@@ -681,7 +681,7 @@ t('a pull request that is already open for the branch (422) is found and named, 
 test('a request without a stored token says who stores one, and an error never carries the token', async () => {
   const auth = join(mkdtempSync(join(tmpdir(), 'teneral-token-')), 'auth');
   const hub = { url: 'x', slug: SLUG, api: 'http://127.0.0.1:9' };
-  await expect(api(hub, auth, 'GET', '/x')).rejects.toThrow(/\.\/nest offer token/);
+  await expect(api(hub, auth, 'GET', '/x')).rejects.toThrow(/\.\/one offer token/);
   expect(() => saveToken(auth, 'two words')).toThrow(/one word/);
   saveToken(auth, `  ${TOKEN}\n`);
   expect(readFileSync(join(auth, TOKEN_FILE), 'utf8')).toBe(TOKEN);
@@ -711,7 +711,7 @@ t('a witness fetches the pull request, runs nothing until its owner approves tha
   const waits = await witness(two, 1, { gates });
   expect(waits.status).toBe(WAITING);
   expect(ran).toBe(0);
-  for (const part of ['pull request #1', commit, 'body: a greeting', 'body/greeting.ts', 'Nothing of it has been run', `./nest offer approve ${commit.slice(0, 12)}`]) expect(waits.text).toContain(part);
+  for (const part of ['pull request #1', commit, 'body: a greeting', 'body/greeting.ts', 'Nothing of it has been run', `./one offer approve ${commit.slice(0, 12)}`]) expect(waits.text).toContain(part);
   expect((await w.hub.state()).comments).toEqual([]);
   expect(pending(two).map((r) => `${r.what} ${r.pr} ${r.commit}`)).toEqual([`witness 1 ${commit}`]);
   expect(ownerCommand(root, `/approve ${commit.slice(0, 8)}`)!.join(' ')).toContain('pull request #1');

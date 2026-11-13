@@ -18,7 +18,7 @@
   Leaving this client stops nothing: the agent goes on.
 
 ◆ Images: /image <path> attaches a file this client can read
-  machine need ./nest talk.
+  machine need ./one talk.
 
   ◦ the birth letter
 

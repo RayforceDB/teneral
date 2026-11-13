@@ -56,7 +56,7 @@ const isCtrl = (key: Key, name: string): boolean => key.kind === 'key' && key.ct
 const isKey = (key: Key, name: string): boolean => key.kind === 'key' && key.name === name && !key.ctrl && !key.alt;
 
 export interface SetupScreenOptions {
-  /** `nest` starts the agent right after this setup: the last page says so instead of naming the command. */
+  /** `one` starts the agent right after this setup: the last page says so instead of naming the command. */
   thenStart?: boolean;
   now?: () => number;
   /**
@@ -377,7 +377,7 @@ export class SetupScreens implements Dialogue {
   }
 
   handOver(): void {
-    // `nest` runs the setup again at once, with the port for the browser's way back open. This page stays up in between.
+    // `one` runs the setup again at once, with the port for the browser's way back open. This page stays up in between.
     this.show(() => ({
       rows: [...this.top('Continue with ChatGPT'), [...this.spinner(), { text: 'opening the way back from your browser' }], [], ...this.para('For the time of the sign-in, one port is opened on this machine\'s loopback address.', DIM)],
       hint: [],
@@ -558,8 +558,8 @@ export class SetupScreens implements Dialogue {
   async wrote(names: string[], entry: ProviderEntry): Promise<void> {
     const where = (file: string, what: string): Line[] => [[{ text: `    ${file}`, style: BOLD }], ...this.para(what, DIM, 6)];
     const next = this.o.thenStart
-      ? ['The agent starts now. ./nest talk attaches to it.']
-      : ['./nest up starts the agent with it.', 'One that is already running keeps its old configuration until ./nest down and ./nest up.'];
+      ? ['The agent starts now. ./one talk attaches to it.']
+      : ['./one up starts the agent with it.', 'One that is already running keeps its old configuration until ./one down and ./one up.'];
     // What was settled on the way is said once more, briefly; the page has to fit a small screen.
     this.facts = [];
     // Laid out anew for every frame: the window may change size while the page is up.
