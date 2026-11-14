@@ -49,6 +49,30 @@ Around that:
 
 The agent is woken by sensors, not only by you typing: your lines are one, a clock is another (every 30 minutes unless you change it, and silent until the soul is written), its inbox is a third, and it can build more. It runs in the background, so the clock and the inbox reach it whether or not a terminal is open.
 
+## Memory
+
+An agent's journal outgrows its model within days. Most harnesses then cut the beginning off. A teneral remembers instead, and what it remembers can be measured.
+
+**Episodes.** The journal is cut into episodes by rules, never by a model: a silence of more than half an hour before something new arrives, a new generation, or size. A tool call and its result are never on two sides of a cut. The same journal always gives the same episodes.
+
+**Remembering while idle.** When nothing is asked of it, the agent takes the oldest episode that is over and has no memory, and asks its own model what it will remember of it. The request shows the journal only up to the end of that episode, so the memory is formed as of then. Only a whole answer in the form asked for becomes a memory; after a second try the stretch is recorded as one no memory could be formed of, and stays in the journal as it happened. An episode in which nothing happened is recorded as quiet without asking a model. A memory keeps apart what the agent lived and what it only read, and the journal's own count is kept of whose words the stretch was made of.
+
+**What a request shows.** After the prompt and the soul come the memories of what no longer fits word for word, in order; then what the agent knows and means to do; then the recent conversation as it happened. The word-for-word part is held near `TENERAL_TAIL_CHARS` characters, 100000 unless set: everything in a request is read again at every step of a turn, so that number is most of what a step costs. When the memories themselves outgrow their room, the oldest six become one memory of the whole stretch, formed from the episodes themselves and not from their memories; six of those become one in turn. So a request shows a life from its first day, more briefly the further back it lies.
+
+**Facts and intentions.** With a memory the agent may set down facts that hold beyond the episode, and what it took on to do later. A fact is never changed: a later one names the fact it replaces, so what holds now is worked out and what was believed earlier can be read back. Each fact says where it comes from: the owner, the agent's own eyes, something read from outside, or its own conclusion. An intention stays in every request until a record says it was done.
+
+**Looking things up.** `recall` finds events by their words, with no model asked: what the agent was told, what it said and did, what its tools returned, and its memories. What it was told and what it chose to remember count for more than its own words, which are most of a journal by volume. Words of any script are found, and forms of one word find each other. `open` shows the journal word for word around one event; `timeline` lists the episodes with what is remembered of each.
+
+**The engine.** RayforceDB runs inside the agent's own process, loaded as a library through `bun:ffi` (`brain/ray.ts`). The journal is laid out beside itself in `memory/store-v1/`, in tables partitioned by day: days that are over lie on disk and are mapped into memory, the day that is going on is held in memory (`brain/store.ts`). A question costs about a millisecond however long the agent has lived. The store is no truth of its own: it is built from the journal, and thrown away and built again when it cannot be read. Without the library, the journal is read through for every question, with the same answers in the same order. A fault in the library would end the agent's process, so only source written in the repository is ever evaluated by it, and whatever arrived from outside goes over as data in a column.
+
+**Health.** The memory's state is one word, worked out from the journal: well, behind or failing, with the reasons (`brain/health.ts`). Episodes that pile up unremembered, stretches of which no memory could be formed, wider memories that are only lists of titles, things meant to be done that are past their day, and an exam that went badly each count. You see it in the status line of `./one talk`, as `memory well · exam 97%`, and with its reasons in `/memory` and `./one usage`. The agent sees it in every request for as long as anything is wrong.
+
+**The exam.** With each memory the agent may set one or two questions its episode answers, in other words than the episode used, each tied to the one message that answers it. Every ten memories it sits the exam, with no model asked, and the result is journaled: how many answers `recall` finds among its first five, how many the plainest search finds, looking for the words as they stand, and how many are still told by the memories themselves. `bun brain/exam.ts` sits it by hand.
+
+**The exam is a gate.** A mutation that changes any file the memory is made of must find no less than the running generation did when it last sat the exam, give or take one question. The candidate is only asked for its answers, against a copy of the journal; they are counted by the code of the generation that is running. A candidate that changes the memory and cannot be examined is refused. It guards against a memory that got worse by mistake, not against an agent that sets out to cheat: the questions and their answers are in a journal the candidate can read.
+
+**Your hand on it.** Three things are yours to say, with `/memory`, and none is asked of a model. `/memory pin` keeps a stretch in front of the agent word for word; a pin that would not fit its share of a request is refused when you make it. `/memory withdraw <mark>` says a memory or a fact does not stand; a memory is then formed again from the journal. `/memory back [n]` takes the conversation back to before your last message, or your last n: what followed is set aside, the agent no longer sees or finds it, and it goes on from the earlier point. Nothing is cut out of the journal for any of this, and taking a conversation back undoes nothing in the world.
+
 ## Organs
 
 An organ is a native dependency the agent adopts for its body: a program or a library that somebody else publishes as release archives. The agent chooses it, pins it, and later upgrades it by itself. The mechanism knows nothing about any particular one.
@@ -229,6 +253,7 @@ To change provider or sign in again, run `./one setup`. It asks before replacing
 | `/history` | print the earlier conversation that was read from the journal when you attached |
 | `/generations` | the generations it has lived in, as `./one back --list` gives them |
 | `/offers` | what waits for your approval before it goes out to the species; `/approve <commit>` lets one go. See [Offering a change to the species](#offering-a-change-to-the-species) |
+| `/memory` | how the agent's memory stands, with a mark for each memory, fact and intention; then `/memory pin`, `unpin`, `withdraw <mark>` or `back [n]`. See [Memory](#memory) |
 | `/plain` | how to get the plain text client |
 | `/help` | the keys and commands |
 | `//...` | send the agent a line that begins with a slash: it arrives with one |
@@ -356,7 +381,8 @@ To run without the container, on a machine you are willing to hand over, you nee
 
 - **The stem guards against mistakes, not against intent.** The body has a shell and runs as the same user as the stem, in the same container. A mutation changes the stem only with your approval, but a shell command can edit `.teneral/live`, the journal, `.teneral/state.json` or the file that records your approval directly; and a stem you approved is from then on the one that keeps, or drops, every rule here. Nothing stops a body that goes around the mutation path.
 - **Messages between agents are unsigned.** The `from` on a message is whatever the sender wrote.
-- **Nothing measures whether a generation is better.** The checks show it is not broken: it type-checks, its tests pass, it starts and answers one message from a stand-in model. Whether it is an improvement is for you and the agent to judge from the journal.
+- **Only the memory is measured.** A mutation of the memory is held against the exam (see [Memory](#memory)). For everything else the checks only show that a generation is not broken: it type-checks, its tests pass, it starts and answers one message from a stand-in model. Whether it is an improvement is for you and the agent to judge from the journal.
+- **The memory is young.** Its exam asks only what the agent thought to ask, its third measure counts words and not meaning, and the thresholds of its health are first guesses. A memory formed by a model can be wrong; the journal beside it is what happened.
 
 `BACKLOG.md` lists these and the smaller known faults. It is the agent's own file: it is expected to work from it and add to it.
 
