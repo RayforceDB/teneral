@@ -354,7 +354,7 @@ Settings, in `.env`:
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request at most. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
 | `TENERAL_TAIL_CHARS` | Characters of the conversation shown to the model word for word; what is older is shown as the agent's memories of it, which take a few lines an episode. Default 100000. Everything in a request is read again at each step of a turn, so this number is most of what a step costs and how long the first reply after a pause takes. |
-| `TENERAL_OWN_TOKENS_DAY` | tokens a day the agent may spend in time of its own, the turns a clock tick wakes it for; unset: no cap |
+| `TENERAL_OWN_TOKENS_DAY` | Tokens a day the agent may spend in time of its own, the turns a clock tick wakes it for. Past it there are no ticks until the day has moved on; what arrives is answered all the same. Unset: no cap. |
 | `TENERAL_CHECK_MINUTES` | Minutes one check of a mutation (the type check, the tests of everything outside the body, the agent's own tests) may run before the stem stops it and refuses the mutation. Default 10; 0 for no limit. Raise it when the agent's own tests have grown past that. |
 | `TENERAL_SMOKE_SECONDS` | Seconds the smoke run has to become ready and reply. Default 30; 0 for no limit. Raise it for a body that takes long to start. |
 | `TENERAL_UPSTREAM` | Which ref is [the species](#the-species): `<remote>/<branch>` or a local branch. Default `origin/main` when there is a remote `origin`, else the branch this checkout is on. |
