@@ -49,7 +49,7 @@ function page(events: JournalEvent[], now: number): string[] {
     lines.push('', memories.length > LISTED ? `The latest ${LISTED} of ${memories.length} memories:` : 'Memories:');
     lines.push(...memories.slice(-LISTED).map((m: Memory) => `  ${markOf(m.id)}  ${when(m.start)}  ${m.outcome.padEnd(7)} ${brief(m.title)}`));
   }
-  if (held.facts.length > 0) lines.push('', 'Facts held:', ...held.facts.map((f) => `  ${f.mark}  [${f.source}] ${brief(f.text, 90)}`));
+  if (held.facts.length > 0) lines.push('', 'Facts held:', ...held.facts.map((f) => `  ${f.mark}  [${f.source}]${f.about === undefined ? '' : ` (about ${brief(f.about, 24)})`} ${brief(f.text, 90)}`));
   const todo = agenda(held, new Date(now).toISOString().slice(0, 10));
   const asks = held.intentions.filter((i) => i.waits);
   if (todo.length > 0) {

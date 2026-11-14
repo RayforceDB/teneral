@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { EXAM_KIND, questionsOf } from '../../brain/exam';
-import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, byMark, known, knownText } from '../../brain/known';
+import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, OWN_CHARS, byMark, known, knownText } from '../../brain/known';
 import { buildMessages } from '../../brain/memory';
 import { journalPast } from '../../brain/past';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
@@ -253,4 +253,30 @@ test('an owner\'s answer is kept as a rule: a yes with how far it goes, a no wit
   const once = context(journalOf([idea, answer]));
   expect(await tool('allowed').run({ intention: a!.mark, words: 'yes, fix typos yourself', rule: 'only this' }, once)).not.toContain('Kept as a fact');
   expect(known(readEvents(once.journal)).facts).toEqual([]);
+});
+
+test('a fact may be about a person, and a question for them is shown what is known of them', async () => {
+  expect(parseMemory(`${MEMORY}\n\nFacts:\n- [seen] (about Ivan Petrov) He answers for the deploys and is reached in the deploy chat\n- [owner] (replaces F12345678) (about Ivan Petrov) He is on leave until December`, 600))
+    .toMatchObject({ facts: [{ source: 'seen', about: 'Ivan Petrov', text: 'He answers for the deploys and is reached in the deploy chat', replaces: [] }, { source: 'owner', about: 'Ivan Petrov', replaces: ['F12345678'] }] });
+  const about = ev({ type: 'note', kind: FACT_KIND, data: { text: 'He answers for the deploys', source: 'seen', episode: 'e0', about: 'Ivan Petrov' } });
+  expect(knownText(known([about]), '2026-11-12', '[memory]')).toContain('[seen] (about Ivan Petrov) He answers for the deploys');
+  const ctx = context(journalOf([about, fact('The owner is in Lisbon')]));
+  const kept = await tool('intend').run({ text: 'Which region does the failing deploy run in?', origin: 'ask', to: 'Ivan Petrov, in the deploy chat' }, ctx);
+  expect(kept).toContain('to Ivan Petrov, in the deploy chat');
+  expect(kept).toContain('What you know of them:');
+  expect(kept).toContain('He answers for the deploys');
+  expect(kept).not.toContain('Lisbon');
+});
+
+test('ideas of its own are the agent\'s to pile up, so the list shows the newest that fit; what was taken on is always shown', () => {
+  const long = 'x'.repeat(Math.floor(OWN_CHARS / 3));
+  const events = [
+    ev({ type: 'note', kind: INTENTION_KIND, data: { text: 'Send the report to the owner' } }),
+    ...Array.from({ length: 5 }, (_, i) => ev({ type: 'note', kind: INTENTION_KIND, data: { text: `Idea ${i} ${long}`, origin: 'own' } })),
+  ];
+  const shown = knownText(known(events), '2026-11-12', '[memory]')!;
+  expect(shown).toContain('Send the report to the owner');
+  expect(shown).not.toContain('Idea 1 ');
+  expect(shown).toContain('Idea 4 ');
+  expect(shown).toContain('(3 older ideas of your own are not shown here; they are on your agenda still, and a tick offers them in turn.)');
 });

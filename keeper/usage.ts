@@ -23,6 +23,8 @@ export const share = (s: Spent): string => (s.input > 0 ? `${Math.round((s.cache
 
 /** The row for what forming memories cost: requests the agent makes of itself while nothing is asked of it. */
 export const REMEMBERING = 'remembering';
+/** The requests in which the agent looks over what it is doing and sets down its agenda (brain/agenda.ts). */
+export const LOOKING_AHEAD = 'looking ahead';
 
 export interface UsageReport {
   /** By span of time, the widest last. */
@@ -89,7 +91,7 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       if (inSpan) add(span.spent, input, cached, output);
     }
     if (Number.isFinite(at) && at >= now - 24 * HOUR) {
-      const name = memory ? REMEMBERING : source;
+      const name = memory ? (f.kind === 'memory.reflection.v1' ? LOOKING_AHEAD : REMEMBERING) : source;
       if (!sources.has(name)) sources.set(name, NONE());
       add(sources.get(name)!, input, cached, output);
     }

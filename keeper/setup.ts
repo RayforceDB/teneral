@@ -40,6 +40,9 @@ TENERAL_HEARTBEAT_MINUTES=30
 # Tokens a day the agent may spend in time of its own, the turns a clock tick wakes it for. Past it there are no ticks until
 # the day has moved on; what you or anyone else sends is answered all the same. Unset, or not a positive number: no cap.
 # TENERAL_OWN_TOKENS_DAY=2000000
+# Hours between the reports the agent makes to you of what it did on its own: one short message, by the way it chooses, and only
+# when there is something to tell. Unset: 24. 0: none.
+# TENERAL_REPORT_HOURS=24
 `;
 
 /**

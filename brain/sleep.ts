@@ -148,7 +148,8 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
     + `In the brackets say where it comes from: ${SOURCES.join(', ')} (owner: your owner said it; seen: you saw it yourself, as in a tool's output; `
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
-    + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>',
+    + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
+    + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>',
     'Intentions:\n- [YYYY-MM-DD] <something you took on to do later and have not done; the day it is due>\n- [] <the same, when no day was named>',
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
@@ -164,7 +165,7 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
 const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
 
 /** A fact as the agent set it down: the fact it replaces is still only a mark. */
-export interface NotedFact { text: string; source: Source; replaces: string[] }
+export interface NotedFact { text: string; source: Source; replaces: string[]; about?: string }
 export interface Formed {
   title: string;
   text: string;
@@ -177,7 +178,7 @@ export interface Formed {
   questions: { question: string; begins: string }[];
 }
 
-const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*(?:\(\s*replaces\s+([^)]*)\)\s*)?(.+)$/i;
+const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about)\s+[^)]*\)\s*)*)(.+)$/i;
 const INTENTION_LINE = /^-\s*\[\s*(\d{4}-\d{2}-\d{2})?\s*\]\s*(.+)$/;
 const DONE_LINE = /^-\s*(I[0-9a-zA-Z]{4,12})\b[\s:,-]*(.*)$/;
 const QUESTION_LINE = /^-\s*(.+?)\s*=>\s*(.+)$/;
@@ -202,7 +203,11 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
     if (list === 'facts' && found.facts.length < LIST_MAX) {
       const m = FACT_LINE.exec(item);
       const source = SOURCES.find((s) => s === m?.[1]?.toLowerCase());
-      if (m && source !== undefined && m[3]!.trim().length >= 8) found.facts.push({ source, text: m[3]!.trim(), replaces: (m[2] ?? '').split(/[\s,]+/).filter((mark) => mark !== '') });
+      const replaces = /\(\s*replaces\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1] ?? '';
+      const about = /\(\s*about\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1]?.trim() ?? '';
+      if (m && source !== undefined && m[3]!.trim().length >= 8) {
+        found.facts.push({ source, text: m[3]!.trim(), replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about }) });
+      }
     } else if (list === 'intentions' && found.intentions.length < LIST_MAX) {
       const m = INTENTION_LINE.exec(item);
       if (m && m[2]!.trim().length >= 8) found.intentions.push({ text: m[2]!.trim(), ...(m[1] ? { due: m[1] } : {}) });
@@ -321,7 +326,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
         appendEvent(d.journal, d.gen, {
           type: 'note', kind: FACT_KIND,
-          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}) } satisfies FactData,
+          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }) } satisfies FactData,
         });
       }
       for (const intention of intentions) {

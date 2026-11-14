@@ -448,7 +448,13 @@ const intend: Tool = {
       data: { text, ...(to !== undefined && to !== '' && (origin === 'ask' || origin === 'unsure') ? { to } : {}), ...(origin === 'own' || origin === 'ask' ? { origin } : origin === 'unsure' ? { origin: 'own' as const, unsure: true as const } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
     });
     const mine = known([note]).intentions[0]!;
-    if (mine.waits) return `Kept as ${mine.mark}. It waits for an answer: put it, with its mark, to ${mine.unsure === true ? 'your owner' : mine.to ?? 'your owner'}, where you judge they will see it.`;
+    if (mine.waits) {
+      // What is known of whom it is for, so that it is asked of the right person in the right place.
+      const whom = (mine.to ?? '').toLowerCase();
+      const of = whom === '' ? [] : known(standing(readEvents(ctx.journal))).facts.filter((f) => f.about !== undefined && f.about.length >= 3 && whom.includes(f.about.toLowerCase()));
+      const told = of.length === 0 ? '' : `\nWhat you know of them:\n${of.slice(-8).map((f) => `${f.mark} [${f.source}] ${f.text}`).join('\n')}`;
+      return `Kept as ${mine.mark}. It waits for an answer: put it, with its mark, to ${mine.unsure === true ? 'your owner' : mine.to ?? 'your owner'}, where you judge they will see it.${told}`;
+    }
     return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
   },
 };

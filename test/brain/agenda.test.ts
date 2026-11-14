@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PASSED_TICKS, REFLECTION_KIND, REFLECT_EVERY, REMIND_DAYS, idleTicks, initiative, initiativeText, offered, ownSpend, parseLook, reflectionDue } from '../../brain/agenda';
+import { PASSED_TICKS, REFLECTION_KIND, REFLECT_EVERY, REMIND_DAYS, idleTicks, initiative, initiativeText, offered, ownSpend, parseLook, reflectionDue, reportAsk } from '../../brain/agenda';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { ALLOWED_KIND, INTENTION_KIND, agenda, known, knownText, ownerSaid } from '../../brain/known';
@@ -182,7 +182,7 @@ test('initiative is counted from the journal: what came of the agent\'s own idea
   ];
   const m = initiative(events);
   // An idea the owner allowed is one of its own that is open; what was taken on for someone is no part of the count.
-  expect(m).toMatchObject({ own: { done: 1, dropped: 1, open: 2 }, asked: { yes: 1, no: 1, waiting: 0 }, questions: { answered: 1, waiting: 0 } });
+  expect(m).toMatchObject({ own: { done: 1, dropped: 1, open: 2, undone: 0 }, asked: { yes: 1, no: 1, waiting: 0 }, questions: { answered: 1, waiting: 0 } });
   expect(initiativeText(m)).toBe('of your own ideas 1 were done, 1 given up, 2 are open; of the ideas you asked your owner about, 1 got a yes, 1 a no, 0 wait; of your questions 1 were answered, 0 wait');
   expect(initiativeText(initiative([]))).toBe('');
 });
@@ -215,4 +215,39 @@ test('what time of its own costs is the tokens of the turns a tick woke, over th
     ev({ type: 'stimulus', source: 'terminal', text: 'hi' }), ev({ type: 'assistant', text: 'c', toolCalls: [], usage }),
   ];
   expect(ownSpend(events, NOW)).toBe(2200);
+});
+
+test('an idea closed as done in a generation that was then rolled back is counted as undone', () => {
+  const idea = intention('Make the deploy retry by itself', { origin: 'own' });
+  const kept = intention('Tidy the old logs away', { origin: 'own' });
+  const closed = (i: JournalEvent, gen: string): JournalEvent => ({ ...ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: i.id, how: 'mutated' } }), gen });
+  const events = [idea, kept, closed(idea, 'bad1'), closed(kept, 'good1'), ev({ type: 'generation.rolledback', commit: 'bad1', to: 'good0', reason: 'crashed' })];
+  const m = initiative(events);
+  expect(m.own).toEqual({ done: 2, dropped: 0, open: 0, undone: 1 });
+  expect(initiativeText(m)).toContain('2 were done (1 of them in a generation that was then rolled back)');
+});
+
+test('once a day, when there is something to tell, a tick asks for one message to the owner, and its mark is what counts', () => {
+  clock = NOW - 3 * DAY;
+  const idea = intention('Make the deploy retry by itself', { origin: 'own' });
+  const unsure = intention('Write to the hosting company', { origin: 'own', unsure: true });
+  const work = [ev({ type: 'stimulus', source: 'clock', text: 'tick' }), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] }), ev({ type: 'assistant', text: 'Done.', toolCalls: [] })];
+  const closed = ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: idea.id, how: 'it retries now' } });
+  const events = [idea, unsure, ...work, closed];
+  const ask = reportAsk(events, NOW);
+  expect(ask).toContain('with the mark R20261110 in it');
+  expect(ask).toContain('- done: Make the deploy retry by itself');
+  expect(ask).toContain('Waiting for their word:');
+  expect(ask).toContain('Steps of work in time of your own: 1.');
+  expect(offered(known(events), NOW, 0, ask).startsWith('It is time to tell your owner')).toBe(true);
+  // Sent, by whatever way: not asked again until a day has passed and there is something new.
+  clock = NOW;
+  const sent = ev({ type: 'assistant', text: '', toolCalls: [{ id: 'm', name: 'zulip_reply', args: { text: 'R20261110 Today I made the deploy retry by itself.' } }] });
+  expect(reportAsk([...events, sent], NOW + 3_600_000)).toBe('');
+  expect(reportAsk([...events, sent], NOW + 2 * DAY)).toBe('');
+  const more = [ev({ type: 'stimulus', source: 'clock', text: 'tick' }, DAY), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'd', name: 'bash', args: {} }] })];
+  expect(reportAsk([...events, sent, ...more], NOW + 2 * DAY)).toContain('since 2026-11-10 12:00 UTC');
+  // Nothing done and nothing new is nothing to tell; and the owner can turn it off.
+  expect(reportAsk([unsure], NOW)).toBe('');
+  expect(reportAsk(events, NOW, 0)).toBe('');
 });

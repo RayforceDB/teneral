@@ -49,6 +49,8 @@ export interface FactData {
   episode: string;
   /** Ids of the fact notes this one takes the place of. */
   replaces?: string[];
+  /** The person it is about, when it is about one: how the agent knows whom to ask what. */
+  about?: string;
 }
 export interface Fact extends FactData {
   id: string;
@@ -84,8 +86,10 @@ export interface Intention extends IntentionData {
   /** When it was last put to whom it is for, and on how many occasions so far. */
   putAt?: string;
   puts: number;
-  /** How it ended, once it is closed (`Known.closed`). */
+  /** How it ended, once it is closed (`Known.closed`), when, and in which generation the record of it was written. */
   ended?: Ended;
+  endedAt?: string;
+  endedGen?: string;
   /** The owner's words that allowed it, for an idea that waited and waits no longer, and the source of the message they stood in. */
   allowed?: string;
   allowedIn?: string;
@@ -142,7 +146,7 @@ export function known(events: JournalEvent[]): Known {
       if (!text(d.text) || !SOURCES.includes(d.source as Source) || !text(d.episode)) continue;
       const replaces = Array.isArray(d.replaces) ? d.replaces.filter((id): id is string => typeof id === 'string') : [];
       for (const id of replaces) gone.add(id);
-      facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}) });
+      facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}), ...(text(d.about) ? { about: d.about.trim().slice(0, 80) } : {}) });
     } else if (e.kind === INTENTION_KIND) {
       if (!text(d.text)) continue;
       const origin = ORIGINS.includes(d.origin as Origin) ? (d.origin as Origin) : undefined;
@@ -166,7 +170,8 @@ export function known(events: JournalEvent[]): Known {
       // What waited for a word ends by that word; anything else ends as the record says, done unless it says dropped.
       if (ended !== undefined && ended.ended === undefined) {
         ended.ended = ended.waits ? (ended.unsure === true ? 'refused' : 'answered') : d.ended === 'dropped' ? 'dropped' : 'done';
-        ended.at = e.ts;
+        ended.endedAt = e.ts;
+        ended.endedGen = e.gen;
       }
       gone.add(d.intention);
     } else if (e.kind === FORGET_KIND) {
@@ -189,6 +194,8 @@ export function byMark(held: Pick<Known, 'facts' | 'intentions'>, mark: string):
 
 /** Characters the list below may take in a request. Past it the oldest facts are left out, and found by `recall` like everything else. */
 export const KNOWN_CHARS = 6000;
+/** Characters the agent's own ideas may take there. Past it the oldest are left out of the list, not off the agenda. */
+export const OWN_CHARS = 4000;
 
 /**
  * What is known, as the agent is shown it in every request: the facts that hold, each with its
@@ -202,10 +209,21 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
   const asks = held.intentions.filter((i) => i.waits);
   if (todo.length > 0) {
     lines.push(`${mark} What you mean to do, each with its mark:`);
+    // What was taken on for someone is always shown. Ideas of its own are the agent's to pile up, so only the newest that fit are; a tick offers the others in turn.
+    const own = todo.filter((i) => i.origin === 'own' && !(i.due !== undefined && i.due <= today));
+    let size = 0;
+    const shown = new Set<string>();
+    for (const i of [...own].reverse()) {
+      if (size + i.text.length > OWN_CHARS) break;
+      size += i.text.length;
+      shown.add(i.id);
+    }
     for (const i of todo) {
+      if (own.includes(i) && !shown.has(i.id)) continue;
       const due = i.due === undefined ? '' : i.due <= today ? ` [due ${i.due}, which has come]` : ` [due ${i.due}]`;
       lines.push(`${i.mark}${i.origin === 'own' ? (i.allowed === undefined ? ' [your own idea]' : ' [your own idea, your owner said yes]') : ''}${due} ${i.text}`);
     }
+    if (own.length > shown.size) lines.push(`(${own.length - shown.size} older ideas of your own are not shown here; they are on your agenda still, and a tick offers them in turn.)`);
   }
   if (asks.length > 0) {
     lines.push(`${mark} What waits for an answer, each with its mark: your questions, each for whoever you named, and ideas of your own you were not sure your owner allows. `
@@ -216,7 +234,7 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
     }
   }
   if (held.facts.length > 0) {
-    const rows = held.facts.map((f) => `${f.mark} [${f.source}] ${f.text}`);
+    const rows = held.facts.map((f) => `${f.mark} [${f.source}]${f.about === undefined ? '' : ` (about ${f.about})`} ${f.text}`);
     // The newest that fit; an agent's life should not push out what it learned last.
     let from = rows.length;
     let size = 0;

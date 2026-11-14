@@ -9,7 +9,7 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
-import { idleTicks, offered, ownSpend } from '../brain/agenda';
+import { idleTicks, offered, ownSpend, reportAsk } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -41,6 +41,8 @@ const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 // Tokens a day that the turns woken by a clock tick may spend: the cost of the agent's time of its own. Not a positive number, or not set: no cap.
 const ownSet = Number(process.env.TENERAL_OWN_TOKENS_DAY);
 const ownTokensDay = ownSet > 0 ? Math.floor(ownSet) : null;
+// Hours between the agent's reports to its owner of what it did on its own. Not set: 24. 0, or anything that is not a positive number: none.
+const reportHours = process.env.TENERAL_REPORT_HOURS === undefined ? 24 : Number(process.env.TENERAL_REPORT_HOURS) > 0 ? Number(process.env.TENERAL_REPORT_HOURS) : 0;
 // Characters per request. Not a positive number, or not set: the default in brain/memory.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
@@ -130,7 +132,7 @@ const sensors: Sensor[] = [
     },
     () => {
       const events = standing(readEvents(journal));
-      return offered(known(events), Date.now(), idleTicks(events));
+      return offered(known(events), Date.now(), idleTicks(events), reportAsk(events, Date.now(), reportHours * 3_600_000));
     },
   ),
   inbox(inboxDir),
