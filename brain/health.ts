@@ -1,4 +1,4 @@
-import { PASSED_TICKS, idleTicks } from './agenda';
+import { idleTicks } from './agenda';
 import { episodes } from './episodes';
 import { QUESTIONS_MIN, lastResult, rate, type Result } from './exam';
 import type { JournalEvent } from './journal';
@@ -27,7 +27,9 @@ const MECHANICAL = { count: 2, share: 0.5 };
 /** The memories tell less than this share of what the agent's own questions ask: what mattered did not get into them. */
 const TOLD_LOW = 0.5;
 /** This many ticks of time of its own in a row ended with nothing done, while there are things on the agenda: it is stuck. */
-const STUCK_TICKS = PASSED_TICKS * 4;
+// A number of its own, not one worked out from brain/agenda.ts when this file loads: the two files reach each other in a circle,
+// and a value read from the other at load time is not there yet when this one happens to load first.
+const STUCK_TICKS = 12;
 
 export interface Health {
   state: State;

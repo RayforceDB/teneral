@@ -251,3 +251,13 @@ test('once a day, when there is something to tell, a tick asks for one message t
   expect(reportAsk([unsure], NOW)).toBe('');
   expect(reportAsk(events, NOW, 0)).toBe('');
 });
+
+test('every file of the memory loads when it is the first one loaded: they reach each other in circles', () => {
+  // A value one file reads from another while loading is not there yet when the other is in the middle of loading it.
+  // Which file is first depends on who starts: the body, the owner's terminal, a gate. Each is tried, in a process of its own.
+  const brain = join(import.meta.dir, '..', '..', 'brain');
+  for (const name of ['agenda', 'exam', 'health', 'known', 'logbook', 'memory', 'owned', 'past', 'recall', 'remembered', 'sleep']) {
+    const run = Bun.spawnSync(['bun', '-e', `await import(${JSON.stringify(join(brain, `${name}.ts`))})`], { cwd: tmpdir(), stderr: 'pipe' });
+    expect(`${name}: ${run.stderr.toString().split('\n').find((line) => line.includes('Error')) ?? 'loads'}`).toBe(`${name}: loads`);
+  }
+});
