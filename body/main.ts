@@ -9,7 +9,7 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
-import { offered } from '../brain/agenda';
+import { idleTicks, offered, ownSpend } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -38,6 +38,9 @@ try {
   process.exit(1);
 }
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
+// Tokens a day that the turns woken by a clock tick may spend: the cost of the agent's time of its own. Not a positive number, or not set: no cap.
+const ownSet = Number(process.env.TENERAL_OWN_TOKENS_DAY);
+const ownTokensDay = ownSet > 0 ? Math.floor(ownSet) : null;
 // Characters per request. Not a positive number, or not set: the default in brain/memory.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
@@ -118,7 +121,18 @@ const sensors: Sensor[] = [
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
-  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), Date.now())),
+  clock(
+    heartbeatMinutes * 60_000,
+    () => {
+      const events = readEvents(journal);
+      // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
+      return clockMayTick(events, soulDir) && (ownTokensDay === null || ownSpend(events, Date.now()) < ownTokensDay);
+    },
+    () => {
+      const events = standing(readEvents(journal));
+      return offered(known(events), Date.now(), idleTicks(events));
+    },
+  ),
   inbox(inboxDir),
 ];
 

@@ -4,6 +4,7 @@
 
 import { episodes, type Episode } from '../brain/episodes';
 import type { JournalEvent } from '../brain/journal';
+import { initiative, initiativeText } from '../brain/agenda';
 import { agenda, known } from '../brain/known';
 import { PIN_SHARE, pinnedAmong } from '../brain/logbook';
 import { DEFAULT_BUDGET } from '../brain/memory';
@@ -66,6 +67,8 @@ function page(events: JournalEvent[], now: number): string[] {
     lines.push('', 'Questions the agent has for others:');
     lines.push(...others.map((i) => `  ${i.mark}  ${asked(i).padEnd(16)}  for ${brief(i.to!, 40)}: ${brief(i.text, 70)}`));
   }
+  const measured = initiativeText(initiative(events));
+  if (measured !== '') lines.push('', `What has come of the agent's initiative (said as it is said to the agent): ${measured}.`);
   return [...lines, '', ...HOW];
 }
 

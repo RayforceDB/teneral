@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { REFLECTION_KIND, REFLECT_EVERY, REMIND_MS, offered, parseLook, reflectionDue } from '../../brain/agenda';
+import { PASSED_TICKS, REFLECTION_KIND, REFLECT_EVERY, REMIND_DAYS, idleTicks, initiative, initiativeText, offered, ownSpend, parseLook, reflectionDue } from '../../brain/agenda';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { ALLOWED_KIND, INTENTION_KIND, agenda, known, knownText, ownerSaid } from '../../brain/known';
@@ -19,6 +19,7 @@ function ev(body: EventBody, afterMs = 1000): JournalEvent {
 }
 const LONG = GAP_MS + 1000;
 const NOW = Date.parse('2026-11-10T12:00:00.000Z');
+const DAY = 24 * 3_600_000;
 /** `count` episodes that are over, each with its memory, and one going on. */
 function life(count: number): JournalEvent[] {
   const stretches = Array.from({ length: count }, (_, i) => [
@@ -117,10 +118,18 @@ test('an idea the agent is not sure it may do waits for its owner: it is put to 
   const at = Date.parse(asked.ts);
   expect(offered(held, at + 3_600_000)).not.toContain('Write to the hosting company');
   expect(knownText(held, '2026-11-10', '[memory]')).toContain(`[asked ${asked.ts.slice(0, 10)}, no answer yet] Write to the hosting company`);
-  // With no answer for a day it is put to them again, and once reminded, not again for another day.
-  expect(offered(held, at + REMIND_MS)).toContain(`no answer yet: remind them] Write to the hosting company`);
-  const reminded = ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'zulip_reply', args: { text: `Reminder: ${idea.mark} is still waiting for your word.` } }] }, REMIND_MS);
-  expect(offered(known([...events, reminded]), Date.parse(reminded.ts) + 3_600_000)).not.toContain('Write to the hosting company');
+  // With no answer for a day it is put again; then after three more, then seven; after that it is asked no more and stays where the owner sees it.
+  expect(offered(held, at + REMIND_DAYS[0]! * DAY)).toContain('no answer yet: remind them] Write to the hosting company');
+  const mention = (after: number) => ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'zulip_reply', args: { text: `Reminder: ${idea.mark} is still waiting for your word.` } }] }, after);
+  const second = mention(DAY);
+  const twice = known([...events, second]);
+  expect(offered(twice, Date.parse(second.ts) + 2 * DAY)).not.toContain('Write to the hosting company');
+  expect(offered(twice, Date.parse(second.ts) + 3 * DAY)).toContain('remind them] Write to the hosting company');
+  const [third, fourth] = [mention(3 * DAY), mention(7 * DAY)];
+  const done = known([...events, second, third, fourth]);
+  expect(done.intentions.find((i) => i.id === idea.id)).toMatchObject({ puts: 4, waits: true });
+  expect(offered(done, Date.parse(fourth.ts) + 60 * DAY)).not.toContain('Write to the hosting company');
+  expect(knownText(done, '2026-12-30', '[memory]')).toContain('Write to the hosting company');
 
   // A yes counts only in words the owner said after the idea was set down, by whatever sensor vouches for them.
   const yes = ev({ type: 'stimulus', source: 'owner:chat', text: 'Yes, write to them, but copy me in.' }) as JournalEvent & { type: 'stimulus' };
@@ -156,4 +165,54 @@ test('the agenda is taken in order: what is due, what was taken on, the agent\'s
   expect(shown).toContain('[your own idea] My own idea to tidy the logs');
   expect(shown).toContain('What waits for an answer');
   expect(shown).toContain('[for your owner] [not yet asked] Ask whether the old server may go');
+});
+
+test('initiative is counted from the journal: what came of the agent\'s own ideas and of what it asked', () => {
+  const own = [intention('Tidy the old logs away', { origin: 'own' }), intention('Rewrite the deploy script', { origin: 'own' }), intention('Add a check for the certificate', { origin: 'own' })];
+  const unsure = [intention('Write to the hosting company', { origin: 'own', unsure: true }), intention('Delete the old server', { origin: 'own', unsure: true })];
+  const ask = intention('Which region is the deploy in?', { origin: 'ask', to: 'Ivan, in the deploy chat' });
+  const taken = intention('Send the report to the owner');
+  const yes = ev({ type: 'stimulus', source: 'terminal', text: 'yes, write to them' });
+  const ended = (i: JournalEvent, more: Record<string, unknown> = {}) => ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: i.id, how: 'x', ...more } });
+  const events = [
+    ...own, ...unsure, ask, taken, yes,
+    ended(own[0]!), ended(own[1]!, { ended: 'dropped' }),
+    ev({ type: 'note', kind: ALLOWED_KIND, data: { intention: unsure[0]!.id, words: 'yes, write to them', event: yes.id, source: 'terminal' } }),
+    ended(unsure[1]!), ended(ask), ended(taken),
+  ];
+  const m = initiative(events);
+  // An idea the owner allowed is one of its own that is open; what was taken on for someone is no part of the count.
+  expect(m).toMatchObject({ own: { done: 1, dropped: 1, open: 2 }, asked: { yes: 1, no: 1, waiting: 0 }, questions: { answered: 1, waiting: 0 } });
+  expect(initiativeText(m)).toBe('of your own ideas 1 were done, 1 given up, 2 are open; of the ideas you asked your owner about, 1 got a yes, 1 a no, 0 wait; of your questions 1 were answered, 0 wait');
+  expect(initiativeText(initiative([]))).toBe('');
+});
+
+test('ticks that end with nothing done are counted, and after a few a tick offers what stands further down the agenda', () => {
+  const tick = () => ev({ type: 'stimulus', source: 'clock', text: 'Clock tick.' }, LONG);
+  const idle = () => [tick(), ev({ type: 'assistant', text: 'Nothing I can act on now.', toolCalls: [] })];
+  const worked = () => [tick(), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] }), ev({ type: 'assistant', text: 'Done.', toolCalls: [] })];
+  expect(idleTicks([...worked(), ...idle(), ...idle()])).toBe(2);
+  expect(idleTicks([...idle(), ...worked()])).toBe(0);
+  // What the owner said in between is no tick, and a tick not yet answered is not counted.
+  expect(idleTicks([...idle(), ev({ type: 'stimulus', source: 'terminal', text: 'hello' }), ev({ type: 'assistant', text: 'Hello.', toolCalls: [] }), ...idle(), tick()])).toBe(2);
+
+  const held = known(Array.from({ length: 8 }, (_, i) => intention(`Thing number ${i} that is to be done`)));
+  const first = (idleCount: number): string => /Thing number (\d)/.exec(offered(held, NOW, idleCount))![0];
+  expect(first(0)).toBe('Thing number 0');
+  expect(first(PASSED_TICKS - 1)).toBe('Thing number 0');
+  expect(first(PASSED_TICKS)).toBe('Thing number 5');
+  expect(offered(held, NOW, PASSED_TICKS)).toContain('you passed over several times, and they stay on it');
+  // It comes round again.
+  expect(first(PASSED_TICKS * 2)).toBe('Thing number 2');
+});
+
+test('what time of its own costs is the tokens of the turns a tick woke, over the last day', () => {
+  const usage = { input: 1000, output: 100, cached: 900 };
+  clock = NOW - 2 * DAY;
+  const events = [
+    ev({ type: 'stimulus', source: 'clock', text: 'tick' }), ev({ type: 'assistant', text: 'old', toolCalls: [], usage }),
+    ev({ type: 'stimulus', source: 'clock', text: 'tick' }, 2 * DAY - 3_600_000), ev({ type: 'assistant', text: 'a', toolCalls: [], usage }), ev({ type: 'assistant', text: 'b', toolCalls: [], usage }),
+    ev({ type: 'stimulus', source: 'terminal', text: 'hi' }), ev({ type: 'assistant', text: 'c', toolCalls: [], usage }),
+  ];
+  expect(ownSpend(events, NOW)).toBe(2200);
 });

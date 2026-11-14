@@ -1,7 +1,8 @@
+import { PASSED_TICKS, idleTicks } from './agenda';
 import { episodes } from './episodes';
 import { QUESTIONS_MIN, lastResult, rate, type Result } from './exam';
 import type { JournalEvent } from './journal';
-import { known } from './known';
+import { agenda, known } from './known';
 import { remembered } from './remembered';
 
 // How the agent's memory stands, as one word with its reasons. A memory fails quietly: episodes
@@ -25,6 +26,8 @@ const QUARANTINED = { count: 3, share: 0.2 };
 const MECHANICAL = { count: 2, share: 0.5 };
 /** The memories tell less than this share of what the agent's own questions ask: what mattered did not get into them. */
 const TOLD_LOW = 0.5;
+/** This many ticks of time of its own in a row ended with nothing done, while there are things on the agenda: it is stuck. */
+const STUCK_TICKS = PASSED_TICKS * 4;
 
 export interface Health {
   state: State;
@@ -67,6 +70,9 @@ export function health(events: JournalEvent[], now: number): Health {
   if (mechanical >= MECHANICAL.count && mechanical / all.merges.length > MECHANICAL.share) failing.push(`${mechanical} of ${all.merges.length} wider memories are only lists of titles`);
   if (exam !== null && exam.recall.questions >= QUESTIONS_MIN && rate(exam.recall) < rate(exam.plain)) failing.push('recall finds less than looking for the words as they stand');
   if (exam !== null && exam.written && rate(exam.told) < TOLD_LOW) behind.push(`the memories tell ${Math.round(rate(exam.told) * 100)}% of what the exam asks`);
+  const idle = idleTicks(events);
+  const open = agenda(known(events), today).length;
+  if (idle >= STUCK_TICKS && open > 0) behind.push(`the agenda is stuck: ${idle} ticks of time of your own in a row ended with nothing done, with ${open} ${open === 1 ? 'thing' : 'things'} open`);
   if (overdue > 0) behind.push(`${overdue} ${overdue === 1 ? 'thing' : 'things'} meant to be done ${overdue === 1 ? 'is' : 'are'} past the day`);
 
   return {

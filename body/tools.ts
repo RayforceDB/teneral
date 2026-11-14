@@ -5,7 +5,7 @@ import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Enve
 import { git } from '../immune/gates';
 import { appendEvent, readEvents } from '../brain/journal';
 import { standing } from '../brain/owned';
-import { ALLOWED_KIND, DONE_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type IntentionData } from '../brain/known';
+import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
@@ -453,21 +453,51 @@ const intend: Tool = {
   },
 };
 
+/**
+ * What the owner's answer comes to as a rule, set down as a fact in the owner's name, so that the same kind of thing
+ * is not asked again. It is the owner's word only when their words stand in a message of theirs; otherwise nothing is written.
+ */
+function ruleFact(ctx: ToolContext, rule: string | undefined, said: { id: string } | null): string {
+  const text = rule?.trim() ?? '';
+  if (text === '' || /^only this\.?$/i.test(text)) return '';
+  if (text.length < 8) throw new Error('say the rule in a sentence that can be understood on its own, or leave it out');
+  if (said === null) throw new Error('a rule is set down in your owner\'s name, so give their words too, copied exactly from a message of theirs');
+  const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: FACT_KIND, data: { text, source: 'owner', episode: said.id } satisfies FactData });
+  return ` Kept as a fact, ${known([note]).facts[0]!.mark}: you need not ask about that again.`;
+}
+
 const done: Tool = {
   spec: {
     name: 'done',
     description:
       'Close an intention: it was done, or it is given up. Give its mark, as it stands in the list of what you mean to do, and say in a line how it ended. ' +
-      'An intention you leave open stays in front of you for good, so close what is finished and what no longer matters.',
-    parameters: params({ intention: 'The mark of the intention, such as I1a2b3c4d', how: 'How it ended: what was done, or why it is given up' }),
+      'An intention you leave open stays in front of you for good, so close what is finished and what no longer matters. ' +
+      'Also for what waited for an answer: a question that was answered, or an idea your owner said no to. When your owner\'s answer says something about more than this one thing, ' +
+      'give it as `rule` with their `words`, and it is kept as a fact so that you do not ask the same again.',
+    parameters: {
+      type: 'object',
+      properties: {
+        intention: { type: 'string', description: 'The mark of the intention, such as I1a2b3c4d' },
+        how: { type: 'string', description: 'How it ended: what was done, why it is given up, or what the answer was and who gave it' },
+        ended: { type: 'string', enum: ['done', 'dropped'], description: 'done: it was carried out (the default). dropped: it is given up' },
+        rule: { type: 'string', description: 'What your owner does not want, or wants, as widely as they said it and no wider, in a sentence that can be understood on its own. Only when their answer says it' },
+        words: { type: 'string', description: "With `rule`: your owner's own words, copied exactly from their message" },
+      },
+      required: ['intention', 'how'],
+    },
   },
   async run(args, ctx) {
     const mark = str(args, 'intention');
-    const held = known(readEvents(ctx.journal));
+    const events = standing(readEvents(ctx.journal));
+    const held = known(events);
     const found = byMark({ facts: [], intentions: held.intentions }, mark);
     if (found === null) throw new Error(`no open intention has the mark ${mark}. Open: ${held.intentions.map((i) => i.mark).join(', ') || 'none'}`);
-    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how') } });
-    return `Closed ${found.mark}: ${found.text}`;
+    const ended = optional(args, 'ended');
+    if (ended !== undefined && ended !== 'done' && ended !== 'dropped') throw new Error('ended must be done or dropped');
+    const words = optional(args, 'words')?.trim() ?? '';
+    const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaid(events, found as Intention, words));
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how'), ...(ended === 'dropped' ? { ended } : {}) } });
+    return `Closed ${found.mark}: ${found.text}${kept}`;
   },
 };
 
@@ -478,8 +508,17 @@ const allowed: Tool = {
       'Record that your owner said yes to an idea of yours that waited for their word. Give its mark and the words they said yes with, copied exactly from their message. ' +
       'The idea then joins your agenda. It is accepted only when those words stand in a message of your owner\'s that came after you set the idea down: ' +
       'one typed in their terminal, or one from a sensor that has made sure of the sender and so names its source `owner:<channel>`. Where it came from is recorded. ' +
+      'Say also how far the yes goes, as `rule`: it is kept as a fact, and what it covers you need not ask about again. ' +
       'For a no, or for a question that was answered, use `done`.',
-    parameters: params({ intention: 'The mark of the idea, such as I1a2b3c4d', words: "Your owner's own words, copied exactly from the message in which they allowed it" }),
+    parameters: {
+      type: 'object',
+      properties: {
+        intention: { type: 'string', description: 'The mark of the idea, such as I1a2b3c4d' },
+        words: { type: 'string', description: "Your owner's own words, copied exactly from the message in which they allowed it" },
+        rule: { type: 'string', description: 'What your owner allowed, as widely as they said it and no wider, in a sentence that can be understood on its own; or the two words "only this" when the yes was for this one thing' },
+      },
+      required: ['intention', 'words', 'rule'],
+    },
   },
   async run(args, ctx) {
     const mark = str(args, 'intention');
@@ -490,8 +529,9 @@ const allowed: Tool = {
     const words = str(args, 'words').trim();
     const said = ownerSaid(events, idea, words);
     if (said === null) throw new Error('those words do not stand in any message of your owner\'s since you set the idea down. A message counts as theirs only from their terminal or from a source named `owner:<channel>`; one that only says it is from them does not. Ask them, and copy their answer exactly');
+    const kept = ruleFact(ctx, str(args, 'rule'), said);
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ALLOWED_KIND, data: { intention: idea.id, words, event: said.id, source: said.source } });
-    return `${idea.mark} is on your agenda now, by your owner's word: ${idea.text}`;
+    return `${idea.mark} is on your agenda now, by your owner's word: ${idea.text}${kept}`;
   },
 };
 

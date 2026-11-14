@@ -36,12 +36,103 @@ export const OWN_OPEN_MANY = 7;
 /** How many lines of the agenda a clock tick offers, and how much of each. */
 const OFFERED = 5;
 const OFFERED_CHARS = 240;
-/** What was asked and not answered is asked again after this long, and again each time as long passes. */
-export const REMIND_MS = 24 * 3_600_000;
+/**
+ * What was asked and not answered is asked again this many days after the first asking, then this many after the
+ * second, and so on. After the last it is asked no more: it stays where the owner sees it (`/memory`), and nobody is nagged.
+ */
+export const REMIND_DAYS = [1, 3, 7];
+const DAY_MS = 24 * 3_600_000;
 
 /** What waits for an answer and is to be put now: never asked, or asked long enough ago with no answer. */
 export function toAsk(held: Known, now: number): Intention[] {
-  return held.intentions.filter((i) => i.waits && (!i.put || now - Date.parse(i.putAt ?? '') >= REMIND_MS));
+  return held.intentions.filter((i) => {
+    if (!i.waits) return false;
+    if (!i.put) return true;
+    const days = REMIND_DAYS[i.puts - 1];
+    return days !== undefined && now - Date.parse(i.putAt ?? '') >= days * DAY_MS;
+  });
+}
+
+/** After this many ticks in a row in which nothing was done, a tick offers the next lines of the agenda instead of the same first ones. */
+export const PASSED_TICKS = 3;
+
+/**
+ * How many of the latest clock ticks in a row ended with nothing done: no tool was called between
+ * the tick and whatever arrived next. A tick still being answered is not counted.
+ */
+export function idleTicks(events: JournalEvent[]): number {
+  let idle = 0;
+  let worked = false;
+  let answered = false;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === 'assistant') {
+      answered = true;
+      if (Array.isArray(e.toolCalls) && e.toolCalls.length > 0) worked = true;
+    } else if (e.type === 'stimulus') {
+      if (e.source === 'clock') {
+        if (worked) break;
+        if (answered) idle += 1;
+      }
+      // What followed something else is no part of how a tick ended.
+      worked = false;
+      answered = false;
+    }
+  }
+  return idle;
+}
+
+/**
+ * What the agent's initiative has come to, counted from the journal with no model asked. A memory
+ * has its exam; this is the agenda's: without it the agent cannot know that it keeps proposing
+ * what is never done, or asking for what is always refused.
+ */
+export interface Initiative {
+  /** Ideas of its own that needed no word: carried out, given up, still open. */
+  own: { done: number; dropped: number; open: number };
+  /** Ideas it was not sure of: the owner said yes, said no, has not answered. */
+  asked: { yes: number; no: number; waiting: number };
+  /** Questions: answered, still waiting. */
+  questions: { answered: number; waiting: number };
+  /** The latest ticks in a row that ended with nothing done. */
+  idle: number;
+}
+
+export function initiative(events: JournalEvent[]): Initiative {
+  const held = known(events);
+  const all = [...held.intentions, ...held.closed];
+  const count = (of: (i: Intention) => boolean): number => all.filter(of).length;
+  const sure = (i: Intention): boolean => i.origin === 'own' && (i.unsure !== true || i.allowed !== undefined);
+  return {
+    own: { done: count((i) => sure(i) && i.ended === 'done'), dropped: count((i) => sure(i) && i.ended === 'dropped'), open: count((i) => sure(i) && i.ended === undefined) },
+    asked: { yes: count((i) => i.unsure === true && i.allowed !== undefined), no: count((i) => i.ended === 'refused'), waiting: count((i) => i.unsure === true && i.waits && i.ended === undefined) },
+    questions: { answered: count((i) => i.ended === 'answered'), waiting: count((i) => i.origin === 'ask' && i.ended === undefined) },
+    idle: idleTicks(events),
+  };
+}
+
+/** The same in a line or two of words, for the owner's page and for the agent when it looks ahead; empty when there is nothing to count yet. */
+export function initiativeText(m: Initiative): string {
+  const parts: string[] = [];
+  if (m.own.done + m.own.dropped + m.own.open > 0) parts.push(`of your own ideas ${m.own.done} were done, ${m.own.dropped} given up, ${m.own.open} are open`);
+  if (m.asked.yes + m.asked.no + m.asked.waiting > 0) parts.push(`of the ideas you asked your owner about, ${m.asked.yes} got a yes, ${m.asked.no} a no, ${m.asked.waiting} wait`);
+  if (m.questions.answered + m.questions.waiting > 0) parts.push(`of your questions ${m.questions.answered} were answered, ${m.questions.waiting} wait`);
+  if (m.idle >= PASSED_TICKS) parts.push(`the last ${m.idle} ticks of time of your own ended with nothing done`);
+  return parts.join('; ');
+}
+
+/**
+ * What the turns woken by a clock tick spent in the day ending at `now`, in tokens read and written:
+ * the cost of the agent's time of its own, which its owner may cap (TENERAL_OWN_TOKENS_DAY).
+ */
+export function ownSpend(events: JournalEvent[], now: number): number {
+  let own = false;
+  let spent = 0;
+  for (const e of events) {
+    if (e.type === 'stimulus') own = e.source === 'clock';
+    else if (own && e.type === 'assistant' && e.usage !== undefined && Date.parse(e.ts) >= now - DAY_MS) spent += (e.usage.input ?? 0) + (e.usage.output ?? 0);
+  }
+  return spent;
 }
 
 /** Whether it is time to look ahead: enough has been remembered since the last time. */
@@ -57,7 +148,7 @@ export function reflectionDue(events: JournalEvent[]): boolean {
 }
 
 /** What the agent is asked, after everything a turn would show it. */
-export function reflectQuestion(held: Known): string {
+export function reflectQuestion(held: Known, measured = ''): string {
   const own = held.intentions.filter((i) => i.origin === 'own').length;
   return [
     `${MEMORY_MARK} Nothing is asked of you at this moment, and you have remembered a good deal since you last looked over what you are doing. `
@@ -67,6 +158,8 @@ export function reflectQuestion(held: Known): string {
     'Set down only what you would really do in time of your own, each so that it can be understood on its own, weeks from now. '
     + 'Nothing that is already in your list above. Fewer is better, and none is an honest answer.'
     + (own >= OWN_OPEN_MANY ? ` You already hold ${own} ideas of your own that are open: before adding to them, close under Done those that no longer matter.` : ''),
+    ...(measured === '' ? [] : [`What has come of it so far: ${measured}. Let that tell you what is worth setting down: `
+      + 'ideas that are never done are not worth more of, and what your owner refused once is not to be asked again in other words.']),
     'An idea of your own is no permission. What your owner has plainly allowed you, or what touches only your own work, goes under Agenda. '
     + 'What you are not sure they would allow goes under Unsure: it is not lost, it waits, and you ask them. Do not drop an idea because you may not be allowed it, and do not do it without asking.',
     'Call no tool. Reply with these lists and nothing else, each only when there is something for it:',
@@ -74,7 +167,7 @@ export function reflectQuestion(held: Known): string {
     'Unsure:\n- <a thing you would do if your owner allows it, said so that they can answer yes or no>',
     'Ask:\n- [whom it is for, and where you will reach them] <a question, put so that it can be answered in a line>\n- [] <the same, when it is for your owner>\n'
     + 'A question goes to whoever can answer it: your owner, one person, the people of some chat. Whom to ask and where is yours to choose.',
-    'Done:\n- I1a2b3c4 <how it ended>\nFor each thing in your list above that is settled, or no longer worth doing: its mark, and in a few words why.',
+    'Done:\n- I1a2b3c4 [done] <how it ended>\n- I1a2b3c4 [dropped] <why it is given up>\nFor each thing in your list above that is settled, or no longer worth doing: its mark, which of the two, and in a few words why.',
     'If there is nothing for any of them, reply with the one word: Nothing',
   ].join('\n\n');
 }
@@ -84,7 +177,7 @@ export interface Looked {
   /** Ideas that wait for the owner's word. */
   unsure: string[];
   asks: { text: string; to?: string }[];
-  done: { mark: string; how: string }[];
+  done: { mark: string; how: string; ended?: 'dropped' }[];
 }
 
 const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
@@ -122,7 +215,8 @@ export function parseLook(reply: string): Looked | { problem: string } {
       if (text.length >= 8) found.asks.push({ text, ...(to !== '' && !/^(your |my |the )?owner$/i.test(to) ? { to } : {}) });
     } else if (list === 'done' && found.done.length < 24) {
       const m = DONE_LINE.exec(item);
-      if (m) found.done.push({ mark: m[1]!, how: m[2]!.trim() });
+      const how = /^\[\s*(done|dropped)\s*\]\s*(.*)$/i.exec(m?.[2]?.trim() ?? '');
+      if (m) found.done.push({ mark: m[1]!, how: (how?.[2] ?? m[2]!).trim(), ...(how?.[1]?.toLowerCase() === 'dropped' ? { ended: 'dropped' as const } : {}) });
     }
   }
   return headed ? found : { problem: 'it had none of the lists "Agenda:", "Unsure:", "Ask:", "Done:" and was not the one word "Nothing"' };
@@ -137,7 +231,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Sle
   if (!reflectionDue(events)) return 'nothing';
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events))), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;
@@ -164,7 +258,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Sle
       for (const settled of looked.done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);
         if (open === undefined) continue;
-        appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how } });
+        appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
         closed += 1;
       }
       appendEvent(d.journal, d.gen, { type: 'note', kind: REFLECTION_KIND, data: { own: own.length, unsure: unsure.length, asks: asks.length, closed, ...(usage ? { usage } : {}) } });
@@ -185,9 +279,15 @@ export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Sle
  * with them. One thing in a tick: time of its own is not a licence to work through a list while
  * nobody watches.
  */
-export function offered(held: Known, now: number): string {
+export function offered(held: Known, now: number, idle = 0): string {
   const today = new Date(now).toISOString().slice(0, 10);
-  const todo = agenda(held, today);
+  const whole = agenda(held, today);
+  // What was offered and passed over several ticks running gives way to what stands after it, so that nothing behind
+  // a line that cannot be acted on waits for ever. What is due keeps its place; the rest comes round again in turn.
+  const come = whole.filter((i) => i.due !== undefined && i.due <= today);
+  const rest = whole.filter((i) => !come.includes(i));
+  const turn = rest.length <= OFFERED ? 0 : (Math.floor(idle / PASSED_TICKS) * OFFERED) % rest.length;
+  const todo = [...come, ...rest.slice(turn), ...rest.slice(0, turn)];
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
   // What waits for an answer comes first, when it was never asked or was asked long ago: an idea nobody answers is as good as lost.
   const unasked = toAsk(held, now);
@@ -207,9 +307,10 @@ export function offered(held: Known, now: number): string {
     return `${i.mark} ${why}${line(i.text)}`;
   });
   return ask + [
-    `Otherwise this is time of your own. Your agenda, in the order to take it${todo.length > OFFERED ? ` (the first ${OFFERED} of ${todo.length})` : ''}:`,
+    `Otherwise this is time of your own. Your agenda, in the order to take it${todo.length > OFFERED ? ` (${OFFERED} of ${todo.length}${turn > 0 ? '; the lines before these you passed over several times, and they stay on it' : ''})` : ''}:`,
     ...rows,
     'Take the first one you can act on now, within what your owner has allowed you, and do it: one thing in a tick. '
-    + 'When it is finished, or turns out not to be worth doing, close it with `done` and say how it ended. If none can be acted on now, say why in one line.',
+    + 'When it is finished, or turns out not to be worth doing, close it with `done` and say how it ended. If none can be acted on now, say why in one line; '
+    + 'a line you can never act on is better closed as dropped, or asked about, than passed over again.',
   ].join('\n');
 }

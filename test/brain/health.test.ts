@@ -128,3 +128,15 @@ test('sitting the exam scores recall, the plain search and the memories themselv
   expect(few.recall.questions).toBeGreaterThan(20);
   expect(few.told.questions).toBe(3);
 });
+
+test('an agenda nothing is done of, tick after tick, is stuck, and that is behind', () => {
+  const { stretches, now } = life(1);
+  const todo = ev({ type: 'note', kind: 'memory.intention.v1', data: { text: 'Send the weekly report to the owner' } }, 0);
+  const ticks = Array.from({ length: 12 }, () => [ev({ type: 'stimulus', source: 'clock', text: 'Clock tick.' }, LONG), ev({ type: 'assistant', text: 'Nothing I can act on now.', toolCalls: [] })]).flat();
+  const memories = [memory(stretches[0]!)];
+  const h = health([...stretches.flat(), now, ev({ type: 'assistant', text: 'ok', toolCalls: [] }), todo, ...ticks, ...memories], clock);
+  expect(h.reasons).toContain('the agenda is stuck: 12 ticks of time of your own in a row ended with nothing done, with 1 thing open');
+  // With nothing on the agenda, quiet ticks are only quiet.
+  const quiet = health([...stretches.flat(), now, ev({ type: 'assistant', text: 'ok', toolCalls: [] }), ...ticks, ...memories], clock);
+  expect(quiet.reasons.join(' ')).not.toContain('stuck');
+});

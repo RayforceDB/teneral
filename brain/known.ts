@@ -81,18 +81,32 @@ export interface Intention extends IntentionData {
   waits: boolean;
   /** Whether the agent has put it to the owner: its mark stands in something the agent said, or sent with a tool, since. Only of what waits. */
   put: boolean;
-  /** When it was last put to the owner. */
+  /** When it was last put to whom it is for, and on how many occasions so far. */
   putAt?: string;
+  puts: number;
+  /** How it ended, once it is closed (`Known.closed`). */
+  ended?: Ended;
   /** The owner's words that allowed it, for an idea that waited and waits no longer, and the source of the message they stood in. */
   allowed?: string;
   allowedIn?: string;
 }
+
+/**
+ * How a closed intention ended. `done`: it was carried out. `dropped`: it was given up. `refused`: an idea
+ * that waited for the owner's word, and the word was no. `answered`: a question that got its answer.
+ */
+export const ENDS = ['done', 'dropped', 'refused', 'answered'] as const;
+export type Ended = (typeof ENDS)[number];
+/** Being named again within this long is the same occasion of asking, not a new one. */
+const SAME_ASKING_MS = 12 * 3_600_000;
 
 export interface Known {
   /** The facts that hold now: not replaced and not forgotten, in the order they were learned. */
   facts: Fact[];
   /** The intentions that are open, in the order they were made. */
   intentions: Intention[];
+  /** The intentions that were closed, each with how it ended: what the agent's initiative is measured by (brain/agenda.ts). */
+  closed: Intention[];
 }
 
 /** The first characters of a note's id, with a letter saying what it is: a mark the agent can type. */
@@ -114,7 +128,8 @@ export function known(events: JournalEvent[]): Known {
       const said = `${typeof r.text === 'string' ? r.text : ''}\n${Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? JSON.stringify(r.toolCalls) : ''}`;
       if (said.length > 1) {
         for (const i of intentions.values()) {
-          if (!i.waits || !said.includes(i.mark)) continue;
+          if (!i.waits || i.ended !== undefined || !said.includes(i.mark)) continue;
+          if (!i.put || Date.parse(e.ts) - Date.parse(i.putAt ?? '') >= SAME_ASKING_MS) i.puts += 1;
           i.put = true;
           i.putAt = e.ts;
         }
@@ -133,7 +148,7 @@ export function known(events: JournalEvent[]): Known {
       const origin = ORIGINS.includes(d.origin as Origin) ? (d.origin as Origin) : undefined;
       const unsure = origin === 'own' && d.unsure === true;
       intentions.set(e.id, {
-        id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text, waits: origin === 'ask' || unsure, put: false,
+        id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text, waits: origin === 'ask' || unsure, put: false, puts: 0,
         ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
         ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
         ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
@@ -146,7 +161,14 @@ export function known(events: JournalEvent[]): Known {
         if (text(d.source)) idea.allowedIn = d.source;
       }
     } else if (e.kind === DONE_KIND) {
-      if (typeof d.intention === 'string') gone.add(d.intention);
+      if (typeof d.intention !== 'string') continue;
+      const ended = intentions.get(d.intention);
+      // What waited for a word ends by that word; anything else ends as the record says, done unless it says dropped.
+      if (ended !== undefined && ended.ended === undefined) {
+        ended.ended = ended.waits ? (ended.unsure === true ? 'refused' : 'answered') : d.ended === 'dropped' ? 'dropped' : 'done';
+        ended.at = e.ts;
+      }
+      gone.add(d.intention);
     } else if (e.kind === FORGET_KIND) {
       if (Array.isArray(d.ids)) for (const id of d.ids) if (typeof id === 'string') gone.add(id);
     }
@@ -154,11 +176,12 @@ export function known(events: JournalEvent[]): Known {
   return {
     facts: [...facts.values()].filter((fact) => !gone.has(fact.id)),
     intentions: [...intentions.values()].filter((intention) => !gone.has(intention.id)),
+    closed: [...intentions.values()].filter((intention) => intention.ended !== undefined),
   };
 }
 
 /** The fact or intention the agent means by `mark`, among what holds now; null when there is none, or more than one. */
-export function byMark(held: Known, mark: string): Fact | Intention | null {
+export function byMark(held: Pick<Known, 'facts' | 'intentions'>, mark: string): Fact | Intention | null {
   const wanted = mark.trim();
   const found = [...held.facts, ...held.intentions].filter((item) => item.mark === wanted || item.id === wanted);
   return found.length === 1 ? found[0]! : null;
@@ -172,7 +195,7 @@ export const KNOWN_CHARS = 6000;
  * mark and its source, and the open intentions, with those that are due said to be due. `today`
  * is the day of the journal's last event, so the same journal always gives the same text.
  */
-export function knownText(held: Known, today: string, mark: string): string | null {
+export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: string, mark: string): string | null {
   if (held.facts.length === 0 && held.intentions.length === 0) return null;
   const lines: string[] = [];
   const todo = held.intentions.filter((i) => !i.waits);

@@ -37,6 +37,9 @@ TENERAL_HEARTBEAT_MINUTES=30
 # Characters of the conversation shown word for word; what is older is shown as the memories the agent formed of it.
 # Every character is read again at each step, so this is what a step costs. Unset, or not a positive number: 100000.
 # TENERAL_TAIL_CHARS=100000
+# Tokens a day the agent may spend in time of its own, the turns a clock tick wakes it for. Past it there are no ticks until
+# the day has moved on; what you or anyone else sends is answered all the same. Unset, or not a positive number: no cap.
+# TENERAL_OWN_TOKENS_DAY=2000000
 `;
 
 /**
