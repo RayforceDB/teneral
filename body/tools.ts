@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
-import { appendEvent } from '../brain/journal';
+import { appendEvent, readEvents } from '../brain/journal';
+import { DONE_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, type IntentionData } from '../brain/known';
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
@@ -415,4 +416,68 @@ const timeline: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, recallTool, open, timeline];
+const intend: Tool = {
+  spec: {
+    name: 'intend',
+    description:
+      'Take on something to do later, so that you still know of it when this conversation is no longer in front of you: a promise to your owner, a thing to check tomorrow, a step that has to wait. ' +
+      'It stays in every request, with a mark, until you call `done` for it. Say it so that it can be understood on its own, weeks from now. ' +
+      'Not for what you are about to do in this turn.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'What is to be done, and for whom' },
+        due: { type: 'string', description: 'The day it is due, as YYYY-MM-DD, if a day was named' },
+      },
+      required: ['text'],
+    },
+  },
+  async run(args, ctx) {
+    const text = str(args, 'text').trim();
+    if (text.length < 8) throw new Error('say what is to be done in a sentence that can be understood on its own');
+    const due = optional(args, 'due');
+    if (due !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || Number.isNaN(Date.parse(due)))) throw new Error('due must be a day as YYYY-MM-DD');
+    const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: INTENTION_KIND, data: { text, ...(due === undefined ? {} : { due }) } satisfies IntentionData });
+    const mine = known([note]).intentions[0]!;
+    return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
+  },
+};
+
+const done: Tool = {
+  spec: {
+    name: 'done',
+    description:
+      'Close an intention: it was done, or it is given up. Give its mark, as it stands in the list of what you mean to do, and say in a line how it ended. ' +
+      'An intention you leave open stays in front of you for good, so close what is finished and what no longer matters.',
+    parameters: params({ intention: 'The mark of the intention, such as I1a2b3c4d', how: 'How it ended: what was done, or why it is given up' }),
+  },
+  async run(args, ctx) {
+    const mark = str(args, 'intention');
+    const held = known(readEvents(ctx.journal));
+    const found = byMark({ facts: [], intentions: held.intentions }, mark);
+    if (found === null) throw new Error(`no open intention has the mark ${mark}. Open: ${held.intentions.map((i) => i.mark).join(', ') || 'none'}`);
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how') } });
+    return `Closed ${found.mark}: ${found.text}`;
+  },
+};
+
+const forget: Tool = {
+  spec: {
+    name: 'forget',
+    description:
+      'Stop holding a fact: it was wrong, or your owner asked you not to keep it. Give its mark, as it stands in the list of what you know, and the reason. ' +
+      'It leaves that list and is no longer taken for true; your journal still holds that you once noted it. ' +
+      'For a fact that has only changed, do nothing here: the next memory you form names the fact it replaces.',
+    parameters: params({ fact: 'The mark of the fact, such as F1a2b3c4d', why: 'Why it is no longer held' }),
+  },
+  async run(args, ctx) {
+    const mark = str(args, 'fact');
+    const held = known(readEvents(ctx.journal));
+    const found = byMark({ facts: held.facts, intentions: [] }, mark);
+    if (found === null) throw new Error(`no fact you hold has the mark ${mark}`);
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: FORGET_KIND, data: { ids: [found.id], why: str(args, 'why') } });
+    return `No longer held: ${found.text}`;
+  },
+};
+
+export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, recallTool, open, timeline, intend, done, forget];

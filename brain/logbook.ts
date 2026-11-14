@@ -2,6 +2,7 @@ import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { IMAGE_CHARS } from '../body/images';
 import { episodes } from './episodes';
+import { known, knownText } from './known';
 import { remembered, type Memory, type QuarantineData } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
@@ -12,6 +13,10 @@ import { remembered, type Memory, type QuarantineData } from './remembered';
 // episode is still in view, and here they are swapped in later, whole episodes at a time and in
 // steps, so that the start of a request stays the same for as long as possible (a provider reuses
 // its work on a request only up to the first character that changed).
+//
+// After the memories, in every request, stands what the agent knows and means to do
+// (brain/known.ts): a few lines that hold whatever is in view. They come last in the logbook, so
+// that a new fact changes a request only from there on.
 //
 // How much is shown as it happened is not what the model could take but what is worth paying
 // for. Every character in a request is read again at every step of every turn, hundreds of times
@@ -67,7 +72,7 @@ function unremembered(q: QuarantineData): ChatMessage[] {
 const SEAM = `${MEMORY_MARK} What follows is shown as it happened.`;
 
 export interface Logbook {
-  /** What stands before the part shown as it happened; empty while everything still fits or nothing is remembered. */
+  /** What stands before the part shown as it happened: the memories of what no longer fits, then what the agent knows. Empty when there is neither. */
   head: ChatMessage[];
   /**
    * The line between the two, when there is a head: the first message of the part shown as it
@@ -88,10 +93,14 @@ export interface Logbook {
  * is for `fit` in brain/memory.ts to cut, as it did before there were memories.
  */
 export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
+  // "Today" is the day of the journal's last event: the same journal always gives the same request.
+  const held = knownText(known(events), (events.at(-1)?.ts ?? '').slice(0, 10), MEMORY_MARK);
+  const knowing: ChatMessage[] = held === null ? [] : [{ role: 'user', content: held }];
+  const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
   const { memories, quarantined, spans } = remembered(events);
-  if (spans.length === 0) return { head: [], seam: null, start: 0 };
+  if (spans.length === 0) return nothingSwapped;
   const kept = episodes(events, spans).filter((e) => e.why === 'kept');
-  if (kept.length === 0) return { head: [], seam: null, start: 0 };
+  if (kept.length === 0) return nothingSwapped;
 
   // Where each remembered episode ends in `messages`, and how much everything before that point counts.
   const sizes = messages.map(sizeOf);
@@ -113,7 +122,7 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
     return given === undefined ? [] : unremembered(given);
   });
   const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
-  const headOf = (count: number): ChatMessage[] => (count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), cap));
+  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), cap)), ...knowing];
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
@@ -128,7 +137,7 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   }
   // The memories take room themselves; one more episode at a time until it all fits or there is none left to swap.
   while (count > 0 && count < kept.length && !fits(count)) count += 1;
-  return count === 0 ? { head: [], seam: null, start: 0 } : { head: headOf(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
+  return count === 0 ? nothingSwapped : { head: headOf(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
 }
 
 /**

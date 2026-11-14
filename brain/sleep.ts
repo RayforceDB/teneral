@@ -2,6 +2,7 @@ import { appendEvent, readEvents, type JournalEvent, type Usage } from './journa
 import { DEFAULT_BUDGET, buildMessages } from './memory';
 import { MEMORY_MARK } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
+import { FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Source } from './known';
 import { EPISODE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, type MemoryData, type Outcome, type QuarantineData } from './remembered';
 import type { ChatMessage, Provider, ToolSpec } from './provider';
 import { saysTooLong } from './retry';
@@ -23,6 +24,12 @@ import { asText } from './stemnote';
 //   formed of, and it stays in the journal as it happened.
 //   An episode in which nothing happened is recorded as quiet without asking a model, which,
 //   asked to remember nothing, might invent something.
+//
+// With the memory the agent may set down what it learned that will hold beyond the episode, and
+// what it took on to do later (brain/known.ts). Those are asked for sparingly: a fact is worth
+// keeping only if it would change what the agent does some later week, and its own remarks are
+// not facts. What it sets down is checked line by line, and a line that is not in form is left
+// out; the memory itself is kept all the same.
 
 /** A memory is asked to be about this share of its episode's size, within the two bounds below. */
 const SHARE = 1 / 25;
@@ -106,18 +113,67 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     'Call no tool. Reply in exactly this form and with nothing else:',
     `Title: <one line>\nOutcome: <one of: done, failed, dropped, open>\n\n<the memory, about ${chars} characters>`,
     'Outcome is how the stretch ended: done when what was asked got done, failed when it did not work, dropped when it was given up or set aside, open when it is still going on.',
+    'After the memory you may add two lists, each only when there is something for it. Most stretches have neither.',
+    'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own>\n'
+    + 'A fact is worth a line only if knowing it would change what you do some later week: who your owner is and what they want, how they want things done, '
+    + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
+    + `In the brackets say where it comes from: ${SOURCES.join(', ')} (owner: your owner said it; seen: you saw it yourself, as in a tool's output; `
+    + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
+    + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>',
+    'Intentions:\n- [YYYY-MM-DD] <something you took on to do later and have not done; the day it is due>\n- [] <the same, when no day was named>',
   ].join('\n\n');
 }
 
 /** A line of the answer without the marks a model may put around a label. */
 const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
 
+/** A fact as the agent set it down: the fact it replaces is still only a mark. */
+export interface NotedFact { text: string; source: Source; replaces: string[] }
+export interface Formed {
+  title: string;
+  text: string;
+  outcome: Outcome;
+  facts: NotedFact[];
+  intentions: { text: string; due?: string }[];
+}
+
+const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*(?:\(\s*replaces\s+([^)]*)\)\s*)?(.+)$/i;
+const INTENTION_LINE = /^-\s*\[\s*(\d{4}-\d{2}-\d{2})?\s*\]\s*(.+)$/;
+/** The most of either that one episode may set down: a list longer than this is not a list of what matters. */
+const LIST_MAX = 12;
+
+/** The two lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
+function lists(lines: string[]): { body: string[]; facts: NotedFact[]; intentions: Formed['intentions'] } {
+  const heading = (line: string): 'facts' | 'intentions' | null => {
+    const word = plain(line).toLowerCase();
+    return word === 'facts:' ? 'facts' : word === 'intentions:' ? 'intentions' : null;
+  };
+  const first = lines.findIndex((line) => heading(line) !== null);
+  const facts: NotedFact[] = [];
+  const intentions: Formed['intentions'] = [];
+  if (first === -1) return { body: lines, facts, intentions };
+  let list: 'facts' | 'intentions' | null = null;
+  for (const line of lines.slice(first)) {
+    list = heading(line) ?? list;
+    const item = line.trim();
+    if (list === 'facts' && facts.length < LIST_MAX) {
+      const m = FACT_LINE.exec(item);
+      const source = SOURCES.find((s) => s === m?.[1]?.toLowerCase());
+      if (m && source !== undefined && m[3]!.trim().length >= 8) facts.push({ source, text: m[3]!.trim(), replaces: (m[2] ?? '').split(/[\s,]+/).filter((mark) => mark !== '') });
+    } else if (list === 'intentions' && intentions.length < LIST_MAX) {
+      const m = INTENTION_LINE.exec(item);
+      if (m && m[2]!.trim().length >= 8) intentions.push({ text: m[2]!.trim(), ...(m[1] ? { due: m[1] } : {}) });
+    }
+  }
+  return { body: lines.slice(0, first), facts, intentions };
+}
+
 /**
  * The memory in a reply, or the reason it is not one. The form is strict on purpose: a refusal or
  * a rambling answer read leniently would become a false memory, and those are kept for good.
  */
-export function parseMemory(reply: string, chars: number): { title: string; text: string; outcome: Outcome } | { problem: string } {
-  const lines = reply.replaceAll('\r', '').split('\n');
+export function parseMemory(reply: string, chars: number): Formed | { problem: string } {
+  const { body: lines, facts, intentions } = lists(reply.replaceAll('\r', '').split('\n'));
   let at = 0;
   const next = (): string => {
     while (at < lines.length && lines[at]!.trim() === '') at += 1;
@@ -131,7 +187,7 @@ export function parseMemory(reply: string, chars: number): { title: string; text
   const text = lines.slice(at).join('\n').trim();
   if (text.length < LEAST_CHARS) return { problem: 'there was no memory after the two lines' };
   if (text.length > chars * TOO_LONG) return { problem: `the memory was ${text.length} characters, far more than the ${chars} asked for` };
-  return { title: title.slice(0, TITLE_CHARS), text, outcome };
+  return { title: title.slice(0, TITLE_CHARS), text, outcome, facts, intentions };
 }
 
 const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => ({ from: e.first, to: e.last, start: e.start, end: e.end });
@@ -156,7 +212,11 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   // Only the journal up to the end of the episode: the memory is formed as of then. The memories of
   // what came before it belong to that, wherever they were journaled: they are written when there is
   // time, which is always later than what they are about.
-  const earlier = events.slice(episode.to).filter((e) => e.type === 'note' && (e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND));
+  const earlier = events.slice(episode.to).filter((e) => e.type === 'note' && (
+    e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND || e.kind === FACT_KIND
+    // An intention set down with a memory names its episode; one the agent made itself, in some later turn, is no part of what it knew then.
+    || (e.kind === INTENTION_KIND && typeof (e.data as { episode?: unknown } | null)?.episode === 'string')
+  ));
   const asOf = [...events.slice(0, episode.to), ...earlier];
   let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
   let usage: Usage | undefined;
@@ -180,10 +240,23 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
+      const { facts, intentions, ...kept } = memory;
       appendEvent(d.journal, d.gen, {
         type: 'note', kind: EPISODE_KIND,
-        data: { ...span(episode), ...memory, ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
+        data: { ...span(episode), ...kept, ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
       });
+      // A fact may name the one it replaces only by a mark it was shown: a mark that names nothing, or an intention, replaces nothing.
+      const held = known(asOf);
+      for (const fact of facts) {
+        const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
+        appendEvent(d.journal, d.gen, {
+          type: 'note', kind: FACT_KIND,
+          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}) } satisfies FactData,
+        });
+      }
+      for (const intention of intentions) {
+        appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...intention, episode: episode.first } satisfies IntentionData });
+      }
       return 'remembered';
     }
     problem = memory.problem;

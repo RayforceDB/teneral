@@ -1,4 +1,5 @@
 import type { JournalEvent } from './journal';
+import { FACT_KIND } from './known';
 import { EPISODE_KIND } from './remembered';
 import { asText } from './stemnote';
 
@@ -87,6 +88,10 @@ export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null
     const d = r.data as { title?: unknown; text?: unknown; outcome?: unknown };
     // A stretch in which nothing happened is not worth finding.
     if (d.outcome !== 'quiet') found = { kind: 'memory', text: `${asText(d.title)}\n${asText(d.text)}` };
+  }
+  // A fact is found like a memory: it is something the agent chose to keep.
+  else if (e.type === 'note' && r.kind === FACT_KIND && typeof r.data === 'object' && r.data !== null) {
+    found = { kind: 'memory', text: asText((r.data as { text?: unknown }).text) };
   }
   return found !== null && found.text.trim() !== '' ? found : null;
 }

@@ -23,7 +23,7 @@ function context(workspace: string, gen = 'gen'): ToolContext {
 }
 
 test('the seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'edit', 'look', 'mutate', 'open', 'read', 'recall', 'send', 'timeline', 'write']);
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'done', 'edit', 'forget', 'intend', 'look', 'mutate', 'open', 'read', 'recall', 'send', 'timeline', 'write']);
 });
 
 test('write creates parent directories and read returns the content', async () => {
