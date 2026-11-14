@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
 import { appendEvent, readEvents } from '../brain/journal';
-import { DONE_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, type IntentionData } from '../brain/known';
+import { standing } from '../brain/owned';
+import { ALLOWED_KIND, DONE_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type IntentionData } from '../brain/known';
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
@@ -428,7 +429,7 @@ const intend: Tool = {
       properties: {
         text: { type: 'string', description: 'What is to be done, and for whom' },
         due: { type: 'string', description: 'The day it is due, as YYYY-MM-DD, if a day was named' },
-        origin: { type: 'string', enum: ['taken', 'own', 'ask'], description: 'taken: you took it on for your owner or someone else (the default). own: your own idea, that nobody asked for. ask: a question to put to your owner when they next write' },
+        origin: { type: 'string', enum: ['taken', 'own', 'unsure', 'ask'], description: 'taken: you took it on for your owner or someone else (the default). own: your own idea, that nobody asked for and that you are sure you may do. unsure: your own idea that you are not sure your owner allows; it waits for their word, and you ask them. ask: any other question to put to your owner' },
       },
       required: ['text'],
     },
@@ -439,12 +440,13 @@ const intend: Tool = {
     const due = optional(args, 'due');
     if (due !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || Number.isNaN(Date.parse(due)))) throw new Error('due must be a day as YYYY-MM-DD');
     const origin = optional(args, 'origin');
-    if (origin !== undefined && origin !== 'taken' && origin !== 'own' && origin !== 'ask') throw new Error('origin must be one of taken, own, ask');
+    if (origin !== undefined && !['taken', 'own', 'unsure', 'ask'].includes(origin)) throw new Error('origin must be one of taken, own, unsure, ask');
     const note = appendEvent(ctx.journal, ctx.gen, {
       type: 'note', kind: INTENTION_KIND,
-      data: { text, ...(origin === 'own' || origin === 'ask' ? { origin } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
+      data: { text, ...(origin === 'own' || origin === 'ask' ? { origin } : origin === 'unsure' ? { origin: 'own' as const, unsure: true as const } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
     });
     const mine = known([note]).intentions[0]!;
+    if (mine.waits) return `Kept as ${mine.mark}. It waits for your owner's word: put it to them, with its mark, in your next reply they will read.`;
     return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
   },
 };
@@ -467,6 +469,29 @@ const done: Tool = {
   },
 };
 
+const allowed: Tool = {
+  spec: {
+    name: 'allowed',
+    description:
+      'Record that your owner said yes to an idea of yours that waited for their word. Give its mark and the words they said yes with, copied exactly from their message. ' +
+      'The idea then joins your agenda. It is accepted only when those words stand in something your owner wrote in their terminal after you set the idea down: a yes is theirs to say. ' +
+      'For a no, or for a question that was answered, use `done`.',
+    parameters: params({ intention: 'The mark of the idea, such as I1a2b3c4d', words: "Your owner's own words, copied exactly from the message in which they allowed it" }),
+  },
+  async run(args, ctx) {
+    const mark = str(args, 'intention');
+    const events = standing(readEvents(ctx.journal));
+    const idea = known(events).intentions.find((i) => i.mark === mark || i.id === mark);
+    if (idea === undefined) throw new Error(`no open intention has the mark ${mark}`);
+    if (idea.unsure !== true || !idea.waits) throw new Error(`${idea.mark} does not wait for your owner's word`);
+    const words = str(args, 'words').trim();
+    const said = ownerSaid(events, idea, words);
+    if (said === null) throw new Error('those words do not stand in anything your owner wrote in their terminal since you set the idea down. Ask them, and copy their answer exactly');
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ALLOWED_KIND, data: { intention: idea.id, words, event: said.id } });
+    return `${idea.mark} is on your agenda now, by your owner's word: ${idea.text}`;
+  },
+};
+
 const forget: Tool = {
   spec: {
     name: 'forget',
@@ -486,4 +511,4 @@ const forget: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, recallTool, open, timeline, intend, done, forget];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, recallTool, open, timeline, intend, done, allowed, forget];

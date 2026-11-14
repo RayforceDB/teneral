@@ -72,7 +72,8 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true, a
       emit({
         source: 'clock',
         text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
-          `If you are waiting for an answer from them, keep waiting and say so in one line; do not start something instead. ${todo}`,
+          `If the work you were on waits for an answer from them, keep waiting for it and say so in one line; do not start something instead of it. ` +
+          `Questions you hold for them are not that kind of waiting. ${todo}`,
       });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);

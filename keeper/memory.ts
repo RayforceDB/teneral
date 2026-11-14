@@ -50,12 +50,15 @@ function page(events: JournalEvent[], now: number): string[] {
   }
   if (held.facts.length > 0) lines.push('', 'Facts held:', ...held.facts.map((f) => `  ${f.mark}  [${f.source}] ${brief(f.text, 90)}`));
   const todo = agenda(held, new Date(now).toISOString().slice(0, 10));
-  const asks = held.intentions.filter((i) => i.origin === 'ask');
+  const asks = held.intentions.filter((i) => i.waits);
   if (todo.length > 0) {
-    lines.push('', "Agenda, in the order a clock tick offers it (owed: taken on for someone; own: the agent's idea):");
-    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin === 'own' ? 'own ' : 'owed'}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
+    lines.push('', "Agenda, in the order a clock tick offers it (owed: taken on for someone; own: the agent's idea; yes: an idea you allowed):");
+    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin !== 'own' ? 'owed' : i.allowed === undefined ? 'own ' : 'yes '}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
   }
-  if (asks.length > 0) lines.push('', 'To ask you when you next write:', ...asks.map((i) => `  ${i.mark}  ${brief(i.text, 90)}`));
+  if (asks.length > 0) {
+    lines.push('', 'Waiting for your word. Answer the agent in the conversation; an idea it is not sure of is kept until you say yes or no:');
+    lines.push(...asks.map((i) => `  ${i.mark}  ${i.unsure === true ? 'idea    ' : 'question'}${i.put ? '' : '  not yet asked'}  ${brief(i.text, 90)}`));
+  }
   return [...lines, '', ...HOW];
 }
 
