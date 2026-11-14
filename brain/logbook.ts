@@ -8,11 +8,16 @@ import { remembered, type Memory, type QuarantineData } from './remembered';
 // as it happened, the memory the agent formed of it, in order, before the part that is still
 // shown word for word.
 //
-// A memory takes the place of its episode only when room runs out. Forming a memory and showing
-// it are two things: brain/sleep.ts forms them early, while the episode is still in view, and
-// here they are swapped in later, whole episodes at a time and in steps, so that the start of a
-// request stays the same for as long as possible (a provider reuses its work on a request only
-// up to the first character that changed).
+// Forming a memory and showing it are two things: brain/sleep.ts forms them early, while the
+// episode is still in view, and here they are swapped in later, whole episodes at a time and in
+// steps, so that the start of a request stays the same for as long as possible (a provider reuses
+// its work on a request only up to the first character that changed).
+//
+// How much is shown as it happened is not what the model could take but what is worth paying
+// for. Every character in a request is read again at every step of every turn, hundreds of times
+// before it leaves, and reading costs money and time even when the provider has kept its work.
+// So the part shown as it happened is held near a size chosen for that, far below the model's
+// limit, and what is older is in the logbook, where an episode takes a few lines.
 
 /** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
 export function sizeOf(m: ChatMessage): number {
@@ -21,8 +26,18 @@ export function sizeOf(m: ChatMessage): number {
 
 /** Episodes are swapped for their memories in steps of this share of the room. Each step moves where a request first differs from the one before. */
 const STEP = 0.2;
-/** The share of the room the logbook may take. Past it, the oldest memories leave the request; they stay in the journal. */
-export const LOGBOOK_SHARE = 0.5;
+/** Characters of the conversation shown as it happened, unless the owner says otherwise. About 30 thousand tokens. */
+export const DEFAULT_TAIL_CHARS = 100_000;
+/** Characters the logbook may take. Past it, the oldest memories leave the request; they stay in the journal. */
+export const DEFAULT_LOGBOOK_CHARS = 50_000;
+/** And never more than this share of the room. */
+const LOGBOOK_SHARE = 0.5;
+
+export interface Sizes {
+  /** Characters of the conversation to show as it happened. 0 shows only the episode that has no memory yet. */
+  tailChars?: number;
+  logbookChars?: number;
+}
 
 /** The mark of everything this file puts in a request. No stimulus can carry it: see `stimulusText` in brain/memory.ts. */
 export const MEMORY_MARK = '[memory]';
@@ -72,7 +87,7 @@ export interface Logbook {
  * can be swapped, and those are always the oldest ones. What is left over when they do not suffice
  * is for `fit` in brain/memory.ts to cut, as it did before there were memories.
  */
-export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number): Logbook {
+export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
   const { memories, quarantined, spans } = remembered(events);
   if (spans.length === 0) return { head: [], seam: null, start: 0 };
   const kept = episodes(events, spans).filter((e) => e.why === 'kept');
@@ -97,12 +112,15 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
     const given = quarantined.get(e.first);
     return given === undefined ? [] : unremembered(given);
   });
-  const headOf = (count: number): ChatMessage[] => (count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), room));
+  const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
+  const headOf = (count: number): ChatMessage[] => (count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), cap));
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
-  const step = Math.max(1, Math.floor(room * STEP));
-  const toSwap = total > room ? Math.ceil((total - room) / step) * step : 0;
+  // What is wanted is the chosen size; the room is only the most that can be sent.
+  const want = Math.min(room, Math.max(0, chosen.tailChars ?? DEFAULT_TAIL_CHARS));
+  const step = Math.max(1, Math.floor(want * STEP));
+  const toSwap = total > want ? Math.ceil((total - want) / step) * step : 0;
   let count = 0;
   if (toSwap > 0) {
     count = 1;
@@ -114,11 +132,10 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
 }
 
 /**
- * The logbook within its share of the room: the oldest memories leave, in steps, and a line says
+ * The logbook within `cap` characters: the oldest memories leave, in steps, and a line says
  * how many. They are not lost; brain/memory.ts only stops showing them.
  */
-function trimmed(pairs: ChatMessage[], room: number): ChatMessage[] {
-  const cap = Math.floor(room * LOGBOOK_SHARE);
+function trimmed(pairs: ChatMessage[], cap: number): ChatMessage[] {
   const total = pairs.reduce((n, m) => n + sizeOf(m), 0);
   if (total <= cap) return pairs;
   const step = Math.max(1, Math.floor(cap * STEP));

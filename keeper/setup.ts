@@ -34,6 +34,9 @@ const OTHER_SETTINGS = `# Minutes between clock stimuli. 0 turns the clock off.
 TENERAL_HEARTBEAT_MINUTES=30
 # Characters of context sent per request. Unset, or not a positive number: 250000.
 # TENERAL_CONTEXT_CHARS=250000
+# Characters of the conversation shown word for word; what is older is shown as the memories the agent formed of it.
+# Every character is read again at each step, so this is what a step costs. Unset, or not a positive number: 100000.
+# TENERAL_TAIL_CHARS=100000
 `;
 
 /**

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { JournalEvent } from '../../brain/journal';
 import { cacheUse } from '../../keeper/tui/view';
-import { formatUsage, share, usageReport } from '../../keeper/usage';
+import { REMEMBERING, formatUsage, share, usageReport } from '../../keeper/usage';
 
 const NOW = Date.parse('2027-01-15T12:00:00Z');
 const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -35,4 +35,20 @@ test('a journal with no usage says so, and the footer says nothing of a cache th
   expect(cacheUse(50_000, null)).toBe('');
   expect(cacheUse(50_000, 0)).toBe('cached 0%');
   expect(cacheUse(54_396, 52_608)).toBe('cached 97%');
+});
+
+test('what forming memories cost is counted, in a row of its own: those requests belong to no turn', () => {
+  const memory = (minutesAgo: number, usage: unknown): JournalEvent => ev({ type: 'note', kind: 'memory.episode.v1', data: { title: 't', usage }, ts: at(minutesAgo), gen: 'g2' });
+  const r = usageReport([
+    said('terminal', 30), reply(29, { input: 1000, output: 10, cached: 900 }),
+    memory(20, { input: 500, output: 60 }), memory(10, { input: 700, output: 80, cached: 100 }),
+    // A memory without usage, and a note of another kind that happens to carry one, count for nothing.
+    memory(5, undefined), ev({ type: 'note', kind: 'other.v1', data: { usage: { input: 9, output: 9 } }, ts: at(4), gen: 'g2' }),
+  ], NOW, 'g2');
+  expect(r.spans[0]!.spent).toEqual({ requests: 3, input: 2200, cached: 1000, output: 150 });
+  expect(Object.fromEntries(r.sources.map((s) => [s.name, s.spent]))).toEqual({
+    [REMEMBERING]: { requests: 2, input: 1200, cached: 100, output: 140 },
+    terminal: { requests: 1, input: 1000, cached: 900, output: 10 },
+  });
+  expect(formatUsage(r).join('\n')).toContain('remembering');
 });

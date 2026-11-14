@@ -635,7 +635,7 @@ process.exit(0);
   expect(auth).toBe(p.auth);
   // The whole list of what the stem itself sets: one place, bodyEnv, decides it. The names left out are the owner's
   // settings: where these tests are run in an install, Bun reads them from its .env and the body inherits them.
-  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS'];
+  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_TAIL_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS'];
   expect(names!.split(' ').filter((name) => !owners.includes(name))).toEqual([
     'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER', 'TENERAL_PULSE',
     'TENERAL_SOUL', 'TENERAL_WORKSPACE',

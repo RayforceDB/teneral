@@ -14,7 +14,10 @@ import { asText } from './stemnote';
 //
 // Three rules keep a memory honest.
 //   The request shows the journal only up to the end of the episode: the agent remembers it as it
-//   knew things then, not with what it learned later.
+//   knew things then, not with what it learned later. Of that, it shows what was remembered
+//   before as memories and only the episode itself as it happened. By the time an episode is over
+//   no provider still keeps its work on the conversation, so everything sent is paid for in full;
+//   sent this way, a memory costs one more reading of its episode and little else.
 //   Only a whole answer in the form asked for becomes a memory. A refusal, half an answer or a
 //   tool call does not; after a second try the stretch is recorded as one no memory could be
 //   formed of, and it stays in the journal as it happened.
@@ -40,7 +43,7 @@ export interface SleepDeps {
   journal: string;
   gen: string;
   provider: Provider;
-  /** The agent's tools as a turn declares them. None is to be called; they are sent so that this request starts exactly as a turn's does. */
+  /** The agent's tools as a turn declares them. None is to be called; they are sent so that this request starts as a turn's does. */
   specs: ToolSpec[];
   system: () => string;
   /** Characters for one request, as for a turn. */
@@ -150,9 +153,12 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   const chars = targetChars(episode.chars);
   const ask = question(episode, lived, chars);
   let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  // Only the journal up to the end of the episode: the memory is formed as of then.
-  const asOf = events.slice(0, episode.to);
-  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, ask);
+  // Only the journal up to the end of the episode: the memory is formed as of then. The memories of
+  // what came before it belong to that, wherever they were journaled: they are written when there is
+  // time, which is always later than what they are about.
+  const earlier = events.slice(episode.to).filter((e) => e.type === 'note' && (e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND));
+  const asOf = [...events.slice(0, episode.to), ...earlier];
+  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
   let usage: Usage | undefined;
   let problem = '';
   let halved = false;
@@ -166,7 +172,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       // Characters are only an estimate of tokens: once more with half, as a turn does.
       halved = true;
       budget = Math.floor(budget / 2);
-      messages = buildMessages(asOf, d.system(), budget, undefined, ask);
+      messages = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
       attempt -= 1;
       continue;
     }

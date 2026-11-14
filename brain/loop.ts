@@ -18,6 +18,8 @@ export interface TurnDeps {
   maxRounds?: number;
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
+  /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
+  tailChars?: number;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
   sight?: Sight;
   /** Aborts when the owner interrupts this turn (body/main.ts). The turn then ends as 'interrupted'. */
@@ -80,7 +82,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     let halved = false;
     let reply: Reply;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars });
       try {
         reply = await d.provider(messages, specs, d.signal && { signal: d.signal });
         break;

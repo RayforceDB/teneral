@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { GAP_MS } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
+import { DEFAULT_TAIL_CHARS } from '../../brain/logbook';
 import { buildMessages, needsTurn } from '../../brain/memory';
 import { EPISODE_KIND, QUARANTINE_KIND, remembered } from '../../brain/remembered';
 
@@ -142,4 +143,41 @@ test('when the logbook itself outgrows its share, the oldest memories leave it a
   expect(shown.join('\n')).toContain('Memory 9');
   expect(shown.join('\n')).toContain('ask 11');
   expect(shown.at(-1)).toBe('now');
+});
+
+test('what is shown as it happened is held near the size chosen for it, however much room the model has', () => {
+  const { events } = life(1000);
+  // Room for everything ten times over, but only about one episode is wanted word for word.
+  const shown = buildMessages(events, 'S', 100_000, undefined, { tailChars: 1200 }).map((m) => m.content);
+  expect(shown[2]).toBe('The first thing\n\nI did one.');
+  expect(shown[3]).toBe('[memory] What follows is shown as it happened.');
+  expect(shown[4]).toStartWith('two bbb');
+  expect(shown.join('')).not.toContain('aaa');
+});
+
+test('unless told otherwise, that size is the default, far below the room', () => {
+  const { events } = life(Math.floor(DEFAULT_TAIL_CHARS * 0.6));
+  const shown = buildMessages(events, 'S', 10 * DEFAULT_TAIL_CHARS).map((m) => m.content);
+  expect(shown[2]).toBe('The first thing\n\nI did one.');
+  expect(shown.join('').length).toBeLessThan(DEFAULT_TAIL_CHARS);
+});
+
+test('with nothing wanted word for word, everything remembered is shown as memories and only the rest as it happened', () => {
+  const { events } = life(100);
+  const shown = buildMessages(events, 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content);
+  expect(shown.slice(1, 6).map((s) => s!.split('\n')[0])).toEqual([
+    '[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC. What do you remember of it?', 'The first thing',
+    '[memory] 2026-11-11 00:32 UTC to 2026-11-11 00:33 UTC. What do you remember of it?', 'The second thing',
+    '[memory] What follows is shown as it happened.',
+  ]);
+  expect(shown.slice(6)).toEqual(['three', 'doing three', 'and?']);
+});
+
+test('the logbook is held to the size chosen for it', () => {
+  const stretches = Array.from({ length: 12 }, (_, i) => [said(`ask ${i} ${'q'.repeat(400)}`, LONG), replied(`did ${i}`)]);
+  const notes = stretches.map((s, i) => memoryOf(s[0]!, s[1]!, `Memory ${i}`, 'm'.repeat(150)));
+  const shown = buildMessages([...stretches.flat(), ...notes, said('now', LONG)], 'S', 100_000, undefined, { tailChars: 0, logbookChars: 700 }).map((m) => m.content);
+  expect(shown[1]).toMatch(/earlier memories are not shown here/);
+  expect(shown.join('\n')).toContain('Memory 11');
+  expect(shown.join('\n')).not.toContain('Memory 0\n');
 });

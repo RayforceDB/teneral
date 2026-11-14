@@ -35,6 +35,9 @@ const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 // Characters per request. Not a positive number, or not set: the default in brain/memory.ts.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
+// Characters of the conversation shown as it happened. Not a positive number, or not set: the default in brain/logbook.ts.
+const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
+const tailChars = tailSet > 0 ? Math.floor(tailSet) : undefined;
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
@@ -92,7 +95,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: TOOLS, ctx, budgetChars, sight,
+      journal, gen, provider, tools: TOOLS, ctx, budgetChars, tailChars, sight,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),

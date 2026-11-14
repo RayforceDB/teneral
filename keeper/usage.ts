@@ -18,10 +18,13 @@ const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(
 /** The share of the input that came from the provider's cache, as `87%`; empty when nothing was asked. */
 export const share = (s: Spent): string => (s.input > 0 ? `${Math.round((s.cached / s.input) * 100)}%` : '');
 
+/** The row for what forming memories cost: requests the agent makes of itself while nothing is asked of it. */
+export const REMEMBERING = 'remembering';
+
 export interface UsageReport {
   /** By span of time, the widest last. */
   spans: { name: string; spent: Spent }[];
-  /** By what woke the agent for the turn the request belongs to, the costliest first. */
+  /** By what woke the agent for the turn the request belongs to, with `REMEMBERING` for the requests that belong to none; the costliest first. */
   sources: { name: string; spent: Spent }[];
 }
 
@@ -48,8 +51,11 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       source = typeof f.source === 'string' && f.source !== '' ? f.source.slice(0, 40) : 'unknown';
       continue;
     }
-    if (e.type !== 'assistant' || typeof f.usage !== 'object' || f.usage === null) continue;
-    const u = f.usage as Record<string, unknown>;
+    // A reply carries what its request cost. So does a memory (brain/sleep.ts), whose request is no part of any turn.
+    const memory = e.type === 'note' && typeof f.kind === 'string' && f.kind.startsWith('memory.') && typeof f.data === 'object' && f.data !== null;
+    const told = memory ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
+    if (typeof told !== 'object' || told === null) continue;
+    const u = told as Record<string, unknown>;
     const input = count(u.input);
     const output = count(u.output);
     const cached = count(u.cached);
@@ -59,8 +65,9 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       if (inSpan) add(span.spent, input, cached, output);
     }
     if (Number.isFinite(at) && at >= now - 24 * HOUR) {
-      if (!sources.has(source)) sources.set(source, NONE());
-      add(sources.get(source)!, input, cached, output);
+      const name = memory ? REMEMBERING : source;
+      if (!sources.has(name)) sources.set(name, NONE());
+      add(sources.get(name)!, input, cached, output);
     }
   }
   return {

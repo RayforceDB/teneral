@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
-import { buildMessages } from '../../brain/memory';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import { EPISODE_KIND, QUARANTINE_KIND, remembered } from '../../brain/remembered';
 import { memoryHealth, parseMemory, question, sleep, targetChars, waiting } from '../../brain/sleep';
@@ -82,13 +81,22 @@ test('the memory is formed as of the end of the episode: nothing that came later
   expect(last.content).toContain('begins with the message that starts "please set up the mail');
 });
 
-test('the request starts as a turn at that moment would: the same system prompt and conversation', async () => {
-  const { first, events } = twoEpisodes();
-  const s = setup(events, [answer(MEMORY)]);
+test('what was remembered before is sent as memories, and only the episode itself as it happened', async () => {
+  const a = [said('first thing to do, please'), replied('Done the first thing as asked.')];
+  const b = [said('second thing to do, please', LONG), replied('Done the second thing as asked.')];
+  const s = setup([...a, ...b, said('third', LONG)], [answer(MEMORY), answer(MEMORY.replace('the mail', 'the second'))]);
   await sleep(s.deps);
-  const turn = buildMessages(first, 'SYS');
-  // A turn ending on a finished reply gets a closing line of its own; everything before it is the same.
-  expect(s.seen[0]!.slice(0, -1)).toEqual(turn.slice(0, -1));
+  await sleep(s.deps);
+
+  const second = s.seen[1]!.map((m) => m.content);
+  expect(second[0]).toBe('SYS');
+  expect(second[1]).toStartWith('[memory] ');
+  expect(second[2]).toStartWith('Setting up the mail\n\n');
+  expect(second[3]).toBe('[memory] What follows is shown as it happened.');
+  expect(second.slice(4, 6)).toEqual(['second thing to do, please', 'Done the second thing as asked.']);
+  // The first episode is paid for once, when it is remembered, and not again with every later memory.
+  expect(second.join('')).not.toContain('first thing to do');
+  expect(second).toHaveLength(7);
 });
 
 test('usage the provider reported is kept with the memory', async () => {

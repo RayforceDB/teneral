@@ -1,6 +1,6 @@
 import type { JournalEvent } from './journal';
 import { asText, stemNote } from './stemnote';
-import { MEMORY_MARK, logbook, sizeOf } from './logbook';
+import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
@@ -13,7 +13,7 @@ export { stemNote };
 // in the journal, not the code. So nothing here trusts the journal's shape. Whatever an older or
 // buggy generation wrote, buildMessages must give a request a provider accepts.
 
-/** Characters for one request: system prompt, tool specs and messages together. */
+/** Characters for one request at most: system prompt, tool specs and messages together. How much of it is used is in brain/logbook.ts. */
 export const DEFAULT_BUDGET = 250_000;
 
 const INTERRUPTED =
@@ -198,16 +198,23 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
   return { results, started };
 }
 
+/** How a request is laid out, beyond its budget: how much is shown as it happened (brain/logbook.ts), and a closing question. */
+export interface View extends Sizes {
+  /**
+   * Said to the agent after everything in the journal. It is how the agent is asked something
+   * that is no part of its conversation and is not journaled as one, such as to form a memory
+   * (brain/sleep.ts).
+   */
+  ask?: string;
+}
+
 /**
  * The request for this journal: the system prompt, then the conversation, cut from the front to
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
- *
- * With `ask`, the request ends with that, said to the agent after everything in the journal. It
- * is how the agent is asked something that is no part of its conversation and is not journaled
- * as one, such as to form a memory (brain/sleep.ts).
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, ask?: string): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
+  const { ask } = view;
   const out: ChatMessage[] = [];
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
   const origin: number[] = [];
@@ -292,7 +299,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
-  const { head, seam, start } = logbook(events, out, origin, room);
+  const { head, seam, start } = logbook(events, out, origin, room, view);
   const taken = head.reduce((sum, m) => sum + size(m), 0);
   return [{ role: 'system', content: prompt }, ...head, ...fit(seam === null ? out : [seam, ...out.slice(start)], room - taken)];
 }
