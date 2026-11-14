@@ -1,7 +1,12 @@
-import { isMutationRejection, type JournalEvent } from './journal';
+import type { JournalEvent } from './journal';
+import { asText, stemNote } from './stemnote';
+import { MEMORY_MARK, logbook, sizeOf } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
+
+// How the stem's events read is in brain/stemnote.ts; it is given out from here as well, where it always was.
+export { stemNote };
 
 // The journal is permanent and replayed into every request. One thing in it that a provider
 // refuses would fail every request from then on, and no rollback can fix that: the fault would be
@@ -19,33 +24,6 @@ const NOT_STARTED = '[not started] The process stopped before this tool ran. It 
 const STOPPED =
   '[interrupted] Your owner interrupted your turn here. The request to the model was cancelled and any tool that was running was stopped. ' +
   'Do not take that work up again unless your owner asks; when you next reply, say in a line where it stopped.';
-
-/** A journal field as text, whatever was written there. */
-function asText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === undefined) return '';
-  return JSON.stringify(value) ?? '';
-}
-
-/** The longest gate output or reason a stem note carries. */
-const NOTE_CAP = 4000;
-const brief = (value: unknown): string => clip(asText(value), NOTE_CAP);
-
-/** What the stem did, in words the agent reads; null for events that are not news. */
-export function stemNote(e: JournalEvent): string | null {
-  // Under either of its names: the journal keeps the rejections of the time when a mutation was called a molt.
-  if (isMutationRejection(e)) {
-    return `[stem] Your mutation to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
-  }
-  switch (e.type) {
-    case 'generation.promoted':
-      return `[stem] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
-    case 'generation.rolledback':
-      return `[stem] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
-    default:
-      return null;
-  }
-}
 
 /** An assistant event's text and calls. Older generations may have written it without one or the other. */
 function reply(e: JournalEvent): { text: string; calls: unknown[] } {
@@ -75,9 +53,7 @@ function wireArgs(args: unknown): string {
 }
 
 /** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
-function size(m: ChatMessage): number {
-  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
-}
+const size = sizeOf;
 
 /** How images get into a request. Without one, a marker is text like any other and no file is read. */
 export interface Sight {
@@ -198,7 +174,9 @@ const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role =
 
 /** A stimulus as the agent reads it. Only stem events may say `[stem]`; anything else that does is forging a note. */
 function stimulusText(source: unknown, text: unknown): string {
-  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]');
+  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]')
+    // Nor may anything that arrives pass for the agent's own memory (brain/logbook.ts).
+    .replaceAll(MEMORY_MARK, '[not memory]');
   // No provider takes an empty message, and the agent should still know that something arrived.
   return shown.trim() === '' ? '[empty message]' : shown;
 }
@@ -224,9 +202,15 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
  * The request for this journal: the system prompt, then the conversation, cut from the front to
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
+ *
+ * With `ask`, the request ends with that, said to the agent after everything in the journal. It
+ * is how the agent is asked something that is no part of its conversation and is not journaled
+ * as one, such as to form a memory (brain/sleep.ts).
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, ask?: string): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
+  const origin: number[] = [];
   const slots: Slot[] = [];
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
@@ -246,16 +230,23 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
       if (sight && e.source === 'terminal') takeMarkers(message, slots);
       out.push(message);
+      origin.push(i);
     } else if (e.type === 'assistant') {
       const { text, calls } = reply(e);
       const said = text.trim() === '' ? null : text;
       // Providers refuse or misread two assistant messages in a row (see LATE for how they arise):
       // a finished reply followed by another reply, of either kind, is shown as one message.
-      const before = isPlainReply(out.at(-1)) ? out.pop()!.content : null;
+      const merged = isPlainReply(out.at(-1));
+      const before = merged ? out.pop()!.content : null;
+      // A reply shown as one with the reply before it belongs where that one did.
+      const at = merged ? origin.pop()! : i;
       const content = before !== null && said !== null ? `${before}\n\n${said}` : before ?? said;
       if (calls.length === 0) {
         // A reply that says nothing is not sent; no provider takes an empty message.
-        if (content !== null) out.push({ role: 'assistant', content });
+        if (content !== null) {
+          out.push({ role: 'assistant', content });
+          origin.push(at);
+        }
         continue;
       }
       const { results, started } = answers(events, i);
@@ -275,20 +266,35 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       }
       // Results are placed here, right after their call, whatever was journaled in between.
       out.push({ role: 'assistant', content, tool_calls: wire }, ...answered);
+      origin.push(at, ...answered.map(() => i));
     } else if (e.type === 'turn.interrupted') {
       out.push({ role: 'user', content: STOPPED });
+      origin.push(i);
     } else {
       const note = stemNote(e);
-      if (note !== null) out.push({ role: 'user', content: note });
+      if (note !== null) {
+        out.push({ role: 'user', content: note });
+        origin.push(i);
+      }
     }
   }
   // A request that ends with a finished reply asks for nothing. See LATE for when that happens.
-  if (isPlainReply(out.at(-1))) out.push({ role: 'user', content: LATE });
+  if (ask !== undefined) {
+    out.push({ role: 'user', content: ask });
+    origin.push(events.length);
+  } else if (isPlainReply(out.at(-1))) {
+    out.push({ role: 'user', content: LATE });
+    origin.push(events.length);
+  }
   if (sight) fillSlots(slots, sight);
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   const prompt = system.toWellFormed();
-  return [{ role: 'system', content: prompt }, ...fit(out, budgetChars - prompt.length)];
+  const room = budgetChars - prompt.length;
+  // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
+  const { head, seam, start } = logbook(events, out, origin, room);
+  const taken = head.reduce((sum, m) => sum + size(m), 0);
+  return [{ role: 'system', content: prompt }, ...head, ...fit(seam === null ? out : [seam, ...out.slice(start)], room - taken)];
 }
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */

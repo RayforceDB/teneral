@@ -1,0 +1,135 @@
+import type { JournalEvent } from './journal';
+import type { ChatMessage } from './provider';
+import { IMAGE_CHARS } from '../body/images';
+import { episodes } from './episodes';
+import { remembered, type Memory, type QuarantineData } from './remembered';
+
+// The logbook is the remembered past as a request shows it: for every episode that no longer fits
+// as it happened, the memory the agent formed of it, in order, before the part that is still
+// shown word for word.
+//
+// A memory takes the place of its episode only when room runs out. Forming a memory and showing
+// it are two things: brain/sleep.ts forms them early, while the episode is still in view, and
+// here they are swapped in later, whole episodes at a time and in steps, so that the start of a
+// request stays the same for as long as possible (a provider reuses its work on a request only
+// up to the first character that changed).
+
+/** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
+export function sizeOf(m: ChatMessage): number {
+  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
+}
+
+/** Episodes are swapped for their memories in steps of this share of the room. Each step moves where a request first differs from the one before. */
+const STEP = 0.2;
+/** The share of the room the logbook may take. Past it, the oldest memories leave the request; they stay in the journal. */
+export const LOGBOOK_SHARE = 0.5;
+
+/** The mark of everything this file puts in a request. No stimulus can carry it: see `stimulusText` in brain/memory.ts. */
+export const MEMORY_MARK = '[memory]';
+
+/** A journal time as the agent reads it: to the minute, in UTC. */
+function when(ts: string): string {
+  const at = new Date(ts);
+  return Number.isNaN(at.getTime()) ? ts : `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/** A memory as two messages: the question is the memory system's, the answer is the agent's own, as it wrote it. */
+function recalled(m: Memory): ChatMessage[] {
+  return [
+    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?` },
+    { role: 'assistant', content: `${m.title}\n\n${m.text}` },
+  ];
+}
+
+/** A stretch that has no memory and no longer fits. It is not passed over in silence: the agent can open it. */
+function unremembered(q: QuarantineData): ChatMessage[] {
+  return [{
+    role: 'user',
+    content: `${MEMORY_MARK} ${when(q.start)} to ${when(q.end)}: no memory could be formed of this stretch (${q.reason}). It is in your journal as it happened.`,
+  }];
+}
+
+const SEAM = `${MEMORY_MARK} What follows is shown as it happened.`;
+
+export interface Logbook {
+  /** What stands before the part shown as it happened; empty while everything still fits or nothing is remembered. */
+  head: ChatMessage[];
+  /**
+   * The line between the two, when there is a head: the first message of the part shown as it
+   * happened. That part may begin in the middle of a turn, with a reply; a provider wants a
+   * conversation to go on from something said to the agent, and this is it.
+   */
+  seam: ChatMessage | null;
+  /** The position in `messages` at which that part begins. */
+  start: number;
+}
+
+/**
+ * Decides how much of the conversation is shown as memories.
+ *
+ * `messages` is the whole journal as a conversation and `origin[i]` the position, in `events`, of
+ * the event that `messages[i]` was made from. Only episodes that were remembered (or given up on)
+ * can be swapped, and those are always the oldest ones. What is left over when they do not suffice
+ * is for `fit` in brain/memory.ts to cut, as it did before there were memories.
+ */
+export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number): Logbook {
+  const { memories, quarantined, spans } = remembered(events);
+  if (spans.length === 0) return { head: [], seam: null, start: 0 };
+  const kept = episodes(events, spans).filter((e) => e.why === 'kept');
+  if (kept.length === 0) return { head: [], seam: null, start: 0 };
+
+  // Where each remembered episode ends in `messages`, and how much everything before that point counts.
+  const sizes = messages.map(sizeOf);
+  const total = sizes.reduce((sum, n) => sum + n, 0);
+  const ends: number[] = [];
+  const before: number[] = [];
+  let at = 0;
+  let sum = 0;
+  for (const episode of kept) {
+    while (at < messages.length && origin[at]! < episode.to) sum += sizes[at++]!;
+    ends.push(at);
+    before.push(sum);
+  }
+
+  const pairs = kept.map((e) => {
+    const memory = memories.get(e.first);
+    if (memory !== undefined) return memory.outcome === 'quiet' ? [] : recalled(memory);
+    const given = quarantined.get(e.first);
+    return given === undefined ? [] : unremembered(given);
+  });
+  const headOf = (count: number): ChatMessage[] => (count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), room));
+  const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
+
+  // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
+  const step = Math.max(1, Math.floor(room * STEP));
+  const toSwap = total > room ? Math.ceil((total - room) / step) * step : 0;
+  let count = 0;
+  if (toSwap > 0) {
+    count = 1;
+    while (count < kept.length && before[count - 1]! < toSwap) count += 1;
+  }
+  // The memories take room themselves; one more episode at a time until it all fits or there is none left to swap.
+  while (count > 0 && count < kept.length && !fits(count)) count += 1;
+  return count === 0 ? { head: [], seam: null, start: 0 } : { head: headOf(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
+}
+
+/**
+ * The logbook within its share of the room: the oldest memories leave, in steps, and a line says
+ * how many. They are not lost; brain/memory.ts only stops showing them.
+ */
+function trimmed(pairs: ChatMessage[], room: number): ChatMessage[] {
+  const cap = Math.floor(room * LOGBOOK_SHARE);
+  const total = pairs.reduce((n, m) => n + sizeOf(m), 0);
+  if (total <= cap) return pairs;
+  const step = Math.max(1, Math.floor(cap * STEP));
+  const toDrop = Math.ceil((total - cap) / step) * step;
+  let dropped = 0;
+  let start = 0;
+  let memoriesGone = 0;
+  while (start < pairs.length && (dropped < toDrop || pairs[start]!.role !== 'user')) {
+    if (pairs[start]!.role === 'user') memoriesGone += 1;
+    dropped += sizeOf(pairs[start]!);
+    start += 1;
+  }
+  return [{ role: 'user', content: `${MEMORY_MARK} ${memoriesGone} earlier memories are not shown here. They are in your journal.` }, ...pairs.slice(start)];
+}

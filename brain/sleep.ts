@@ -1,0 +1,192 @@
+import { appendEvent, readEvents, type JournalEvent, type Usage } from './journal';
+import { DEFAULT_BUDGET, buildMessages } from './memory';
+import { MEMORY_MARK } from './logbook';
+import { episodes, thin, type Episode } from './episodes';
+import { EPISODE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, type MemoryData, type Outcome, type QuarantineData } from './remembered';
+import type { ChatMessage, Provider, ToolSpec } from './provider';
+import { saysTooLong } from './retry';
+import { asText } from './stemnote';
+
+// Sleep is when the agent forms its memories. While nothing is asked of it, it takes the oldest
+// episode that is over and has no memory yet, and asks its own model, as itself, what it will
+// remember of it. The answer is journaled as a note and from then on stands for that episode
+// wherever the episode itself no longer fits (brain/logbook.ts).
+//
+// Three rules keep a memory honest.
+//   The request shows the journal only up to the end of the episode: the agent remembers it as it
+//   knew things then, not with what it learned later.
+//   Only a whole answer in the form asked for becomes a memory. A refusal, half an answer or a
+//   tool call does not; after a second try the stretch is recorded as one no memory could be
+//   formed of, and it stays in the journal as it happened.
+//   An episode in which nothing happened is recorded as quiet without asking a model, which,
+//   asked to remember nothing, might invent something.
+
+/** A memory is asked to be about this share of its episode's size, within the two bounds below. */
+const SHARE = 1 / 25;
+const MIN_CHARS = 600;
+const MAX_CHARS = 4000;
+/** An answer longer than this many times what was asked for is not a memory but a copy. */
+const TOO_LONG = 3;
+/** The shortest text that can be a memory of something. */
+const LEAST_CHARS = 40;
+/** How many characters of the episode's first message the request quotes, to say where the episode begins. */
+const OPENING_CHARS = 160;
+const TITLE_CHARS = 120;
+
+/** What the journal says for an episode in which nothing happened. */
+export const QUIET = { title: 'A quiet stretch', text: 'Nothing happened that is worth remembering.' };
+
+export interface SleepDeps {
+  journal: string;
+  gen: string;
+  provider: Provider;
+  /** The agent's tools as a turn declares them. None is to be called; they are sent so that this request starts exactly as a turn's does. */
+  specs: ToolSpec[];
+  system: () => string;
+  /** Characters for one request, as for a turn. */
+  budgetChars?: number;
+  /** Aborts when something arrives: the agent wakes, and the memory is formed another time. */
+  signal?: AbortSignal;
+}
+
+/** What one call did. `nothing`: no episode is waiting. `woken`: something arrived first, and nothing was written. */
+export type Slept = 'nothing' | 'remembered' | 'quiet' | 'quarantined' | 'woken';
+
+/** How many characters the memory of an episode of this size is asked to be. */
+export function targetChars(episodeChars: number): number {
+  return Math.min(MAX_CHARS, Math.max(MIN_CHARS, Math.round(episodeChars * SHARE)));
+}
+
+/** The episodes that are over and have neither a memory nor a record of there being none, oldest first. */
+export function waiting(events: JournalEvent[]): Episode[] {
+  return episodes(events, remembered(events).spans).filter((e) => e.closed && e.why !== 'kept');
+}
+
+/** How the agent's memory stands, for its owner to see: what is still to be remembered and what could not be. */
+export interface MemoryHealth {
+  remembered: number;
+  waiting: number;
+  /** The end of the oldest episode still waiting, or null. */
+  oldest: string | null;
+  quarantined: number;
+}
+
+export function memoryHealth(events: JournalEvent[]): MemoryHealth {
+  const { memories, quarantined } = remembered(events);
+  const owed = waiting(events);
+  return { remembered: memories.size, waiting: owed.length, oldest: owed[0]?.end ?? null, quarantined: quarantined.size };
+}
+
+/** A journal time to the minute, in UTC. */
+const when = (ts: string): string => `${ts.slice(0, 16).replace('T', ' ')} UTC`;
+
+/** The first words of the episode, as the agent was shown them: how the request says where the episode begins. */
+function opening(events: JournalEvent[]): string {
+  for (const e of events) {
+    const r = e as { text?: unknown };
+    const text = e.type === 'stimulus' || e.type === 'assistant' ? asText(r.text).trim() : '';
+    if (text !== '') return text.slice(0, OPENING_CHARS).replace(/\s+/g, ' ');
+  }
+  return '';
+}
+
+/** What the agent is asked, after the journal up to the end of the episode. */
+export function question(episode: Episode, events: JournalEvent[], chars: number): string {
+  const begins = opening(events);
+  return [
+    `${MEMORY_MARK} It is time to form a memory. It is of the stretch of the conversation above from ${when(episode.start)} to ${when(episode.end)}: `
+    + `${begins === '' ? 'the last part of it' : `it begins with the message that starts "${begins}"`} and ends with the last message above. `
+    + 'What came before that stretch you already remember or still see above; do not tell it again.',
+    'Write in the first person, as yourself, in the language you were speaking. Keep what you would need later: what was asked and by whom, '
+    + 'what you did, what you decided and why, exact names, paths, numbers and commands, what failed, and what is left open. '
+    + 'Where your owner\'s own words matter, quote them. Do not copy long output, and do not say anything that the conversation above does not show.',
+    'Call no tool. Reply in exactly this form and with nothing else:',
+    `Title: <one line>\nOutcome: <one of: done, failed, dropped, open>\n\n<the memory, about ${chars} characters>`,
+    'Outcome is how the stretch ended: done when what was asked got done, failed when it did not work, dropped when it was given up or set aside, open when it is still going on.',
+  ].join('\n\n');
+}
+
+/** A line of the answer without the marks a model may put around a label. */
+const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
+
+/**
+ * The memory in a reply, or the reason it is not one. The form is strict on purpose: a refusal or
+ * a rambling answer read leniently would become a false memory, and those are kept for good.
+ */
+export function parseMemory(reply: string, chars: number): { title: string; text: string; outcome: Outcome } | { problem: string } {
+  const lines = reply.replaceAll('\r', '').split('\n');
+  let at = 0;
+  const next = (): string => {
+    while (at < lines.length && lines[at]!.trim() === '') at += 1;
+    return at < lines.length ? plain(lines[at++]!) : '';
+  };
+  const title = /^title\s*:\s*(.+)$/i.exec(next())?.[1]?.trim();
+  if (title === undefined || title === '') return { problem: 'the first line was not "Title: ..."' };
+  const said = /^outcome\s*:\s*([a-z]+)/i.exec(next())?.[1]?.toLowerCase();
+  const outcome = OUTCOMES.find((o) => o === said && o !== 'quiet');
+  if (outcome === undefined) return { problem: 'the second line was not "Outcome:" with one of done, failed, dropped, open' };
+  const text = lines.slice(at).join('\n').trim();
+  if (text.length < LEAST_CHARS) return { problem: 'there was no memory after the two lines' };
+  if (text.length > chars * TOO_LONG) return { problem: `the memory was ${text.length} characters, far more than the ${chars} asked for` };
+  return { title: title.slice(0, TITLE_CHARS), text, outcome };
+}
+
+const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => ({ from: e.first, to: e.last, start: e.start, end: e.end });
+
+/**
+ * Forms one memory: of the oldest episode that waits for one. Throws what the provider throws; a
+ * failed request writes nothing, and the episode waits on.
+ */
+export async function sleep(d: SleepDeps): Promise<Slept> {
+  const events = readEvents(d.journal);
+  const episode = waiting(events)[0];
+  if (episode === undefined) return 'nothing';
+  const lived = events.slice(episode.from, episode.to);
+  if (thin(lived)) {
+    appendEvent(d.journal, d.gen, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet' } satisfies MemoryData });
+    return 'quiet';
+  }
+
+  const chars = targetChars(episode.chars);
+  const ask = question(episode, lived, chars);
+  let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
+  // Only the journal up to the end of the episode: the memory is formed as of then.
+  const asOf = events.slice(0, episode.to);
+  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, ask);
+  let usage: Usage | undefined;
+  let problem = '';
+  let halved = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let reply;
+    try {
+      reply = await d.provider(messages, d.specs, d.signal && { signal: d.signal });
+    } catch (err) {
+      if (d.signal?.aborted) return 'woken';
+      if (halved || !saysTooLong(err)) throw err;
+      // Characters are only an estimate of tokens: once more with half, as a turn does.
+      halved = true;
+      budget = Math.floor(budget / 2);
+      messages = buildMessages(asOf, d.system(), budget, undefined, ask);
+      attempt -= 1;
+      continue;
+    }
+    if (d.signal?.aborted) return 'woken';
+    usage = reply.usage;
+    const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
+    if (!('problem' in memory)) {
+      appendEvent(d.journal, d.gen, {
+        type: 'note', kind: EPISODE_KIND,
+        data: { ...span(episode), ...memory, ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
+      });
+      return 'remembered';
+    }
+    problem = memory.problem;
+    messages = [
+      ...messages,
+      { role: 'assistant', content: reply.text.trim() === '' ? '(no text)' : reply.text },
+      { role: 'user', content: `${MEMORY_MARK} That cannot be kept as a memory: ${problem}. Reply again in exactly the form asked for, and call no tool.` },
+    ];
+  }
+  appendEvent(d.journal, d.gen, { type: 'note', kind: QUARANTINE_KIND, data: { ...span(episode), reason: problem } satisfies QuarantineData });
+  return 'quarantined';
+}

@@ -7,6 +7,7 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { TOOLS, type ToolContext } from './tools';
 
@@ -117,6 +118,38 @@ function idle(ms?: number): Promise<void> {
   }).then(() => { wake = null; });
 }
 
+/** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
+const REST_RETRY_MS = 15 * 60_000;
+let restNotBefore = 0;
+
+/**
+ * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
+ * that is over and has none (brain/sleep.ts). Whatever arrives meanwhile cancels the request and
+ * is answered first. Returns false when there was nothing to remember, or no use in trying now.
+ */
+async function rest(): Promise<boolean> {
+  if (Date.now() < restNotBefore) return false;
+  const woken = new AbortController();
+  wake = () => woken.abort();
+  try {
+    const slept = await sleep({
+      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars,
+      system: () => composeSystem(prompt, soulDir, journal),
+      signal: woken.signal,
+    });
+    if (slept === 'remembered' || slept === 'quarantined') console.error(`[memory] ${slept === 'remembered' ? 'formed a memory' : 'no memory could be formed of one stretch; it stays in the journal as it happened'}`);
+    return slept !== 'nothing';
+  } catch (err) {
+    if (woken.signal.aborted) return true;
+    // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
+    console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
+    restNotBefore = Date.now() + REST_RETRY_MS;
+    return false;
+  } finally {
+    wake = null;
+  }
+}
+
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 // A journal with no stimulus yet means this individual was never born: the letter goes first.
@@ -176,6 +209,9 @@ for (;;) {
     console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or at once when something arrives`);
     await idle(delay);
   }
+  if (quitting) break;
+  // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
+  if (await rest()) continue;
   if (quitting) break;
   // A prompt only where someone can type at it; in the background it would be noise in the log.
   if (process.stdin.isTTY) process.stdout.write('> ');
