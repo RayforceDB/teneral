@@ -79,7 +79,8 @@ test('the last exam counts: a recall that finds less than the words as they stan
   const base = [...stretches.flat(), now, memory(stretches[0]!)];
   const good = health([...base, result({})], end);
   expect(good.state).toBe('well');
-  expect(healthBadge(good)).toBe('memory well · exam 100%');
+  expect(healthBadge(good)).toBe('memory well · event 100% · episode 83%');
+  expect(healthBadge(health([...base, result({ recall: score(22), told: score(20), written: false })], end))).toMatch(/· event 73%$/);
   expect(health([...base, result({ recall: score(20), plain: score(27) })], end)).toMatchObject({ state: 'failing', reasons: ['recall finds less than looking for the words as they stand'] });
   expect(health([...base, result({ told: score(9) })], end)).toMatchObject({ state: 'behind', reasons: ['the memories tell 30% of what the exam asks'] });
   // Questions made from the journal for want of the agent's own say nothing of the memories.

@@ -1502,5 +1502,5 @@ test('the status line says how the memory stands and what the last exam came to,
   s.journal({ type: 'note', kind: 'memory.exam.result.v1', data: { recall: score, plain: score, told: score, written: true } }, s.clock.at);
   // Worked out anew only now and then: the whole journal is read for it.
   s.clock.at += 31_000;
-  expect(footer()).toContain('memory well · exam 97%');
+  expect(footer()).toContain('memory well · event 97% · episode 97%');
 });

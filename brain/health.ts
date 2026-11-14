@@ -83,12 +83,16 @@ export function healthNote(h: Health, mark: string): string | null {
 }
 
 /**
- * The memory in a few characters, for a status line: its state, and what recall scored in the
- * last exam. Empty while nothing has been remembered yet and nothing is wrong: there is nothing
- * to say of a memory that has not begun.
+ * The memory in a few characters, for a status line: its state, and the two numbers of the last
+ * exam. `event` is the share of the questions for which `recall` found the very event that
+ * answers; `episode` is the share for which a memory of the stretch that holds it was found, so
+ * that the answer is one `open` away. The second is said only of questions the agent wrote: of
+ * questions made from the journal it means nothing. Empty while nothing has been remembered yet
+ * and nothing is wrong: there is nothing to say of a memory that has not begun.
  */
 export function healthBadge(h: Health): string {
   if (h.state === 'well' && h.remembered + h.quarantined === 0) return '';
-  const exam = h.exam === null ? '' : ` · exam ${Math.round(rate(h.exam.recall) * 100)}%`;
+  const share = (score: Result['recall']): string => `${Math.round(rate(score) * 100)}%`;
+  const exam = h.exam === null ? '' : ` · event ${share(h.exam.recall)}${h.exam.written && h.exam.told.questions > 0 ? ` · episode ${share(h.exam.told)}` : ''}`;
   return `memory ${h.state}${exam}`;
 }

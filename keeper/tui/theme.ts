@@ -29,6 +29,8 @@ export const PALETTE = {
   deep: [[104, 101, 95], 242, '90'],
   good: [[110, 180, 104], 71, '32'],
   warn: [[222, 110, 88], 167, '31'],
+  /** Between the two: something has fallen back and nothing is broken. */
+  amber: [[214, 168, 84], 179, '33'],
 } as const satisfies Record<string, Colour>;
 
 export type ColourName = keyof typeof PALETTE;

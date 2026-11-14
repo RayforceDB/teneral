@@ -320,3 +320,11 @@ test('a request under way is put into words: what is arriving, with its end, how
   // The file is the body's: anything that is not a pulse is none.
   for (const text of ['', 'null', '[]', '{}', '{"at":"soon","asked":"x","step":"asked"}', '{"at":"2026-11-13T10:00:00.000Z","asked":"2026-11-13T10:00:00.000Z"}']) expect(beatOf(text)).toBeNull();
 });
+
+test('the segment that says how the memory stands is on a ground of its state', () => {
+  const ground = (badge: string): string | undefined =>
+    liveRows(live(140, 30, { about: ['kimi', 'idle', badge, '~/work'] })).at(-1)!.find((span) => span.text.includes('memory'))?.style?.bg;
+  expect(ground('memory well · event 97% · episode 90%')).toBe('good');
+  expect(ground('memory behind · event 22% · episode 67%')).toBe('amber');
+  expect(ground('memory failing')).toBe('warn');
+});
