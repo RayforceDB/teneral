@@ -19,6 +19,10 @@ import { scan } from './store';
 // agent's own life is turned into questions: see `cloze`.
 
 export const EXAM_KIND = 'memory.exam.v1';
+/** What an exam came to, journaled so that the next one, and a mutation of the memory, have something to be held against. */
+export const RESULT_KIND = 'memory.exam.result.v1';
+/** With fewer questions than this an exam says too little to hold anything against. */
+export const QUESTIONS_MIN = 20;
 /** A question is passed when an answering event is among this many finds. */
 export const TOP = 5;
 
@@ -126,6 +130,63 @@ export function cloze(events: JournalEvent[], most = 200): Question[] {
   }));
 }
 
+/**
+ * How much of what the questions ask is still told by the memories themselves: a question counts
+ * when one of the first few memories found for it is of a stretch that holds an answering event.
+ * `recall` finds things in the journal whatever the memories say; this is the measure of the
+ * memories, of whether what mattered in a stretch got into what was written of it.
+ */
+export function told(past: Past, events: JournalEvent[], questions: Question[]): Score {
+  const at = new Map(events.map((e, i) => [e.id, i]));
+  let passed = 0;
+  let nearness = 0;
+  for (const q of questions) {
+    const wanted = q.events.map((id) => at.get(id)).filter((i): i is number => i !== undefined);
+    const rank = past.find(q.question, { kinds: ['memory'], limit: TOP }).findIndex((hit) => {
+      const d = (hit.event as { data?: { from?: unknown; to?: unknown } }).data;
+      const [from, to] = [at.get(d?.from as string), at.get(d?.to as string)];
+      return from !== undefined && to !== undefined && wanted.some((i) => i >= from && i <= to);
+    });
+    if (rank !== -1) {
+      passed += 1;
+      nearness += 1 / (rank + 1);
+    }
+  }
+  return { questions: questions.length, passed, nearness: questions.length === 0 ? 0 : nearness / questions.length };
+}
+
+/** An exam's result as it is journaled: what recall found, what looking for the words as they stand found, and what the memories themselves still tell. */
+export interface Result {
+  recall: Score;
+  plain: Score;
+  told: Score;
+  /** Whether the questions were written by the agent, or made from the journal for want of any. */
+  written: boolean;
+}
+
+/** Sits the whole exam on `events` with `past`: the questions the journal holds, or ones made from it when it holds too few. */
+export function sit(past: Past, events: JournalEvent[]): Result {
+  const own = questionsOf(events);
+  const written = own.length >= QUESTIONS_MIN;
+  const questions = written ? own : [...own, ...cloze(events)];
+  return { recall: examine(byMemory(past), questions), plain: examine(bySubstring(events), questions), told: told(past, events, own), written };
+}
+
+/** The latest result journaled in `events`, or null. */
+export function lastResult(events: JournalEvent[]): (Result & { at: string }) | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type !== 'note' || e.kind !== RESULT_KIND || typeof e.data !== 'object' || e.data === null) continue;
+    const d = e.data as Partial<Result>;
+    const whole = (s: unknown): s is Score => typeof s === 'object' && s !== null && typeof (s as Score).questions === 'number' && typeof (s as Score).passed === 'number';
+    if (whole(d.recall) && whole(d.plain) && whole(d.told)) return { recall: d.recall, plain: d.plain, told: d.told, written: d.written === true, at: e.ts };
+  }
+  return null;
+}
+
+/** The share of its questions a score passed, from 0 to 1; 1 when it had none. */
+export const rate = (score: Score): number => (score.questions === 0 ? 1 : score.passed / score.questions);
+
 const percent = (score: Score): string => (score.questions === 0 ? '-' : `${Math.round((score.passed / score.questions) * 100)}%`);
 
 /** The exam's result as lines of plain text. */
@@ -137,6 +198,18 @@ export function report(memory: Score, plain: Score, by: Past['by'], made: boolea
     row(`recall (asked of the ${by})`, memory),
     row('the words as they stand', plain),
   ];
+}
+
+// `bun brain/exam.ts --answer <journal> <questions> <answers>`: the questions are read from a file, a
+// line of JSON each, and for each the ids of the events found are written to the third file. It is how a
+// body that is not running is examined by someone else: the gates ask a candidate this way and count the
+// answers themselves, so that no body grades its own exam (immune/gates.ts).
+if (import.meta.main && process.argv[2] === '--answer') {
+  const [journal = '', asked = '', answers = ''] = process.argv.slice(3);
+  const find = byMemory(journalPast(journal));
+  const questions = readFileSync(asked, 'utf8').split('\n').filter((line) => line.trim() !== '').map((line) => String((JSON.parse(line) as { question?: unknown }).question ?? ''));
+  await Bun.write(answers, JSON.stringify(questions.map((question) => find(question, TOP))));
+  process.exit(0);
 }
 
 if (import.meta.main) {

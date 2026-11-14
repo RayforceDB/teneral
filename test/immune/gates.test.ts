@@ -691,3 +691,77 @@ test('smoke: for a sign-in provider the real sign-in is neither read nor renewed
   expect(readFileSync(file, 'utf8')).toBe(before);
   expect(readdirSync(auth)).toEqual(['chatgpt.json']);
 }, SLOW);
+
+// --- the memory's exam ---
+
+/**
+ * A journal with thirty questions, each answered by one event, and the result the running
+ * generation last scored; and a candidate's `brain/exam.ts` that answers the first `right` of
+ * them rightly. The candidate only answers; the gate counts.
+ */
+function examined(right: number, heldPassed: number): { journal: string; examiner: string } {
+  const dir = join(tmpdir(), `teneral-exam-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const journal = join(dir, 'journal.jsonl');
+  const line = (body: object, i: number): string => `${JSON.stringify({ v: 1, id: `x${i}`, ts: '2026-11-14T10:00:00.000Z', gen: 'g', ...body })}\n`;
+  const lines = Array.from({ length: 30 }, (_, i) => line({ type: 'note', kind: 'memory.exam.v1', data: { question: `question ${i}`, events: [`answer-${i}`] } }, i));
+  const score = { questions: 30, passed: heldPassed, nearness: 1 };
+  lines.push(line({ type: 'note', kind: 'memory.exam.result.v1', data: { recall: score, plain: score, told: score, written: true } }, 99));
+  writeFileSync(journal, lines.join(''));
+  const examiner = `const [journal, asked, answers] = process.argv.slice(3);
+const questions = (await Bun.file(asked).text()).split('\\n').filter((l) => l !== '').map((l) => JSON.parse(l).question);
+await Bun.write(answers, JSON.stringify(questions.map((q, i) => (i < ${right} ? ['answer-' + q.split(' ')[1]] : ['somewhere-else']))));
+`;
+  return { journal, examiner };
+}
+
+test('a mutation that changes the memory and remembers worse than the running generation is refused, with the two scores', async () => {
+  const { journal, examiner } = examined(20, 29);
+  const { dir, seed } = makeRepo({ 'brain/exam.ts': examiner, 'brain/recall.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+  const next = commitAll(dir, 'a cleverer recall');
+  const result = await runGates(dir, seed, next, NO_CHECKS, { journal });
+  expect(result).toMatchObject({ ok: false, gate: 'memory' });
+  expect(result.output).toContain('of 30 questions the candidate finds the answer to 20 (67%), and the generation running found 97%');
+});
+
+test('one that remembers as well passes, and so does one a question short of it', async () => {
+  for (const right of [29, 30]) {
+    const { journal, examiner } = examined(right, 30);
+    const { dir, seed } = makeRepo({ 'brain/exam.ts': examiner, 'brain/recall.ts': 'export const a = 1;\n' });
+    writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+    expect(await runGates(dir, seed, commitAll(dir, 'change'), NO_CHECKS, { journal })).toEqual({ ok: true, gate: 'all', output: '' });
+  }
+  // What a candidate was given is a copy: the journal itself is as it was.
+});
+
+test('a mutation that leaves the memory as it is sits no exam, however badly it would do', async () => {
+  const { journal, examiner } = examined(0, 30);
+  const { dir, seed } = makeRepo({ 'brain/exam.ts': examiner, 'body/a.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'body/a.ts': 'export const a = 2;\n' });
+  expect(await runGates(dir, seed, commitAll(dir, 'change'), NO_CHECKS, { journal })).toEqual({ ok: true, gate: 'all', output: '' });
+});
+
+test('a candidate that changes the memory and cannot be examined is refused; with nothing yet to hold it against, it passes', async () => {
+  const { journal } = examined(0, 30);
+  const { dir, seed } = makeRepo({ 'brain/recall.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+  const next = commitAll(dir, 'change');
+  const result = await runGates(dir, seed, next, NO_CHECKS, { journal });
+  expect(result).toMatchObject({ ok: false, gate: 'memory' });
+  expect(result.output).toContain('a memory that cannot be examined is not taken');
+  // A journal in which no exam was ever sat, and one that does not exist.
+  const fresh = join(tmpdir(), `teneral-exam-${randomUUID()}.jsonl`);
+  writeFileSync(fresh, '');
+  expect(await runGates(dir, seed, next, NO_CHECKS, { journal: fresh })).toMatchObject({ ok: true });
+  expect(await runGates(dir, seed, next, NO_CHECKS, { journal: join(tmpdir(), 'teneral-no-such-journal') })).toMatchObject({ ok: true });
+});
+
+test('a candidate that gives no answers fails its exam', async () => {
+  const { journal } = examined(0, 30);
+  const { dir, seed } = makeRepo({ 'brain/exam.ts': 'process.exit(3);\n', 'brain/recall.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+  const result = await runGates(dir, seed, commitAll(dir, 'change'), NO_CHECKS, { journal });
+  expect(result).toMatchObject({ ok: false, gate: 'memory' });
+  expect(result.output).toContain('gave no answers');
+});

@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
-  existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEvent, readEvents } from '../brain/journal';
 import { ENGINES_FILE, ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parsePins, provideOrgans, type Organ, type Pins } from './organs';
 import { protectedChanges } from './protected';
 import { judgeApproval, type ApprovalOptions } from './approval';
+import { QUESTIONS_MIN, cloze, examine, lastResult, questionsOf, rate } from '../brain/exam';
 
 export interface GateResult {
   ok: boolean;
@@ -553,6 +554,60 @@ export interface GateOptions {
   organTimeoutMs?: number;
   /** What the owner allows outside the free paths, and the launcher this supervisor runs under (immune/approval.ts). */
   approval?: ApprovalOptions;
+  /** The individual's journal. With it, a candidate that changes the memory sits the exam the running generation last sat (see `memoryExam`). */
+  journal?: string;
+}
+
+/** The files a memory is made of. A candidate that differs in any of them from the generation running is examined. */
+export const MEMORY_FILES = ['episodes', 'exam', 'known', 'logbook', 'memory', 'owned', 'past', 'ray', 'recall', 'remembered', 'sleep', 'store'].map((name) => `brain/${name}.ts`);
+/** How much lower than the generation running a candidate may score, as a share of the questions, and never less than one question. */
+export const EXAM_SLACK = 0.02;
+
+/**
+ * The memory's own gate. A mutation that changes how the agent remembers must find, of what its
+ * exam asks, no less than the generation running did when it last sat it. The candidate is only
+ * asked for its answers (`bun brain/exam.ts --answer`), against a copy of the journal; the
+ * counting is done here, by the code of the generation that is running, so that no candidate
+ * grades itself. Returns why the candidate fails, or null: when it passes, when it leaves the
+ * memory as it is, and when there is nothing yet to hold it against.
+ */
+async function memoryExam(
+  root: string, from: string, to: string, tree: string, env: Record<string, string>, journal: string,
+  o: { signal?: AbortSignal; graceMs: number; timeoutMs: number },
+): Promise<{ interrupted: boolean; problem: string | null }> {
+  const pass = { interrupted: false, problem: null };
+  if (from === to || !existsSync(journal)) return pass;
+  if (git(root, 'diff', '--name-only', from, to, '--', ...MEMORY_FILES).trim() === '') return pass;
+  const events = readEvents(journal);
+  const held = lastResult(events);
+  const own = questionsOf(events);
+  const questions = own.length >= QUESTIONS_MIN ? own : [...own, ...cloze(events)];
+  if (held === null || questions.length < QUESTIONS_MIN) return pass;
+  if (!existsSync(join(tree, 'brain', 'exam.ts'))) return { interrupted: false, problem: 'the candidate changes the memory and has no brain/exam.ts: a memory that cannot be examined is not taken' };
+  const tmp = join(tree, GATE_TMP);
+  const [copy, asked, answers] = [join(tmp, 'exam-journal.jsonl'), join(tmp, 'exam-questions.jsonl'), join(tmp, 'exam-answers.json')];
+  // A copy: what the candidate does with the journal it is given is nobody's concern but the gate's.
+  copyFileSync(journal, copy);
+  writeFileSync(asked, questions.map((q) => `${JSON.stringify({ question: q.question })}\n`).join(''));
+  const r = await runCheck(['bun', 'brain/exam.ts', '--answer', copy, asked, answers], tree, env, o);
+  if (r.interrupted) return { interrupted: true, problem: null };
+  let found: unknown;
+  try {
+    found = JSON.parse(readFileSync(answers, 'utf8'));
+  } catch {
+    return { interrupted: false, problem: `${r.output}\nthe candidate gave no answers to the memory's exam` };
+  }
+  const given = Array.isArray(found) ? found : [];
+  const answerOf = new Map(questions.map((q, i) => [q.question, Array.isArray(given[i]) ? (given[i] as unknown[]).filter((id): id is string => typeof id === 'string') : []]));
+  const score = examine((question) => answerOf.get(question) ?? [], questions);
+  // Never less than one question's worth: with few questions, one more or less is chance.
+  if (rate(score) + Math.max(EXAM_SLACK, 1 / score.questions) >= rate(held.recall)) return pass;
+  const percent = (share: number): string => `${Math.round(share * 100)}%`;
+  return {
+    interrupted: false,
+    problem: `this mutation changes the memory and remembers worse: of ${score.questions} questions the candidate finds the answer to ${score.passed} (${percent(rate(score))}), `
+      + `and the generation running found ${percent(rate(held.recall))} when it last sat the exam (${held.at.slice(0, 16).replace('T', ' ')} UTC). bun brain/exam.ts shows which.`,
+  };
 }
 
 /** The paths outside the free ones in which commits `a` and `b` differ: empty when they have the same stem, project files and all. */
@@ -601,7 +656,7 @@ export async function runGates(
   } catch (err) {
     return fail('organs', err instanceof Error ? err.message : String(err));
   }
-  if (checks.length === 0 && !smoke && organs.length === 0) return { ok: true, gate: 'all', output: '' };
+  if (checks.length === 0 && !smoke && organs.length === 0 && opts.journal === undefined) return { ok: true, gate: 'all', output: '' };
   if (opts.signal?.aborted) return interrupted();
 
   let tree: string;
@@ -625,6 +680,11 @@ export async function runGates(
       const problem = check.bunSummary ? bunSummaryProblem(r.stderr) : null;
       // The reason goes last: fail() keeps the end of the output.
       if (problem) return fail(check.gate, `${r.output}\n${problem}`);
+    }
+    if (opts.journal !== undefined) {
+      const exam = await memoryExam(root, from, to, tree, env, opts.journal, { signal: opts.signal, graceMs, timeoutMs: opts.checkTimeoutMs ?? 600_000 });
+      if (exam.interrupted) return interrupted();
+      if (exam.problem !== null) return fail('memory', exam.problem);
     }
     if (smoke) {
       // Last, so a body is only ever started once its types and tests are in order.

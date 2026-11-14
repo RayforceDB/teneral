@@ -497,6 +497,8 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       signal: stop, killGraceMs, provider: process.env.TENERAL_PROVIDER,
       checkTimeoutMs: allowance(process.env.TENERAL_CHECK_MINUTES, 60_000), smokeTimeoutMs: allowance(process.env.TENERAL_SMOKE_SECONDS, 1000),
       approval: { mode: process.env.TENERAL_APPROVAL, launcher: Number(process.env.TENERAL_LAUNCHER) || null },
+      // With the journal, a candidate that changes the memory is held against what the running generation last scored in its exam.
+      journal: p.journal,
     }));
   const log = opts.log ?? ((line: string) => console.error(`[teneral] ${line}`));
 
