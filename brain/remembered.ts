@@ -1,5 +1,6 @@
 import type { JournalEvent } from './journal';
 import type { Span } from './episodes';
+import { withdrawn } from './owned';
 
 // What the agent has remembered, as it lies in the journal. A memory is a note (see `note` in
 // brain/journal.ts): written once by brain/sleep.ts, never changed, and read back here. Everything
@@ -118,11 +119,23 @@ export function remembered(events: JournalEvent[]): Remembered {
   const order: string[] = [];
   const seen = new Map<string, Span>();
   const merges: Merge[] = [];
+  // What the owner withdrew does not stand. The stretch it was about stays the stretch it was, so that
+  // nothing remembered after it is disturbed; it only has no memory again, and gets a new one (brain/sleep.ts).
+  const gone = withdrawn(events);
   for (const e of events) {
     if (e.type !== 'note' || (e.kind !== EPISODE_KIND && e.kind !== QUARANTINE_KIND && e.kind !== MERGE_KIND)) continue;
     const at = span(e.data);
     if (at === null) continue;
     const d = e.data as Record<string, unknown>;
+    if (gone.has(e.id)) {
+      if (e.kind !== MERGE_KIND) {
+        if (!seen.has(at.from)) order.push(at.from);
+        if (!seen.has(at.from)) seen.set(at.from, { from: at.from, to: at.to });
+        if (e.kind === EPISODE_KIND) memories.delete(at.from);
+        else quarantined.delete(at.from);
+      }
+      continue;
+    }
     if (e.kind === MERGE_KIND) {
       if (text(d.title) && text(d.text) && OUTCOMES.includes(d.outcome as Outcome) && typeof d.level === 'number' && d.level >= 2) {
         merges.push({ ...at, title: d.title, text: d.text, outcome: d.outcome as Outcome, level: d.level, ...voicesIn(d), ...(d.mechanical === true ? { mechanical: true } : {}), id: e.id, at: e.ts });

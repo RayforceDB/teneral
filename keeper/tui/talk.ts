@@ -5,7 +5,8 @@ import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
 import { ownerCommand } from '../../species/offer';
-import { interrupt, tell } from '../owner';
+import { interrupt, leaveWord, tell } from '../owner';
+import { memoryCommand } from '../memory';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
 import { Follower } from '../talk';
@@ -807,6 +808,20 @@ export class TalkScreen {
           lines = [`It could not be read: ${err instanceof Error ? err.message : String(err)}`];
         }
         return this.page('what the model was asked for', lines);
+      }
+      case '/memory': {
+        let lines: string[];
+        try {
+          const contextChars = Number(this.o.env.TENERAL_CONTEXT_CHARS);
+          const answer = memoryCommand(readEvents(this.o.paths.journal), arg, this.now(), contextChars > 0 ? Math.floor(contextChars) : undefined);
+          // The word goes to the body, which journals it between turns; this client only says what was asked.
+          if (answer.word !== undefined) leaveWord(this.o.paths.owner, answer.word);
+          lines = answer.lines;
+        } catch (err) {
+          lines = [`It could not be done: ${err instanceof Error ? err.message : String(err)}`];
+        }
+        const shown = clean(lines.join('\n')).split('\n');
+        return shown.length <= 2 ? this.say(shown.join(' ')) : this.page('the agent\'s memory', shown);
       }
       case '/offers':
       case '/approve': {

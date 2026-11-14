@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { readEvents, type JournalEvent } from './journal';
 import { episodes, type Episode } from './episodes';
+import { BACK_KIND, standing, wasSaid } from './owned';
 import { openRay, type Ray } from './ray';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { remembered } from './remembered';
@@ -36,16 +37,23 @@ export interface Found extends Hit {
 
 /** The journal read through, and read again only when it has grown. */
 function reader(journal: string): () => Line[] {
+  let all: Line[] = [];
   let lines: Line[] = [];
   let end = 0;
   return () => {
     if (existsSync(journal) && statSync(journal).size < end) {
       // Shorter than what was read: another file than before. Start over.
+      all = [];
       lines = [];
       end = 0;
     }
     const more = scan(journal, end);
-    if (more.lines.length > 0) lines = [...lines, ...more.lines];
+    if (more.lines.length > 0) {
+      all = [...all, ...more.lines];
+      // Without what the owner took back (brain/owned.ts): it is in the journal and is not found.
+      const stands = all.some((line) => line.event.type === 'note' && line.event.kind === BACK_KIND) ? new Set(standing(all.map((line) => line.event))) : null;
+      lines = stands === null ? all : all.filter((line) => stands.has(line.event));
+    }
     end = more.end;
     return lines;
   };
@@ -81,11 +89,32 @@ export function journalPast(journal: string): Past {
 /** The past of `journal`, asked of a store in the database `ray`. `owned` says the runtime was opened for this and is closed with it. */
 function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Past {
   const offsets = (source: string): number[] => [...(store.ask(source).columns.off as BigInt64Array | undefined ?? [])].map(Number);
+  /**
+   * The stretches of the journal the owner took back, as bytes from and to: from the line of the
+   * message a note names up to the note's own line. The store holds every line; what stands is
+   * decided here, so that taking a conversation back needs no row changed.
+   */
+  const aside = (): [number, number][] => {
+    const ranges: [number, number][] = [];
+    for (const off of offsets(`(select {from: events where: (== source '${BACK_KIND}) off: off})`)) {
+      const to = (store.read(off) as { data?: { to?: unknown } } | null)?.data?.to;
+      if (typeof to !== 'string') continue;
+      ray.bind('mem_wanted', { wanted: { type: 'str', data: [to] } });
+      const [from] = offsets("(select {from: events where: (in id (at mem_wanted 'wanted)) off: off})");
+      if (from !== undefined && from < off) ranges.push([from, off]);
+    }
+    return ranges;
+  };
+  /** Whether the event at `off` still stands: records and notes always do, what was said in a stretch taken back does not. */
+  const stands = (ranges: [number, number][], off: number, e: JournalEvent): boolean =>
+    !wasSaid(e) || !ranges.some(([from, to]) => off >= from && off < to);
   return {
     by: 'store',
     find(question, options) {
       store.sync();
-      return finder(store.index, store.read)(question, options);
+      const ranges = aside();
+      const found = finder(store.index, store.read)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
+      return ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, options?.limit ?? 10);
     },
     asked() {
       store.sync();
@@ -99,8 +128,14 @@ function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Pas
       if (off === undefined) return null;
       const earlier = before <= 0 ? [] : offsets(`(select {from: events where: (< off ${off}) desc: off take: ${Math.floor(before)} off: off})`).reverse();
       const later = offsets(`(select {from: events where: (>= off ${off}) asc: off take: ${Math.floor(after) + 1} off: off})`);
-      const events = [...earlier, ...later].map(store.read).filter((e): e is JournalEvent => e !== null);
-      return { events, at: earlier.length };
+      const ranges = aside();
+      const read = (offs: number[]): JournalEvent[] => offs.flatMap((at) => {
+        const e = store.read(at);
+        // The event asked for is shown whatever became of it; around it, only what still stands.
+        return e !== null && (at === off || stands(ranges, at, e)) ? [e] : [];
+      });
+      const shownBefore = read(earlier);
+      return { events: [...shownBefore, ...read(later)], at: shownBefore.length };
     },
     sync: () => { store.sync(); },
     persist: () => store.persist(),
@@ -168,7 +203,7 @@ export interface TimelineEntry {
 
 /** The episodes of `journal` whose time overlaps `from`..`to` (ISO times, either may be left out), in order, with what is remembered of each. */
 export function timeline(journal: string, from?: string, to?: string): TimelineEntry[] {
-  const events = readEvents(journal);
+  const events = standing(readEvents(journal));
   const { memories, quarantined, spans } = remembered(events);
   const lo = from === undefined ? Number.NEGATIVE_INFINITY : Date.parse(from);
   const hi = to === undefined ? Number.POSITIVE_INFINITY : Date.parse(to);

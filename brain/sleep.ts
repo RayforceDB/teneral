@@ -1,7 +1,8 @@
 import { appendEvent, readEvents, type JournalEvent, type Usage } from './journal';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
-import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, sizeOf, type Entry } from './logbook';
+import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
+import { standing } from './owned';
 import { FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Source } from './known';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData } from './remembered';
 import type { ChatMessage, Provider, ToolSpec } from './provider';
@@ -85,7 +86,9 @@ export function targetChars(episodeChars: number): number {
 
 /** The episodes that are over and have neither a memory nor a record of there being none, oldest first. */
 export function waiting(events: JournalEvent[]): Episode[] {
-  return episodes(events, remembered(events).spans).filter((e) => e.closed && e.why !== 'kept');
+  const { spans, memories, quarantined } = remembered(events);
+  // Also a stretch that was remembered once and whose memory the owner withdrew: it is the stretch it was, and has none.
+  return episodes(events, spans).filter((e) => e.closed && (e.why !== 'kept' || (!memories.has(e.first) && !quarantined.has(e.first))));
 }
 
 /** How the agent's memory stands, for its owner to see: what is still to be remembered and what could not be. */
@@ -216,7 +219,7 @@ const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => 
  * failed request writes nothing, and the episode waits on.
  */
 export async function sleep(d: SleepDeps): Promise<Slept> {
-  const events = readEvents(d.journal);
+  const events = standing(readEvents(d.journal));
   const episode = waiting(events)[0];
   if (episode === undefined) return merge(d, events);
   const lived = events.slice(episode.from, episode.to);
@@ -231,11 +234,16 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   // Only the journal up to the end of the episode: the memory is formed as of then. The memories of
   // what came before it belong to that, wherever they were journaled: they are written when there is
   // time, which is always later than what they are about.
-  const earlier = events.slice(episode.to).filter((e) => e.type === 'note' && (
-    e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND || e.kind === FACT_KIND
-    // An intention set down with a memory names its episode; one the agent made itself, in some later turn, is no part of what it knew then.
-    || (e.kind === INTENTION_KIND && typeof (e.data as { episode?: unknown } | null)?.episode === 'string')
-  ));
+  // Only those about what came before it: a stretch remembered again, after its memory was withdrawn, is not shown what followed.
+  const place = new Map(events.map((e, i) => [e.id, i]));
+  const before = (named: unknown): boolean => typeof named === 'string' && (place.get(named) ?? Infinity) < episode.from;
+  const earlier = events.slice(episode.to).filter((e) => {
+    if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) return false;
+    const about = e.data as { from?: unknown; episode?: unknown };
+    if (e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND || e.kind === MERGE_KIND) return before(about.from);
+    // A fact or an intention set down with a memory names its episode; one the agent made itself, in some later turn, is no part of what it knew then.
+    return (e.kind === FACT_KIND || e.kind === INTENTION_KIND) && before(about.episode);
+  });
   const asOf = [...events.slice(0, episode.to), ...earlier];
   let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
   let usage: Usage | undefined;
@@ -299,12 +307,13 @@ interface Crowded {
 function crowded(events: JournalEvent[], cap: number): Crowded | null {
   const all = remembered(events);
   const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
-  const shown = entries(kept, kept.length, all);
+  // A pinned stretch counts as itself here, whatever room it has in a request: it is never made into anything wider.
+  const shown = entries(kept, kept.length, all, { held: pinnedAmong(events, kept), verbatim: () => [], room: Infinity });
   const size = shown.reduce((sum, entry) => sum + entry.messages.reduce((n, m) => n + sizeOf(m), 0), 0);
   if (size <= cap) return null;
   for (let i = 0; i + MERGE_COUNT <= shown.length; i++) {
     const run = shown.slice(i, i + MERGE_COUNT);
-    if (run.every((entry) => entry.level === run[0]!.level)) {
+    if (run[0]!.level > 0 && run.every((entry) => entry.level === run[0]!.level)) {
       const [from, to] = [kept[run[0]!.from]!, kept[run.at(-1)!.to]!];
       // Never the same stretch twice: were a wider memory written and then not shown, asking again would never end.
       if (all.merges.some((m) => m.from === from.first && m.to === to.last)) return null;

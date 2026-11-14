@@ -17,10 +17,17 @@ import { join } from 'node:path';
 // passes over, so no body takes it for a line. It holds the commit approved. Here too the kind is
 // in the name alone.
 
+// A fifth thing is the owner's word about the agent's memory (brain/owned.ts): pin a stretch, withdraw a
+// memory, take the conversation back. It is for the body, which journals it, but it is no line: its
+// name starts with a dot, so a body from before it passes it over like every such name, and ends in
+// `.memory`. It holds the word as JSON, and is read as nothing more than that.
+
 /** What the name of an interrupt ends with. */
 export const INTERRUPT_SUFFIX = '.interrupt';
 /** What the name of an approval of a mutation ends with. */
 export const MUTATION_SUFFIX = '.mutation';
+/** What the name of a word about the agent's memory ends with. */
+export const MEMORY_SUFFIX = '.memory';
 
 let lastMs = 0;
 let count = 0;
@@ -58,6 +65,16 @@ export function interrupt(dir: string): string {
   const name = nextName(INTERRUPT_SUFFIX);
   const tmp = join(dir, `.${name}.tmp`);
   writeFileSync(tmp, '');
+  renameSync(tmp, join(dir, name));
+  return name;
+}
+
+/** Leave, as the owner, a word about the agent's memory: `word` is what brain/owned.ts reads. Returns the file's name. */
+export function leaveWord(dir: string, word: unknown): string {
+  mkdirSync(dir, { recursive: true });
+  const name = `.${nextName(MEMORY_SUFFIX)}`;
+  const tmp = join(dir, `${name}.tmp`);
+  writeFileSync(tmp, JSON.stringify(word));
   renameSync(tmp, join(dir, name));
   return name;
 }

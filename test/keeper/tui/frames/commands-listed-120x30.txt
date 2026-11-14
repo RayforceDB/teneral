@@ -34,4 +34,4 @@
     /approve [commit]  approve the mutation the agent asked about, or the commit or offer named
     /tools             show or hide what each tool call returned
     /generations       the generations this individual has lived in
- Tab completes · Enter runs · Esc closes · Up/Down choose                                                       1 of 12
+ Tab completes · Enter runs · Esc closes · Up/Down choose                                                       1 of 13

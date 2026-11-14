@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from './envelope';
 import type { JournalEvent } from '../brain/journal';
-import { INTERRUPT_SUFFIX } from '../keeper/owner';
+import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
 
 export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
@@ -128,8 +128,11 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
  * only this directory is looked at: nothing that arrives any other way can interrupt. An interrupt
  * names no turn; it is for what was running when it was sent. So one that is already there when
  * this starts was meant for a process that is gone, and is dropped.
+ *
+ * A file whose name starts with a dot and ends in `.memory` is the owner's word about the agent's
+ * memory, and `onWord` gets what it holds (brain/owned.ts decides what it means).
  */
-export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = () => {}): Sensor {
+export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = () => {}, onWord: (text: string) => void = () => {}): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, a line that was journaled but cannot be removed would be said on every poll.
@@ -142,6 +145,18 @@ export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = (
       starting = false;
       try {
         if (!existsSync(dir)) return;
+        // The owner's words about memory (keeper/owner.ts): named with a dot in front, so that no reader takes one for a line, and handed over as they are.
+        for (const file of readdirSync(dir).filter((name) => name.startsWith('.') && name.endsWith(MEMORY_SUFFIX)).sort()) {
+          if (failed.has(file)) continue;
+          try {
+            // Acted on first, removed second: a crash in between repeats the word, and a word said twice changes nothing.
+            onWord(readFileSync(join(dir, file), 'utf8'));
+            rmSync(join(dir, file));
+          } catch (err) {
+            failed.add(file);
+            console.error(`[owner] could not handle ${file}; leaving it until the next start: ${say(err)}`);
+          }
+        }
         for (const file of readdirSync(dir).filter((name) => !name.startsWith('.')).sort()) {
           if (failed.has(file)) continue;
           try {

@@ -28,6 +28,8 @@ export const COMMANDS: readonly Command[] = [
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
+  // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
+  { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },
   { name: '/reasoning', hint: '', about: 'print in full what the model last thought', also: 'Ctrl-R', plain: false },
   { name: '/quit', hint: '', about: 'leave', also: 'Ctrl-D on an empty line, and Ctrl-C', plain: true },
 ];

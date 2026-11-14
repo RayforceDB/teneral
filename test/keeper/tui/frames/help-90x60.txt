@@ -66,6 +66,8 @@
     /plain             how to get the plain text client
     /usage             what the requests to the model cost, and how much came from the
   cache
+    /memory [what]     the agent's memory, and your hand on it: pin, unpin, withdraw,
+  back
     /reasoning         print in full what the model last thought (also Ctrl-R)
     /quit              leave (also Ctrl-D on an empty line, and Ctrl-C)
 

@@ -1,4 +1,5 @@
 import type { JournalEvent } from './journal';
+import { withdrawn } from './owned';
 
 // What the agent knows and what it means to do, as they lie in the journal. Beside the memory of
 // an episode (brain/remembered.ts) there are two smaller things that outlive it.
@@ -66,7 +67,8 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 export function known(events: JournalEvent[]): Known {
   const facts = new Map<string, Fact>();
   const intentions = new Map<string, Intention>();
-  const gone = new Set<string>();
+  // What the owner withdrew is gone like what was replaced or forgotten.
+  const gone = withdrawn(events);
   for (const e of events) {
     if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) continue;
     const d = e.data as Record<string, unknown>;

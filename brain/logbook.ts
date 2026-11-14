@@ -3,6 +3,7 @@ import type { ChatMessage } from './provider';
 import { IMAGE_CHARS } from '../body/images';
 import { episodes, type Episode } from './episodes';
 import { known, knownText } from './known';
+import { pinned } from './owned';
 import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
@@ -67,39 +68,86 @@ function whose(m: Memory | Merge): string {
 }
 
 /** A memory as two messages: the question is the memory system's, the answer is the agent's own, as it wrote it. */
-function recalled(m: Memory | Merge): ChatMessage[] {
+function recalled(m: Memory | Merge, more = ''): ChatMessage[] {
   return [
-    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?${whose(m)}` },
+    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?${whose(m)}${more}` },
     { role: 'assistant', content: `${m.title}\n\n${m.text}` },
   ];
 }
 
-/** One thing in the logbook: the memory of one episode, or one memory that stands for several. `from` and `to` are places among the remembered episodes. */
+/** One thing in the logbook: the memory of one episode, one memory that stands for several, or a stretch the owner pinned, shown as it happened. `from` and `to` are places among the remembered episodes. */
 export interface Entry {
   from: number;
   to: number;
-  /** 1 for an episode, more for a memory of several. */
+  /** 1 for an episode, more for a memory of several, 0 for a pinned stretch, which is never made into anything wider. */
   level: number;
   messages: ChatMessage[];
+}
+
+/** The share of the room that pinned stretches may take together. What is pinned beyond it is shown as its memory, and said to be. */
+export const PIN_SHARE = 0.3;
+const PINNED = `${MEMORY_MARK} Your owner pinned the stretch that follows: it is shown as it happened.`;
+const PIN_UNMET = ' Your owner pinned this stretch to be shown as it happened, but it no longer fits; `open` shows it.';
+
+/** What the owner pinned, among the remembered episodes, and how to show a stretch as it happened. */
+export interface Pins {
+  /** Places, among the remembered episodes, of those that hold a pinned event. */
+  held: Set<number>;
+  /** The messages of the episode at a place, as they happened. */
+  verbatim: (place: number) => ChatMessage[];
+  /** Characters pinned stretches may take together. */
+  room: number;
+}
+
+/** The places, among `kept`, of the episodes that hold an event the owner pinned. */
+export function pinnedAmong(events: JournalEvent[], kept: Episode[]): Set<number> {
+  const held = new Set<number>();
+  const marked = pinned(events);
+  if (marked.size === 0) return held;
+  const at = new Map(events.map((e, i) => [e.id, i]));
+  for (const id of marked) {
+    const index = at.get(id);
+    if (index === undefined) continue;
+    const place = kept.findIndex((e) => e.from <= index && index < e.to);
+    if (place !== -1) held.add(place);
+  }
+  return held;
 }
 
 /**
  * The first `count` remembered episodes as the logbook shows them: each as its own memory, or
  * several as the one memory that stands for them. Where memories of several nest, the widest is
  * shown. A wider memory is used only when everything it stands for is among those `count`: an
- * episode still shown as it happened is not also told in a summary.
+ * episode still shown as it happened is not also told in a summary. A stretch the owner pinned is
+ * shown as it happened, for as long as the pinned stretches together fit their share of the room,
+ * and is never taken into a wider memory.
  */
-export function entries(kept: Episode[], count: number, { memories, quarantined, merges }: Remembered): Entry[] {
+export function entries(kept: Episode[], count: number, { memories, quarantined, merges }: Remembered, pins?: Pins): Entry[] {
   const endsAt = new Map(kept.map((e, i) => [e.last, i]));
   const out: Entry[] = [];
+  let pinRoom = pins?.room ?? 0;
   for (let i = 0; i < count;) {
     const episode = kept[i]!;
+    let unmet = '';
+    if (pins?.held.has(i)) {
+      const lived = pins.verbatim(i);
+      const size = lived.reduce((n, m) => n + sizeOf(m), 0);
+      if (size <= pinRoom) {
+        pinRoom -= size;
+        out.push({ from: i, to: i, level: 0, messages: [{ role: 'user', content: PINNED }, ...lived] });
+        i += 1;
+        continue;
+      }
+      unmet = PIN_UNMET;
+    }
     let wide: Merge | null = null;
     let reach = i;
     for (const merge of merges) {
       if (merge.from !== episode.first) continue;
       const to = endsAt.get(merge.to);
       if (to === undefined || to >= count || to <= i) continue;
+      // A pinned stretch is told by no wider memory.
+      if (pins !== undefined && Array.from({ length: to - i + 1 }, (_, k) => i + k).some((place) => pins.held.has(place))) continue;
       if (to > reach || (to === reach && wide !== null && merge.level > wide.level)) {
         wide = merge;
         reach = to;
@@ -112,8 +160,11 @@ export function entries(kept: Episode[], count: number, { memories, quarantined,
     }
     const memory = memories.get(episode.first);
     const given = quarantined.get(episode.first);
-    const messages = memory !== undefined ? (memory.outcome === 'quiet' ? [] : recalled(memory)) : given === undefined ? [] : unremembered(given);
-    out.push({ from: i, to: i, level: 1, messages });
+    const messages = memory !== undefined ? (memory.outcome === 'quiet' ? [] : recalled(memory, unmet))
+      : given !== undefined ? unremembered(given)
+      // Remembered once, and the memory withdrawn by the owner: it is being formed again.
+      : [{ role: 'user' as const, content: `${MEMORY_MARK} ${when(episode.start)} to ${when(episode.end)}: your memory of this stretch was withdrawn and is being formed again. It is in your journal as it happened.` }];
+    out.push({ from: i, to: i, level: unmet === '' ? 1 : 0, messages });
     i += 1;
   }
   return out;
@@ -174,7 +225,9 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   }
 
   const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
-  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all).flatMap((entry) => entry.messages), cap)), ...knowing];
+  const starts = (place: number): number => (place === 0 ? 0 : ends[place - 1]!);
+  const pins: Pins = { held: pinnedAmong(events, kept), verbatim: (place) => messages.slice(starts(place), ends[place]!), room: Math.floor(room * PIN_SHARE) };
+  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all, pins), cap)), ...knowing];
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
@@ -193,21 +246,28 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
 }
 
 /**
- * The logbook within `cap` characters: the oldest memories leave, in steps, and a line says
- * how many. They are not lost; brain/memory.ts only stops showing them.
+ * The logbook within `cap` characters: the oldest memories leave, in steps, and a line says how
+ * many. They are not lost; brain/memory.ts only stops showing them. A stretch the owner pinned
+ * never leaves this way: it has a room of its own.
  */
-function trimmed(pairs: ChatMessage[], cap: number): ChatMessage[] {
-  const total = pairs.reduce((n, m) => n + sizeOf(m), 0);
-  if (total <= cap) return pairs;
-  const step = Math.max(1, Math.floor(cap * STEP));
-  const toDrop = Math.ceil((total - cap) / step) * step;
-  let dropped = 0;
-  let start = 0;
-  let memoriesGone = 0;
-  while (start < pairs.length && (dropped < toDrop || pairs[start]!.role !== 'user')) {
-    if (pairs[start]!.role === 'user') memoriesGone += 1;
-    dropped += sizeOf(pairs[start]!);
-    start += 1;
+function trimmed(shown: Entry[], cap: number): ChatMessage[] {
+  const sizeOfEntry = (entry: Entry): number => entry.messages.reduce((n, m) => n + sizeOf(m), 0);
+  const told = shown.filter((entry) => entry.level !== 0 || entry.messages.length === 1);
+  const total = told.reduce((n, entry) => n + sizeOfEntry(entry), 0);
+  const leave = new Set<Entry>();
+  if (total > cap) {
+    const step = Math.max(1, Math.floor(cap * STEP));
+    const toDrop = Math.ceil((total - cap) / step) * step;
+    let dropped = 0;
+    for (const entry of told) {
+      if (dropped >= toDrop) break;
+      dropped += sizeOfEntry(entry);
+      leave.add(entry);
+    }
   }
-  return [{ role: 'user', content: `${MEMORY_MARK} ${memoriesGone} earlier memories are not shown here. They are in your journal.` }, ...pairs.slice(start)];
+  const gone = [...leave].filter((entry) => entry.messages.length > 0).length;
+  return [
+    ...(gone === 0 ? [] : [{ role: 'user' as const, content: `${MEMORY_MARK} ${gone} earlier memories are not shown here. They are in your journal.` }]),
+    ...shown.filter((entry) => !leave.has(entry)).flatMap((entry) => entry.messages),
+  ];
 }
