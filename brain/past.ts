@@ -59,11 +59,47 @@ function reader(journal: string): () => Line[] {
   };
 }
 
-function finder(index: Index, read: (off: number) => JournalEvent | null): Past['find'] {
-  return (question, options) => recall(index, question, options).flatMap((hit) => {
-    const event = read(hit.doc);
-    return event === null ? [] : [{ ...hit, event }];
-  });
+/** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
+const LENDERS = 3;
+// Measured on the first life that wrote its own questions (15 of them, each put in other words than its answer): with nothing lent, the
+// answering event was among the first five finds for 3; with 0.3 for 6; with 0.6 to 1 for 7; past 1, questions that name the answer's own
+// words began to lose it. The exam is how this number is to be changed (brain/exam.ts).
+export const LENT = 0.8;
+/** How many finds are looked through for events that a memory lends weight to: they may stand far down the list by their own words. */
+const LOOKED = 80;
+
+/**
+ * Finding in two steps. A question put in other words than the answer shares few words with the
+ * message that answers it, but many with the memory of that stretch, which the agent wrote in the
+ * words it thinks in. So the memories are found first, and the best of them lend part of their
+ * score to every find that lies in their stretch: the answer rises because its episode was
+ * recognised, not because its own words matched. `offsetsOf` says where the lines of events lie.
+ */
+function finder(index: Index, read: (off: number) => JournalEvent | null, offsetsOf: (ids: string[]) => Map<string, number>): Past['find'] {
+  return (question, options) => {
+    const limit = options?.limit ?? 10;
+    const withEvent = (hits: Hit[]): Found[] => hits.flatMap((hit) => {
+      const event = read(hit.doc);
+      return event === null ? [] : [{ ...hit, event }];
+    });
+    const memories = withEvent(recall(index, question, { kinds: ['memory'], limit: LENDERS }));
+    const stretches = memories.flatMap((m) => {
+      const d = (m.event as { data?: { from?: unknown; to?: unknown } }).data;
+      return typeof d?.from === 'string' && typeof d?.to === 'string' ? [{ from: d.from, to: d.to, score: m.score }] : [];
+    });
+    if (stretches.length === 0 || LENT <= 0) return withEvent(recall(index, question, options));
+    const at = offsetsOf(stretches.flatMap((st) => [st.from, st.to]));
+    const spans = stretches.flatMap((st) => {
+      const [from, to] = [at.get(st.from), at.get(st.to)];
+      return from === undefined || to === undefined ? [] : [{ from, to, score: st.score }];
+    });
+    const lifted = recall(index, question, { ...options, limit: Math.max(LOOKED, limit) }).map((hit) => {
+      // A memory is not lifted by a memory: only what happened is.
+      const lent = hit.kind === 'memory' ? 0 : Math.max(0, ...spans.filter((sp) => hit.doc >= sp.from && hit.doc <= sp.to).map((sp) => sp.score));
+      return lent === 0 ? hit : { ...hit, score: hit.score + LENT * lent };
+    });
+    return withEvent(lifted.sort((a, b) => b.score - a.score || b.doc - a.doc).slice(0, limit));
+  };
 }
 
 /** The past of `journal`, asked of the journal itself. */
@@ -71,7 +107,10 @@ export function journalPast(journal: string): Past {
   const lines = reader(journal);
   return {
     by: 'journal',
-    find: finder(scanIndex(lines), (off) => readLine(journal, off)),
+    find: finder(scanIndex(lines), (off) => readLine(journal, off), (ids) => {
+      const wanted = new Set(ids);
+      return new Map(lines().filter((line) => wanted.has(line.event.id)).map((line) => [line.event.id, line.off]));
+    }),
     asked: () => lines().findLast((line) => line.event.type === 'stimulus')?.off ?? null,
     around(id, before, after) {
       const all = lines();
@@ -87,7 +126,7 @@ export function journalPast(journal: string): Past {
 }
 
 /** The past of `journal`, asked of a store in the database `ray`. `owned` says the runtime was opened for this and is closed with it. */
-function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Past {
+export function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Past {
   const offsets = (source: string): number[] => [...(store.ask(source).columns.off as BigInt64Array | undefined ?? [])].map(Number);
   /**
    * The stretches of the journal the owner took back, as bytes from and to: from the line of the
@@ -105,6 +144,13 @@ function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Pas
     }
     return ranges;
   };
+  /** Where the lines of the events with these ids begin. The ids go over as a column: they come out of notes, which are the body's own, and are still never part of a statement. */
+  const offsetsOf = (ids: string[]): Map<string, number> => {
+    if (ids.length === 0) return new Map();
+    ray.bind('mem_wanted', { wanted: { type: 'str', data: ids } });
+    const t = store.ask("(select {from: events where: (in id (at mem_wanted 'wanted)) id: id off: off})");
+    return new Map((t.columns.id as string[] | undefined ?? []).map((id, i) => [id, Number((t.columns.off as BigInt64Array)[i])]));
+  };
   /** Whether the event at `off` still stands: records and notes always do, what was said in a stretch taken back does not. */
   const stands = (ranges: [number, number][], off: number, e: JournalEvent): boolean =>
     !wasSaid(e) || !ranges.some(([from, to]) => off >= from && off < to);
@@ -113,7 +159,7 @@ function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Pas
     find(question, options) {
       store.sync();
       const ranges = aside();
-      const found = finder(store.index, store.read)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
+      const found = finder(store.index, store.read, offsetsOf)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
       return ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, options?.limit ?? 10);
     },
     asked() {
@@ -190,7 +236,9 @@ export function shown(e: JournalEvent, chars: number): string {
   const document = documentOf(e);
   const calls = e.type === 'assistant' ? (e as { toolCalls?: { name?: unknown }[] }).toolCalls ?? [] : [];
   const called = calls.length > 0 ? ` (and called ${calls.map((call) => String(call.name)).join(', ')})` : '';
-  const head = `[${when(e.ts)}] ${document?.kind === 'memory' ? 'your memory' : speaker(e)}${called} (event ${e.id})`;
+  // A memory is of a stretch: the id given is where that stretch begins, which is what `open` should be asked for, not the note the memory lies in.
+  const about = e.type === 'note' ? (e.data as { from?: unknown } | null)?.from : undefined;
+  const head = `[${when(e.ts)}] ${document?.kind === 'memory' ? 'your memory' : speaker(e)}${called} (${typeof about === 'string' ? `of the stretch that begins at event ${about}` : `event ${e.id}`})`;
   return document === null ? head : `${head}:\n${clip(document.text, chars)}`;
 }
 

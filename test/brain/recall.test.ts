@@ -82,19 +82,11 @@ const ways: [string, (journal: string) => Past][] = [['the journal read through'
 // One runtime a process: the store's way shares the one the other tests use, through openPast's own opening when none is open yet.
 if (library !== null) ways.push(['the store', (journal) => openPastShared(journal)]);
 function openPastShared(journal: string): Past {
-  // brain/past.ts opens a runtime of its own; the tests have one already, so the store is opened over that.
+  // brain/past.ts opens a runtime of its own; the tests have one already, so the store is opened over that and asked through the same code.
   const { ray } = require('./rayforce') as typeof import('./rayforce');
   const { openStore } = require('../../brain/store') as typeof import('../../brain/store');
-  const store = openStore(ray(), journal);
-  const real = journalPast(journal);
-  return {
-    ...real, by: 'store',
-    asked: () => real.asked(),
-    find(question, options) {
-      store.sync();
-      return recall(store.index, question, options).flatMap((hit) => { const event = store.read(hit.doc); return event === null ? [] : [{ ...hit, event }]; });
-    },
-  };
+  const { storePast } = require('../../brain/past') as typeof import('../../brain/past');
+  return storePast(journal, ray(), openStore(ray(), journal), false);
 }
 
 for (const [name, open] of ways) {
@@ -103,8 +95,9 @@ for (const [name, open] of ways) {
     const past = open(journal);
     // Both hold "deploy" and "staging" once; the owner's sentence is the one that counts for more.
     expect(past.find('deploy staging', { kinds: ['owner', 'reply'] }).map((f) => [f.event.id, f.kind])).toEqual([[deploy[0]!.id, 'owner'], [deploy[4]!.id, 'reply']]);
+    // The memory of the stretch is found, and lends its weight to what was said in it: both messages of the stretch come before the memory of them.
     const found = past.find('почта');
-    expect(found[0]!.event.id).toBe(memory.id);
+    expect(found.at(-1)!.event.id).toBe(memory.id);
     expect(found.map((f) => f.event.id).sort()).toEqual([mail[0]!.id, mail[1]!.id, memory.id].sort());
   });
 
@@ -131,6 +124,26 @@ test('the database and the journal read through give the same answers in the sam
   for (const question of ['почта', 'quota staging billing', 'deploy', 'адрес для отчётов', 'what next']) {
     expect(b.find(question).map((f) => [f.event.id, f.score.toFixed(9)])).toEqual(a.find(question).map((f) => [f.event.id, f.score.toFixed(9)]));
   }
+});
+
+test('a question put in other words than its answer finds it through the memory of its stretch', () => {
+  clock = Date.parse('2026-11-11T08:00:00.000Z');
+  // Twenty stretches about servers; in one the owner names the machine that holds the backups, in words the question will not use.
+  const stretches = Array.from({ length: 20 }, (_, i) => [
+    said(i === 7 ? 'put the backups on helsinki-3, that box has the big disks' : `the server number ${i} needs a restart tonight, backups are fine`, LONG),
+    replied(i === 7 ? 'Done, it is on helsinki-3.' : `restarted server ${i}`),
+  ]);
+  const memories = stretches.map((st, i) => ev({ type: 'note', kind: EPISODE_KIND, data: {
+    from: st[0]!.id, to: st[1]!.id, start: st[0]!.ts, end: st[1]!.ts, outcome: 'done',
+    title: i === 7 ? 'Where the backups live' : `Restart of server ${i}`,
+    text: i === 7 ? 'My owner chose the machine that stores the backups: helsinki-3, because of its large disks.' : `I restarted server ${i} as asked.`,
+  } }));
+  const past = journalPast(journalOf([...stretches.flat(), ...memories, said('ok', LONG)]));
+  const found = past.find('which machine stores our backups', { limit: 5 });
+  // By its own words the owner's sentence is one of twenty that say "backups"; it comes right after the memory of its stretch, because that stretch was recognised.
+  expect(found.slice(0, 2).map((f) => f.event.id)).toEqual([memories[7]!.id, stretches[7]![0]!.id]);
+  // Narrowed to what was said, the memory is not shown and still lends its weight.
+  expect(past.find('which machine stores our backups', { kinds: ['owner'], limit: 1 })[0]!.event.id).toBe(stretches[7]![0]!.id);
 });
 
 test('an index over lines reads them again only when there are more', () => {
@@ -167,7 +180,8 @@ test('an event is shown with its time, who it was, its id, and its text cut to s
   expect(shown(mail[0]!, 100)).toBe(`[${when(mail[0]!.ts)}] your owner (event ${mail[0]!.id}):\nНастрой, пожалуйста, почту. Адрес для отчётов: reports@example.org`);
   expect(shown(deploy[1]!, 100)).toBe(`[${when(deploy[1]!.ts)}] you (and called bash) (event ${deploy[1]!.id})`);
   expect(shown(deploy[3]!, 100)).toStartWith(`[${when(deploy[3]!.ts)}] the tool failed (event `);
-  expect(shown(memory, 100)).toStartWith(`[${when(memory.ts)}] your memory (event `);
+  // A memory points at the stretch it is of, which is what `open` is to be asked for.
+  expect(shown(memory, 100)).toStartWith(`[${when(memory.ts)}] your memory (of the stretch that begins at event ${mail[0]!.id}):`);
   expect(shown(said('x'.repeat(5000)), 200).length).toBeLessThan(400);
 });
 
