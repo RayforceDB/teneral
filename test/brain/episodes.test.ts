@@ -106,6 +106,16 @@ test('events nobody is shown do not start an episode and count nothing', () => {
   expect(eventChars(note)).toBe(0);
 });
 
+test('records nobody is shown, lying between two episodes, are no episode of their own: they go with the one that follows', () => {
+  const a = [said('a'), replied('b')];
+  const notes = [ev({ type: 'note', kind: 'x.v1', data: 1 }, LONG), ev({ type: 'note', kind: 'x.v1', data: 2 })];
+  const b = [said('c', LONG), replied('d')];
+  expect(spans([...a, ...notes, ...b], [{ from: a[0]!.id, to: a[1]!.id }])).toEqual([
+    [a[0]!.id, a[1]!.id, 'kept', true],
+    [notes[0]!.id, b[1]!.id, 'start', false],
+  ]);
+});
+
 test('a span that was remembered stays one episode, and the rules cut only what follows it', () => {
   // By the rules this would be three episodes; the first two were remembered as one.
   const events = [said('a'), replied('b'), said('c', LONG), replied('d'), said('e', LONG), replied('f')];

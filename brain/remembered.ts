@@ -11,6 +11,13 @@ export const EPISODE_KIND = 'memory.episode.v1';
 /** A stretch no memory could be formed of. It is shown as it happened for as long as it fits, then as a line saying so. */
 export const QUARANTINE_KIND = 'memory.quarantine.v1';
 
+/**
+ * One memory in place of several: of a stretch of several episodes, formed from the memories of
+ * its parts when the logbook has outgrown its room (brain/sleep.ts). The memories it stands for
+ * stay in the journal and are still found by `recall`; a request shows the wider one instead.
+ */
+export const MERGE_KIND = 'memory.merge.v1';
+
 /** How an episode ended. `quiet`: nothing happened in it, and no model was asked. */
 export const OUTCOMES = ['done', 'failed', 'dropped', 'open', 'quiet'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
@@ -30,6 +37,17 @@ export interface Memory extends MemoryData {
   at: string;
 }
 
+export interface MergeData extends MemoryData {
+  /** 2 for a memory of episodes, 3 for a memory of such memories, and so on. */
+  level: number;
+  /** True when no model wrote it: it only lists what its parts were called. */
+  mechanical?: boolean;
+}
+export interface Merge extends MergeData {
+  id: string;
+  at: string;
+}
+
 export interface QuarantineData extends Span {
   start: string;
   end: string;
@@ -43,6 +61,8 @@ export interface Remembered {
   quarantined: Map<string, QuarantineData>;
   /** Every stretch that has a memory or was given up on, in the order they were written. */
   spans: Span[];
+  /** The memories that stand for several episodes each. */
+  merges: Merge[];
 }
 
 const text = (value: unknown): value is string => typeof value === 'string' && value !== '';
@@ -63,11 +83,18 @@ export function remembered(events: JournalEvent[]): Remembered {
   const quarantined = new Map<string, QuarantineData>();
   const order: string[] = [];
   const seen = new Map<string, Span>();
+  const merges: Merge[] = [];
   for (const e of events) {
-    if (e.type !== 'note' || (e.kind !== EPISODE_KIND && e.kind !== QUARANTINE_KIND)) continue;
+    if (e.type !== 'note' || (e.kind !== EPISODE_KIND && e.kind !== QUARANTINE_KIND && e.kind !== MERGE_KIND)) continue;
     const at = span(e.data);
     if (at === null) continue;
     const d = e.data as Record<string, unknown>;
+    if (e.kind === MERGE_KIND) {
+      if (text(d.title) && text(d.text) && OUTCOMES.includes(d.outcome as Outcome) && typeof d.level === 'number' && d.level >= 2) {
+        merges.push({ ...at, title: d.title, text: d.text, outcome: d.outcome as Outcome, level: d.level, ...(d.mechanical === true ? { mechanical: true } : {}), id: e.id, at: e.ts });
+      }
+      continue;
+    }
     if (e.kind === EPISODE_KIND) {
       if (!text(d.title) || !text(d.text) || !OUTCOMES.includes(d.outcome as Outcome)) continue;
       memories.set(at.from, { ...at, title: d.title, text: d.text, outcome: d.outcome as Outcome, id: e.id, at: e.ts });
@@ -79,5 +106,5 @@ export function remembered(events: JournalEvent[]): Remembered {
     if (!seen.has(at.from)) order.push(at.from);
     seen.set(at.from, { from: at.from, to: at.to });
   }
-  return { memories, quarantined, spans: order.map((from) => seen.get(from)!) };
+  return { memories, quarantined, spans: order.map((from) => seen.get(from)!), merges };
 }

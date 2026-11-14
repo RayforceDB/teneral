@@ -1,6 +1,6 @@
 import type { JournalEvent } from './journal';
 import { FACT_KIND } from './known';
-import { EPISODE_KIND } from './remembered';
+import { EPISODE_KIND, MERGE_KIND } from './remembered';
 import { asText } from './stemnote';
 
 // Recall is finding again what the journal holds: by words, with no model asked. Every event that
@@ -84,7 +84,7 @@ export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null
   else if (e.type === 'assistant') found = { kind: 'reply', text: asText(r.text) };
   else if (e.type === 'tool.intent') found = { kind: 'did', text: asText(r.args) };
   else if (e.type === 'tool.result') found = { kind: 'tool', text: asText(r.output) };
-  else if (e.type === 'note' && r.kind === EPISODE_KIND && typeof r.data === 'object' && r.data !== null) {
+  else if (e.type === 'note' && (r.kind === EPISODE_KIND || r.kind === MERGE_KIND) && typeof r.data === 'object' && r.data !== null) {
     const d = r.data as { title?: unknown; text?: unknown; outcome?: unknown };
     // A stretch in which nothing happened is not worth finding.
     if (d.outcome !== 'quiet') found = { kind: 'memory', text: `${asText(d.title)}\n${asText(d.text)}` };

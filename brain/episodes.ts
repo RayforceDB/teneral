@@ -109,9 +109,13 @@ export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
   let owed = false;
   // Calls of the latest reply that have no result yet. A new reply means the round before it is over, answered or not.
   let pending = 0;
+  /** Whether the episode being read has anything in it that the agent was shown. */
+  let begun = false;
   for (let i = next; i < events.length; i++) {
     const e = events[i]!;
-    if (i > from) {
+    // An episode begins with something said to the agent. Records nobody is shown, such as the notes of its own
+    // memory, may lie before that; they are no episode of their own and go with the one that follows.
+    if (i > from && begun) {
       const quiet = asks(e) && !owed;
       const betweenRounds = e.type === 'assistant' || (asks(e) && pending <= 0);
       const reason: Boundary | null = !quiet ? (betweenRounds && chars >= EPISODE_HARD_CHARS ? 'size' : null)
@@ -124,8 +128,10 @@ export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
         from = i;
         why = reason;
         chars = 0;
+        begun = false;
       }
     }
+    if (asks(e) || e.type === 'assistant') begun = true;
     chars += eventChars(e);
     if (e.type === 'assistant') {
       const calls = (e as { toolCalls?: unknown }).toolCalls;

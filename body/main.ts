@@ -145,7 +145,8 @@ async function rest(): Promise<boolean> {
       system: () => composeSystem(prompt, soulDir, journal),
       signal: woken.signal,
     });
-    if (slept === 'remembered' || slept === 'quarantined') console.error(`[memory] ${slept === 'remembered' ? 'formed a memory' : 'no memory could be formed of one stretch; it stays in the journal as it happened'}`);
+    const said = { remembered: 'formed a memory', merged: 'made several memories into one', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
+    if (slept === 'remembered' || slept === 'merged' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
     return slept !== 'nothing';
   } catch (err) {
     if (woken.signal.aborted) return true;

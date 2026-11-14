@@ -1,9 +1,9 @@
 import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { IMAGE_CHARS } from '../body/images';
-import { episodes } from './episodes';
+import { episodes, type Episode } from './episodes';
 import { known, knownText } from './known';
-import { remembered, type Memory, type QuarantineData } from './remembered';
+import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
 // as it happened, the memory the agent formed of it, in order, before the part that is still
@@ -54,11 +54,56 @@ function when(ts: string): string {
 }
 
 /** A memory as two messages: the question is the memory system's, the answer is the agent's own, as it wrote it. */
-function recalled(m: Memory): ChatMessage[] {
+function recalled(m: Memory | Merge): ChatMessage[] {
   return [
     { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?` },
     { role: 'assistant', content: `${m.title}\n\n${m.text}` },
   ];
+}
+
+/** One thing in the logbook: the memory of one episode, or one memory that stands for several. `from` and `to` are places among the remembered episodes. */
+export interface Entry {
+  from: number;
+  to: number;
+  /** 1 for an episode, more for a memory of several. */
+  level: number;
+  messages: ChatMessage[];
+}
+
+/**
+ * The first `count` remembered episodes as the logbook shows them: each as its own memory, or
+ * several as the one memory that stands for them. Where memories of several nest, the widest is
+ * shown. A wider memory is used only when everything it stands for is among those `count`: an
+ * episode still shown as it happened is not also told in a summary.
+ */
+export function entries(kept: Episode[], count: number, { memories, quarantined, merges }: Remembered): Entry[] {
+  const endsAt = new Map(kept.map((e, i) => [e.last, i]));
+  const out: Entry[] = [];
+  for (let i = 0; i < count;) {
+    const episode = kept[i]!;
+    let wide: Merge | null = null;
+    let reach = i;
+    for (const merge of merges) {
+      if (merge.from !== episode.first) continue;
+      const to = endsAt.get(merge.to);
+      if (to === undefined || to >= count || to <= i) continue;
+      if (to > reach || (to === reach && wide !== null && merge.level > wide.level)) {
+        wide = merge;
+        reach = to;
+      }
+    }
+    if (wide !== null) {
+      out.push({ from: i, to: reach, level: wide.level, messages: recalled(wide) });
+      i = reach + 1;
+      continue;
+    }
+    const memory = memories.get(episode.first);
+    const given = quarantined.get(episode.first);
+    const messages = memory !== undefined ? (memory.outcome === 'quiet' ? [] : recalled(memory)) : given === undefined ? [] : unremembered(given);
+    out.push({ from: i, to: i, level: 1, messages });
+    i += 1;
+  }
+  return out;
 }
 
 /** A stretch that has no memory and no longer fits. It is not passed over in silence: the agent can open it. */
@@ -97,9 +142,9 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   const held = knownText(known(events), (events.at(-1)?.ts ?? '').slice(0, 10), MEMORY_MARK);
   const knowing: ChatMessage[] = held === null ? [] : [{ role: 'user', content: held }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
-  const { memories, quarantined, spans } = remembered(events);
-  if (spans.length === 0) return nothingSwapped;
-  const kept = episodes(events, spans).filter((e) => e.why === 'kept');
+  const all = remembered(events);
+  if (all.spans.length === 0) return nothingSwapped;
+  const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
   if (kept.length === 0) return nothingSwapped;
 
   // Where each remembered episode ends in `messages`, and how much everything before that point counts.
@@ -115,14 +160,8 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
     before.push(sum);
   }
 
-  const pairs = kept.map((e) => {
-    const memory = memories.get(e.first);
-    if (memory !== undefined) return memory.outcome === 'quiet' ? [] : recalled(memory);
-    const given = quarantined.get(e.first);
-    return given === undefined ? [] : unremembered(given);
-  });
   const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
-  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(pairs.slice(0, count).flat(), cap)), ...knowing];
+  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all).flatMap((entry) => entry.messages), cap)), ...knowing];
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.

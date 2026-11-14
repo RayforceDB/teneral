@@ -1,9 +1,9 @@
 import { appendEvent, readEvents, type JournalEvent, type Usage } from './journal';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
-import { MEMORY_MARK } from './logbook';
+import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Source } from './known';
-import { EPISODE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, type MemoryData, type Outcome, type QuarantineData } from './remembered';
+import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, type MemoryData, type MergeData, type Outcome, type QuarantineData } from './remembered';
 import type { ChatMessage, Provider, ToolSpec } from './provider';
 import { saysTooLong } from './retry';
 import { asText } from './stemnote';
@@ -24,6 +24,12 @@ import { asText } from './stemnote';
 //   formed of, and it stays in the journal as it happened.
 //   An episode in which nothing happened is recorded as quiet without asking a model, which,
 //   asked to remember nothing, might invent something.
+//
+// When every episode that is over has its memory and the memories themselves have outgrown the
+// room a request has for them, the oldest few are made into one: a memory of the whole stretch,
+// formed from theirs. That is how a long life stays in view from its beginning, more and more
+// briefly the further back it lies, instead of losing its first months. The memories that were
+// made into one stay in the journal, and `recall` finds them.
 //
 // With the memory the agent may set down what it learned that will hold beyond the episode, and
 // what it took on to do later (brain/known.ts). Those are asked for sparingly: a fact is worth
@@ -55,12 +61,21 @@ export interface SleepDeps {
   system: () => string;
   /** Characters for one request, as for a turn. */
   budgetChars?: number;
+  /** Characters the logbook may take in a request, as brain/logbook.ts takes it; past it, memories are made into wider ones. */
+  logbookChars?: number;
   /** Aborts when something arrives: the agent wakes, and the memory is formed another time. */
   signal?: AbortSignal;
 }
 
-/** What one call did. `nothing`: no episode is waiting. `woken`: something arrived first, and nothing was written. */
-export type Slept = 'nothing' | 'remembered' | 'quiet' | 'quarantined' | 'woken';
+/** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `woken`: something arrived first, and nothing was written. */
+export type Slept = 'nothing' | 'remembered' | 'quiet' | 'quarantined' | 'merged' | 'woken';
+
+/** How many memories of one kind are made into one of the next. */
+export const MERGE_COUNT = 6;
+/** A wider memory is asked to be this share of what it stands for, within the two bounds below. */
+const MERGE_SHARE = 1 / 3;
+const MERGE_MIN_CHARS = 800;
+const MERGE_MAX_CHARS = 4000;
 
 /** How many characters the memory of an episode of this size is asked to be. */
 export function targetChars(episodeChars: number): number {
@@ -199,7 +214,7 @@ const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => 
 export async function sleep(d: SleepDeps): Promise<Slept> {
   const events = readEvents(d.journal);
   const episode = waiting(events)[0];
-  if (episode === undefined) return 'nothing';
+  if (episode === undefined) return merge(d, events);
   const lived = events.slice(episode.from, episode.to);
   if (thin(lived)) {
     appendEvent(d.journal, d.gen, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet' } satisfies MemoryData });
@@ -268,4 +283,93 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   }
   appendEvent(d.journal, d.gen, { type: 'note', kind: QUARANTINE_KIND, data: { ...span(episode), reason: problem } satisfies QuarantineData });
   return 'quarantined';
+}
+
+/** The oldest run of MERGE_COUNT entries of one level, when the logbook is over its size; null when nothing is to be made into one. */
+function crowded(events: JournalEvent[], cap: number): { run: Entry[]; from: { first: string; start: string }; to: { last: string; end: string } } | null {
+  const all = remembered(events);
+  const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
+  const shown = entries(kept, kept.length, all);
+  const size = shown.reduce((sum, entry) => sum + entry.messages.reduce((n, m) => n + sizeOf(m), 0), 0);
+  if (size <= cap) return null;
+  for (let i = 0; i + MERGE_COUNT <= shown.length; i++) {
+    const run = shown.slice(i, i + MERGE_COUNT);
+    if (run.every((entry) => entry.level === run[0]!.level)) {
+      const [from, to] = [kept[run[0]!.from]!, kept[run.at(-1)!.to]!];
+      // Never the same stretch twice: were a wider memory written and then not shown, asking again would never end.
+      if (all.merges.some((m) => m.from === from.first && m.to === to.last)) return null;
+      return { run, from, to };
+    }
+  }
+  return null;
+}
+
+/** What the agent is asked when several memories are to become one. */
+function mergeQuestion(parts: number, start: string, end: string, chars: number): string {
+  return [
+    `${MEMORY_MARK} Above stand ${parts} memories of yours, of the stretch from ${when(start)} to ${when(end)}. Together they take more room than can be kept in front of you, `
+    + 'so form one memory of that whole stretch to stand in their place. Nothing is lost by it: each of them stays in your journal, and `recall` finds it.',
+    'Write in the first person, as yourself, in the language you were speaking. Keep the line through it: what it was about, what was decided and why, what it led to, what was left open, '
+    + 'and the names, places and numbers you would need to pick the thread up again. Leave out what mattered only on the day. Say nothing the memories above do not say.',
+    'Call no tool. Reply in exactly this form and with nothing else:',
+    `Title: <one line>\nOutcome: <one of: done, failed, dropped, open>\n\n<the memory, about ${chars} characters>`,
+  ].join('\n\n');
+}
+
+/**
+ * Makes the oldest few memories into one, when the logbook has outgrown its size. An answer that
+ * is not in form is asked for once more; after that the wider memory is made without a model, as
+ * a list of what its parts were called, so that a model that will not answer cannot leave the
+ * logbook growing for ever.
+ */
+async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
+  const found = crowded(events, d.logbookChars ?? DEFAULT_LOGBOOK_CHARS);
+  if (found === null) return 'nothing';
+  const { run, from, to } = found;
+  const span = { from: from.first, to: to.last, start: from.start, end: to.end };
+  const level = run[0]!.level + 1;
+  const parts = run.filter((entry) => entry.messages.length > 0);
+  const titles = parts.map((entry) => (entry.messages.at(-1)!.content ?? '').split('\n')[0]!);
+  const listed: MergeData = {
+    ...span, level, mechanical: true, outcome: 'done',
+    title: `${parts.length} stretches, ${when(span.start)} to ${when(span.end)}`,
+    text: titles.length === 0 ? QUIET.text : titles.map((title) => `- ${title}`).join('\n'),
+  };
+  // Nothing in them to tell, or only one thing: there is nothing for a model to make one of.
+  if (parts.length < 2) {
+    appendEvent(d.journal, d.gen, { type: 'note', kind: MERGE_KIND, data: listed });
+    return 'merged';
+  }
+  const size = parts.reduce((sum, entry) => sum + entry.messages.reduce((n, m) => n + sizeOf(m), 0), 0);
+  const chars = Math.min(MERGE_MAX_CHARS, Math.max(MERGE_MIN_CHARS, Math.round(size * MERGE_SHARE)));
+  let messages: ChatMessage[] = [
+    { role: 'system', content: d.system().toWellFormed() },
+    ...parts.flatMap((entry) => entry.messages),
+    { role: 'user', content: mergeQuestion(parts.length, span.start, span.end, chars) },
+  ];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let reply;
+    try {
+      reply = await d.provider(messages, d.specs, d.signal && { signal: d.signal });
+    } catch (err) {
+      if (d.signal?.aborted) return 'woken';
+      throw err;
+    }
+    if (d.signal?.aborted) return 'woken';
+    const formed = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
+    if (!('problem' in formed)) {
+      appendEvent(d.journal, d.gen, {
+        type: 'note', kind: MERGE_KIND,
+        data: { ...span, level, title: formed.title, text: formed.text, outcome: formed.outcome, ...(reply.usage ? { usage: reply.usage } : {}) } satisfies MergeData & { usage?: Usage },
+      });
+      return 'merged';
+    }
+    messages = [
+      ...messages,
+      { role: 'assistant', content: reply.text.trim() === '' ? '(no text)' : reply.text },
+      { role: 'user', content: `${MEMORY_MARK} That cannot be kept as a memory: ${formed.problem}. Reply again in exactly the form asked for, and call no tool.` },
+    ];
+  }
+  appendEvent(d.journal, d.gen, { type: 'note', kind: MERGE_KIND, data: listed });
+  return 'merged';
 }
