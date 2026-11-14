@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import type { JournalEvent } from './journal';
 import { eventChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
+import { documentOf, postings, type Index, type Kind, type Match } from './recall';
 
-// The store is the journal laid out for asking questions of: one row an event, in a table of the
-// database that is partitioned by day. Days that are over lie on disk and are mapped into memory
+// The store is the journal laid out for asking questions of, in two tables of the database that
+// are partitioned by day: one row an event, and one row for each term of each event that says
+// something, which is what recall looks things up in (brain/recall.ts). Days that are over lie on disk and are mapped into memory
 // when the store is opened, which takes the same short time however long the agent has lived;
 // the day that is going on is held in memory and written out now and then.
 //
@@ -28,14 +30,21 @@ export function storeDir(journal: string): string {
   return join(journal, '..', `store-v${STORE_VERSION}`);
 }
 
-/** The table's name in the directory and the name it is bound to in the database. */
-const TABLE = 'events';
-const BOUND = 'mem_events';
-/** The name rows are handed over under, for one statement, before they are inserted. */
+/** The tables: the name of each in the directory, the name it is bound to in the database, and its columns. */
+const TABLES = {
+  events: { bound: 'mem_events', columns: ['id', 'ts', 'type', 'source', 'off', 'next', 'chars', 'said'] },
+  terms: { bound: 'mem_terms', columns: ['term', 'doc', 'kind', 'w'] },
+} as const;
+type TableName = keyof typeof TABLES;
+const NAMES = Object.keys(TABLES) as TableName[];
+const BOUND = TABLES.events.bound;
+/** The names rows and a question's terms are handed over under, for one statement. */
 const BATCH = 'mem_batch';
-const COLUMNS = ['id', 'ts', 'type', 'source', 'off', 'next', 'chars'] as const;
-/** Rows handed over in one piece. A call into the database holds up everything else, so a long journal is laid out in portions. */
-const PORTION = 5000;
+const ASKED = 'mem_asked';
+/** Events handed over in one piece. A call into the database holds up everything else, and an event has a hundred terms, so a long journal is laid out in portions. */
+const PORTION = 1000;
+/** The most rows of terms one question brings back: the best of them, when a word is in nearly everything. */
+const MATCHES_MAX = 50_000;
 /** A partition's directory: a day as the database writes it. */
 const DAY_DIR = /^\d{4}\.\d{2}\.\d{2}$/;
 
@@ -104,8 +113,12 @@ export interface Store {
   /** How many events are laid out, and the byte of the journal up to which they reach. */
   count(): number;
   mark(): number;
-  /** A query over the table of events, which is bound to `events` in `source`. Only source written in this repository may be passed. */
+  /** A query over the tables, which are `events` and `terms` in `source`. Only source written in this repository may be passed. */
   ask(source: string): Table;
+  /** The terms, for brain/recall.ts to look things up in. */
+  index: Index;
+  /** The event whose line begins at byte `off` of the journal, or null when no event's line begins there. */
+  read(off: number): JournalEvent | null;
   /** Whether the store was thrown away and built again when it was opened, and why. */
   rebuilt: string | null;
 }
@@ -124,29 +137,32 @@ function quoted(path: string): string {
 export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): Store {
   const root = quoted(dir);
   const symbols = quoted(join(dir, '.sym'));
-  const partition = (day: number): string => quoted(join(dir, dayName(day), TABLE));
+  const partition = (day: number, table: TableName): string => quoted(join(dir, dayName(day), table));
   /** Whether the table is mounted: a directory with no day in it cannot be, and has none until the journal has an event. */
   let mounted = false;
   /** The byte of the journal up to which events are laid out, and the latest day that has rows. */
   let reached = 0;
   let lastDay = Number.NEGATIVE_INFINITY;
   let rows = 0;
+  /** How many of the events say something, and so have terms: the number of documents recall counts with. */
+  let documents = 0;
   const dirty = new Set<number>();
 
   const mount = (): void => {
-    ray.run(`(set ${BOUND} (.db.parted.get ${root} '${TABLE}))`);
+    for (const name of NAMES) ray.run(`(set ${TABLES[name].bound} (.db.parted.get ${root} '${name}))`);
     mounted = true;
   };
-  const empty = (): Record<string, Column> => rowsOf([]);
   /** Reads from the table itself how far it reaches. */
   const measure = (): void => {
     rows = Number(ray.query(`(count ${BOUND})`));
     if (rows === 0) {
       reached = 0;
+      documents = 0;
       return;
     }
-    const t = ray.table(`(select {from: ${BOUND} m: (max next) d: (max date)})`);
+    const t = ray.table(`(select {from: ${BOUND} m: (max next) d: (max date) s: (sum said)})`);
     reached = Number((t.columns.m as BigInt64Array)[0]);
+    documents = Number((t.columns.s as BigInt64Array)[0]);
     lastDay = (t.columns.d as Int32Array)[0]!;
   };
   const days = (): string[] => (existsSync(dir) ? readdirSync(dir).filter((name) => DAY_DIR.test(name)).sort() : []);
@@ -171,11 +187,12 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
   let rebuilt = load();
   if (rebuilt !== null) {
     // The database may still hold the files of what it mounted; it lets go of them before they are removed.
-    ray.run(`(do (set ${BOUND} null) (set ${BATCH} null) (.sys.gc) null)`);
+    ray.run(`(do ${NAMES.map((name) => `(set ${TABLES[name].bound} null)`).join(' ')} (set ${BATCH} null) (.sys.gc) null)`);
     rmSync(dir, { recursive: true, force: true });
     mounted = false;
     reached = 0;
     rows = 0;
+    documents = 0;
     lastDay = Number.NEGATIVE_INFINITY;
   }
   mkdirSync(dir, { recursive: true });
@@ -183,9 +200,12 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
   function persist(): void {
     if (!mounted || dirty.size === 0) return;
     for (const day of [...dirty].sort((a, b) => a - b)) {
-      ray.run(
-        `(.db.splayed.set ${partition(day)} (select {from: ${BOUND} where: (== date ${dayName(day)}) ${COLUMNS.map((c) => `${c}: ${c}`).join(' ')}}) ${symbols})`,
-      );
+      for (const name of NAMES) {
+        const { bound, columns } = TABLES[name];
+        ray.run(
+          `(.db.splayed.set ${partition(day, name)} (select {from: ${bound} where: (== date ${dayName(day)}) ${columns.map((c) => `${c}: ${c}`).join(' ')}}) ${symbols})`,
+        );
+      }
     }
     dirty.clear();
     // Mounted again, the days just written are read from disk like any other, and the memory they took is given back.
@@ -211,21 +231,28 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
         batch.push({ line: lines[to]!, ns: next.ns });
         to += 1;
       }
+      const made = { events: rowsOf(batch), terms: termsOf(batch) };
       if (!mounted) {
-        // The first day there is: an empty table of the right columns is written for it, and that is what is mounted.
-        ray.bind(BATCH, empty());
-        ray.run(`(.db.splayed.set ${partition(day)} ${BATCH} ${symbols})`);
+        // The first day there is: empty tables of the right columns are written for it, and they are what is mounted.
+        const none = { events: rowsOf([]), terms: termsOf([]) };
+        for (const name of NAMES) {
+          ray.bind(BATCH, none[name]);
+          ray.run(`(.db.splayed.set ${partition(day, name)} ${BATCH} ${symbols})`);
+        }
         mount();
       } else if (Number.isFinite(last) && day !== last) {
         // A day that is over is written out before the next one begins, so memory holds one day's rows and no more.
         persist();
       }
-      ray.bind(BATCH, rowsOf(batch));
-      ray.run(`(insert '${BOUND} ${dayName(day)} ${BATCH})`);
+      for (const name of NAMES) {
+        ray.bind(BATCH, made[name]);
+        ray.run(`(insert '${TABLES[name].bound} ${dayName(day)} ${BATCH})`);
+      }
       dirty.add(day);
       last = day;
       reached = batch.at(-1)!.line.next;
       rows += batch.length;
+      documents += batch.reduce((sum, b) => sum + (documentOf(b.line.event) === null ? 0 : 1), 0);
       from = to;
     }
     lastDay = last;
@@ -242,8 +269,28 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     mark: () => reached,
     ask(source) {
       if (!mounted) return { names: [], rows: 0, columns: {} };
-      return ray.table(source.replaceAll(/\bevents\b/g, BOUND));
+      return ray.table(source.replaceAll(/\b(events|terms)\b/g, (name) => TABLES[name as TableName].bound));
     },
+    index: {
+      documents: () => documents,
+      matches(asked) {
+        if (!mounted || asked.length === 0) return [];
+        // The terms go over as a column, never as part of the statement: they are words somebody typed.
+        // Its column has a name no table here has: inside a select, a quoted name of one of the table's own columns means that column.
+        ray.bind(ASKED, { asked: { type: 'sym', data: asked } });
+        const t = ray.table(
+          `(select {from: ${TABLES.terms.bound} where: (in term (at ${ASKED} 'asked)) desc: w take: ${MATCHES_MAX} term: term doc: doc kind: kind w: w})`,
+        );
+        const term = t.columns.term as string[];
+        const doc = t.columns.doc as BigInt64Array;
+        const kind = t.columns.kind as string[];
+        const w = t.columns.w as Float64Array;
+        const out = new Array<Match>(t.rows);
+        for (let i = 0; i < t.rows; i++) out[i] = { term: term[i]!, doc: Number(doc[i]), kind: kind[i] as Kind, w: w[i]! };
+        return out;
+      },
+    },
+    read: (off) => readLine(journal, off),
     rebuilt,
   };
 }
@@ -257,7 +304,55 @@ function stamp(e: JournalEvent, before: bigint): { ns: bigint; day: number } {
   }
 }
 
-/** Rows of the table for these lines, column by column. */
+/** The event whose line begins at byte `off` of `journal`: read from there to the end of that line and no further. */
+export function readLine(journal: string, off: number): JournalEvent | null {
+  if (!Number.isSafeInteger(off) || off < 0 || !existsSync(journal)) return null;
+  const fd = openSync(journal, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const parts: Buffer[] = [];
+    for (let at = off; at < size;) {
+      const chunk = Buffer.alloc(Math.min(65_536, size - at));
+      const n = readSync(fd, chunk, 0, chunk.length, at);
+      if (n === 0) break;
+      const newline = chunk.indexOf(0x0a);
+      if (newline !== -1 && newline < n) {
+        parts.push(chunk.subarray(0, newline));
+        const parsed = JSON.parse(Buffer.concat(parts).toString('utf8')) as JournalEvent;
+        return typeof parsed === 'object' && parsed !== null && typeof parsed.type === 'string' ? parsed : null;
+      }
+      parts.push(chunk.subarray(0, n));
+      at += n;
+    }
+    return null;
+  } catch {
+    // Not the beginning of a line, or not a line that holds an event.
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Rows of the table of terms for these lines: one for each term of each event that says something. The event is named by where its line begins. */
+function termsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
+  const term: string[] = [];
+  const doc: bigint[] = [];
+  const kind: string[] = [];
+  const w: number[] = [];
+  for (const { line } of batch) {
+    const document = documentOf(line.event);
+    if (document === null) continue;
+    for (const p of postings(document.text)) {
+      term.push(p.term);
+      doc.push(BigInt(line.off));
+      kind.push(document.kind);
+      w.push(p.w);
+    }
+  }
+  return { term: { type: 'sym', data: term }, doc: { type: 'i64', data: BigInt64Array.from(doc) }, kind: { type: 'sym', data: kind }, w: { type: 'f64', data: Float64Array.from(w) } };
+}
+
+/** Rows of the table of events for these lines, column by column. */
 function rowsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
   return {
     id: { type: 'str', data: batch.map((b) => b.line.event.id) },
@@ -267,5 +362,7 @@ function rowsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
     off: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(b.line.off)) },
     next: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(b.line.next)) },
     chars: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(eventChars(b.line.event))) },
+    // 1 for an event that has terms. Their sum is the number of documents, which the table can then say for itself.
+    said: { type: 'i64', data: BigInt64Array.from(batch, (b) => (documentOf(b.line.event) === null ? 0n : 1n)) },
   };
 }

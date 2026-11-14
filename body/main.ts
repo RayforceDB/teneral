@@ -7,6 +7,8 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { openPast } from '../brain/past';
+import { libraryAt } from '../brain/ray';
 import { sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { TOOLS, type ToolContext } from './tools';
@@ -47,7 +49,10 @@ const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
+// The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
+const organs = process.env.TENERAL_ORGANS ?? '';
+const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
 
 let quitting = false;
 let wake: (() => void) | null = null;
@@ -216,6 +221,13 @@ for (;;) {
   // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
   if (await rest()) continue;
   if (quitting) break;
+  // Before waiting: what the store gained is written out, so that the next start finds it on disk.
+  try {
+    past.sync();
+    past.persist();
+  } catch (err) {
+    console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // A prompt only where someone can type at it; in the background it would be noise in the log.
   if (process.stdin.isTTY) process.stdout.write('> ');
   await idle();
