@@ -118,7 +118,7 @@ const sensors: Sensor[] = [
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
-  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), new Date().toISOString().slice(0, 10))),
+  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), Date.now())),
   inbox(inboxDir),
 ];
 

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { REFLECTION_KIND, REFLECT_EVERY, offered, parseLook, reflectionDue } from '../../brain/agenda';
+import { REFLECTION_KIND, REFLECT_EVERY, REMIND_MS, offered, parseLook, reflectionDue } from '../../brain/agenda';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { ALLOWED_KIND, INTENTION_KIND, agenda, known, knownText, ownerSaid } from '../../brain/known';
@@ -18,6 +18,7 @@ function ev(body: EventBody, afterMs = 1000): JournalEvent {
   return { ...body, v: 1, id: `e${String(n).padStart(4, '0')}x`, ts: new Date(clock).toISOString(), gen: 'g1' } as JournalEvent;
 }
 const LONG = GAP_MS + 1000;
+const NOW = Date.parse('2026-11-10T12:00:00.000Z');
 /** `count` episodes that are over, each with its memory, and one going on. */
 function life(count: number): JournalEvent[] {
   const stretches = Array.from({ length: count }, (_, i) => [
@@ -101,9 +102,9 @@ test('an idea the agent is not sure it may do waits for its owner: it is put to 
   expect(held.intentions.map((i) => [i.origin, i.waits, i.put])).toEqual([['own', true, false], ['ask', true, false]]);
   // It is no part of the agenda, and a tick puts it first.
   expect(agenda(held, '2026-11-10')).toEqual([]);
-  const tick = offered(held, '2026-11-10');
-  expect(tick).toContain('First, what you have not yet put to your owner:');
-  expect(tick).toContain(`${idea.mark} [an idea, may I?] Write to the hosting company`);
+  const tick = offered(held, NOW);
+  expect(tick).toContain('First, what waits for your owner and is to be put to them now:');
+  expect(tick).toContain(`${idea.mark} [an idea, may I?] [not yet asked] Write to the hosting company`);
   expect(knownText(held, '2026-11-10', '[memory]')).toContain(`${idea.mark} [an idea, may I?] [not yet asked] Write to the hosting company`);
 
   // Once the agent has said it, with its mark, it is asked; the tick does not ask for it again.
@@ -111,7 +112,13 @@ test('an idea the agent is not sure it may do waits for its owner: it is put to 
   const events = [...readEvents(s.journal), asked];
   held = known(events);
   expect(held.intentions.find((i) => i.id === idea.id)).toMatchObject({ waits: true, put: true });
-  expect(offered(held, '2026-11-10')).not.toContain('Write to the hosting company');
+  const at = Date.parse(asked.ts);
+  expect(offered(held, at + 3_600_000)).not.toContain('Write to the hosting company');
+  expect(knownText(held, '2026-11-10', '[memory]')).toContain(`[asked ${asked.ts.slice(0, 10)}, no answer yet] Write to the hosting company`);
+  // With no answer for a day it is put to them again, and once reminded, not again for another day.
+  expect(offered(held, at + REMIND_MS)).toContain(`no answer yet: remind them] Write to the hosting company`);
+  const reminded = ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'zulip_reply', args: { text: `Reminder: ${idea.mark} is still waiting for your word.` } }] }, REMIND_MS);
+  expect(offered(known([...events, reminded]), Date.parse(reminded.ts) + 3_600_000)).not.toContain('Write to the hosting company');
 
   // The owner's yes counts only in words the owner wrote after the idea was set down.
   const yes = ev({ type: 'stimulus', source: 'terminal', text: 'Yes, write to them, but copy me in.' });
@@ -135,14 +142,14 @@ test('the agenda is taken in order: what is due, what was taken on, the agent\'s
   ];
   const held = known(events);
   expect(agenda(held, '2026-11-10').map((i) => i.text)).toEqual(['Renew the certificate', 'Send the report to the owner', 'Call the bank back', 'My own idea to tidy the logs']);
-  const tick = offered(held, '2026-11-10');
+  const tick = offered(held, NOW);
   expect(tick).toContain('[due 2026-11-03, which has come] Renew the certificate');
   expect(tick).toContain('[your own idea] My own idea to tidy the logs');
   // The question is put first, as something to ask, and is no line of the agenda itself.
   expect(tick.indexOf('old server')).toBeLessThan(tick.indexOf('Your agenda'));
   expect(tick.slice(tick.indexOf('Your agenda'))).not.toContain('old server');
   expect(tick).toContain('one thing in a tick');
-  expect(offered(known([]), '2026-11-10')).toContain('Nothing is on your agenda');
+  expect(offered(known([]), NOW)).toContain('Nothing is on your agenda');
   const shown = knownText(held, '2026-11-10', '[memory]')!;
   expect(shown).toContain('[your own idea] My own idea to tidy the logs');
   expect(shown).toContain("What waits for your owner's word");

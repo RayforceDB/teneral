@@ -1,5 +1,5 @@
 import { appendEvent, type JournalEvent, type Usage } from './journal';
-import { DONE_KIND, INTENTION_KIND, agenda, known, type IntentionData, type Known } from './known';
+import { DONE_KIND, INTENTION_KIND, agenda, known, type Intention, type IntentionData, type Known } from './known';
 import { MEMORY_MARK } from './logbook';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
 import type { ChatMessage } from './provider';
@@ -35,6 +35,13 @@ export const OWN_OPEN_MANY = 7;
 /** How many lines of the agenda a clock tick offers, and how much of each. */
 const OFFERED = 5;
 const OFFERED_CHARS = 240;
+/** What was put to the owner and not answered is put to them again after this long, and again each time as long passes. */
+export const REMIND_MS = 24 * 3_600_000;
+
+/** What waits for the owner and is to be put to them now: never asked, or asked long enough ago with no answer. */
+export function toAsk(held: Known, now: number): Intention[] {
+  return held.intentions.filter((i) => i.waits && (!i.put || now - Date.parse(i.putAt ?? '') >= REMIND_MS));
+}
 
 /** Whether it is time to look ahead: enough has been remembered since the last time. */
 export function reflectionDue(events: JournalEvent[]): boolean {
@@ -171,15 +178,18 @@ export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Sle
  * with them. One thing in a tick: time of its own is not a licence to work through a list while
  * nobody watches.
  */
-export function offered(held: Known, today: string): string {
+export function offered(held: Known, now: number): string {
+  const today = new Date(now).toISOString().slice(0, 10);
   const todo = agenda(held, today);
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
-  // What waits for the owner and was never put to them comes first: an idea nobody was asked about is as good as lost.
-  const unasked = held.intentions.filter((i) => i.waits && !i.put);
+  // What waits for the owner comes first, when it was never put to them or they have not answered for long: an idea nobody answers is as good as lost.
+  const unasked = toAsk(held, now);
   const ask = unasked.length === 0 ? '' : [
-    'First, what you have not yet put to your owner:',
-    ...unasked.slice(0, OFFERED).map((i) => `${i.mark} ${i.unsure === true ? '[an idea, may I?] ' : ''}${line(i.text)}`),
-    'Put these to them in your reply now, each with its mark and short enough to answer in a line; they read it when they come, and answer there. Asking is all they need from you: do not wait for the answer before going on.\n',
+    'First, what waits for your owner and is to be put to them now:',
+    ...unasked.slice(0, OFFERED).map((i) => `${i.mark} ${i.unsure === true ? '[an idea, may I?] ' : ''}${i.put ? `[asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet: remind them] ` : '[not yet asked] '}${line(i.text)}`),
+    'Put these to them now, each with its mark and short enough to answer in a line: in your reply here, which they read in their terminal when they come, '
+    + 'and by any other way your owner has given you to reach them, where they will see it sooner. A reminder is one line, not the case made again. '
+    + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
   if (todo.length === 0) return `${ask}Nothing ${ask === '' ? '' : 'else '}is on your agenda. If something is worth doing now all the same, do it; if not, say so in one line.`;
   const rows = todo.slice(0, OFFERED).map((i) => {

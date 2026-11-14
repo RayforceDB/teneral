@@ -327,4 +327,6 @@ test('the segment that says how the memory stands is on a ground of its state', 
   expect(ground('memory well · event 97% · episode 90%')).toBe('good');
   expect(ground('memory behind · event 22% · episode 67%')).toBe('amber');
   expect(ground('memory failing')).toBe('warn');
+  const waits = liveRows(live(140, 30, { about: ['kimi', 'idle', 'memory well', '2 for you', '~/work'] })).at(-1)!.find((span) => span.text.includes('for you'))?.style?.bg;
+  expect(waits).toBe('accent');
 });

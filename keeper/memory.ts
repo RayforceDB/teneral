@@ -57,7 +57,7 @@ function page(events: JournalEvent[], now: number): string[] {
   }
   if (asks.length > 0) {
     lines.push('', 'Waiting for your word. Answer the agent in the conversation; an idea it is not sure of is kept until you say yes or no:');
-    lines.push(...asks.map((i) => `  ${i.mark}  ${i.unsure === true ? 'idea    ' : 'question'}${i.put ? '' : '  not yet asked'}  ${brief(i.text, 90)}`));
+    lines.push(...asks.map((i) => `  ${i.mark}  ${i.unsure === true ? 'idea    ' : 'question'}${i.put ? `  asked ${(i.putAt ?? '').slice(0, 10)}` : '  not yet asked'}  ${brief(i.text, 90)}`));
   }
   return [...lines, '', ...HOW];
 }

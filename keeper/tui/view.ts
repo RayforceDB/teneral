@@ -420,6 +420,8 @@ function contextGround(text: string): Style {
 
 /** The ground of the segment that says how the memory stands: green while it is well, amber when behind, red when failing. Null for any other segment. */
 function memoryGround(text: string): Style | null {
+  // What the agent holds that waits for the owner's word is theirs to act on, so it stands out.
+  if (/^\d+ for you$/.test(text)) return { fg: 'ink', bg: 'accent', bold: true };
   const state = /^memory (well|behind|failing)\b/.exec(text);
   return state === null ? null : { fg: 'ink', bg: state[1] === 'well' ? 'good' : state[1] === 'behind' ? 'amber' : 'warn', bold: true };
 }

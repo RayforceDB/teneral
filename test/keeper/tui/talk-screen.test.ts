@@ -1503,4 +1503,10 @@ test('the status line says how the memory stands and what the last exam came to,
   // Worked out anew only now and then: the whole journal is read for it.
   s.clock.at += 31_000;
   expect(footer()).toContain('memory well · event 97% · episode 97%');
+  expect(footer()).not.toContain('for you');
+  // What the agent holds for its owner's word is counted beside it.
+  s.journal({ type: 'note', kind: 'memory.intention.v1', data: { text: 'May I write to the hosting company?', origin: 'own', unsure: true } }, s.clock.at);
+  s.journal({ type: 'note', kind: 'memory.intention.v1', data: { text: 'Which day for the report?', origin: 'ask' } }, s.clock.at);
+  s.clock.at += 31_000;
+  expect(footer()).toContain('2 for you');
 });

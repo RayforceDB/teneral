@@ -8,6 +8,8 @@ import { ownerCommand } from '../../species/offer';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
 import { health, healthBadge } from '../../brain/health';
+import { known } from '../../brain/known';
+import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
 import { Follower } from '../talk';
@@ -462,16 +464,21 @@ export class TalkScreen {
   }
 
   /** How the agent's memory stands, for the status line, and when that was last worked out: the whole journal is read for it, so not often. */
-  private memory: { read: number; badge: string } = { read: 0, badge: '' };
+  private memory: { read: number; badge: string; waits: string } = { read: 0, badge: '', waits: '' };
 
-  private memoryBadge(now: number): string {
-    if (this.memory.read !== 0 && now - this.memory.read < MEMORY_BADGE_MS && now >= this.memory.read) return this.memory.badge;
+  /** The memory's segments of the status line: how it stands, and how much the agent holds that waits for the owner's word. */
+  private memoryBadges(now: number): [string, string] {
+    if (this.memory.read !== 0 && now - this.memory.read < MEMORY_BADGE_MS && now >= this.memory.read) return [this.memory.badge, this.memory.waits];
     let badge = '';
+    let waits = '';
     try {
-      badge = healthBadge(health(readEvents(this.o.paths.journal), now));
+      const events = standing(readEvents(this.o.paths.journal));
+      badge = healthBadge(health(events, now));
+      const count = known(events).intentions.filter((i) => i.waits).length;
+      waits = count === 0 ? '' : `${count} for you`;
     } catch { /* a journal that cannot be read says nothing of the memory */ }
-    this.memory = { read: now, badge };
-    return badge;
+    this.memory = { read: now, badge, waits };
+    return [badge, waits];
   }
 
   /** The pulse file as it was last read, and when: it is looked at a few times a second at most. */
@@ -1061,7 +1068,7 @@ export class TalkScreen {
       pending: laid,
       activity,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, this.memoryBadge(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

@@ -71,8 +71,10 @@ export interface Intention extends IntentionData {
   at: string;
   /** Waits for the owner: a question for them, or an idea they have not said yes to. It is no part of the agenda. */
   waits: boolean;
-  /** Whether the agent has put it to the owner: its mark stands in something the agent said since. Only of what waits. */
+  /** Whether the agent has put it to the owner: its mark stands in something the agent said, or sent with a tool, since. Only of what waits. */
   put: boolean;
+  /** When it was last put to the owner. */
+  putAt?: string;
   /** The owner's words that allowed it, for an idea that waited and waits no longer. */
   allowed?: string;
 }
@@ -98,8 +100,16 @@ export function known(events: JournalEvent[]): Known {
   for (const e of events) {
     if (e.type === 'assistant') {
       // What waits for the owner has been put to them once the agent has said it, with its mark.
-      const said = typeof (e as { text?: unknown }).text === 'string' ? (e as { text: string }).text : '';
-      if (said !== '') for (const i of intentions.values()) if (i.waits && !i.put && said.includes(i.mark)) i.put = true;
+      // In a reply, or in what it gave a tool: an agent that can write to its owner elsewhere asks there.
+      const r = e as { text?: unknown; toolCalls?: unknown };
+      const said = `${typeof r.text === 'string' ? r.text : ''}\n${Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? JSON.stringify(r.toolCalls) : ''}`;
+      if (said.length > 1) {
+        for (const i of intentions.values()) {
+          if (!i.waits || !said.includes(i.mark)) continue;
+          i.put = true;
+          i.putAt = e.ts;
+        }
+      }
       continue;
     }
     if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) continue;
@@ -166,7 +176,7 @@ export function knownText(held: Known, today: string, mark: string): string | nu
   if (asks.length > 0) {
     lines.push(`${mark} What waits for your owner's word, each with its mark: questions for them, and ideas of your own you were not sure they allow. `
       + 'Put to them, with its mark, whatever is not yet asked. When they answer: `allowed` with their own words for an idea they say yes to, `done` for a question answered or an idea they refuse.');
-    for (const i of asks) lines.push(`${i.mark}${i.unsure === true ? ' [an idea, may I?]' : ''}${i.put ? '' : ' [not yet asked]'} ${i.text}`);
+    for (const i of asks) lines.push(`${i.mark}${i.unsure === true ? ' [an idea, may I?]' : ''}${i.put ? ` [asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet]` : ' [not yet asked]'} ${i.text}`);
   }
   if (held.facts.length > 0) {
     const rows = held.facts.map((f) => `${f.mark} [${f.source}] ${f.text}`);
