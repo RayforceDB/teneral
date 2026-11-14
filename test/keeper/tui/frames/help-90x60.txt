@@ -105,7 +105,9 @@
   same line says what the model itself is doing, as the agent reports it: waiting for its
   first word and for how long, reasoning or writing, with the last words that arrived,
   and how long nothing new has come when that is long. A line that keeps changing is
-  thought; a body from before this says nothing there.
+  thought; a body from before this says nothing there. While nothing is asked of it, the
+  agent may be remembering: forming a memory of an episode that is over, which the same
+  line then says.
 
 ╭───────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                     │

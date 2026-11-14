@@ -44,6 +44,8 @@ const ESCAPE_MS = 40;
 const INTERRUPT_MS = 5000;
 /** How long each tip stays in the footer. */
 const TIP_MS = 20_000;
+/** A pulse older than this, while no turn is owed, was left behind by a body that is gone. */
+const STALE_PULSE_MS = 120_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
 const PENDING_SHOWN = 12;
 
@@ -66,7 +68,7 @@ const HELP = [
   '',
   'A line you send stands over the input box, faint, until the agent has read it. While the agent is in the middle of a step this client keeps the line and sends it when the step ends: the footer says how many are queued, and Up in an empty box takes the last one back into the box, to change it, or to drop it by clearing the box. Leaving sends what is queued. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "sent, not read yet": the agent has it and reads it with its next step. Once read, the line moves up into the conversation and stands there on a ground of its own.',
   '',
-  'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the stem is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since. While it is thinking, the same line says what the model itself is doing, as the agent reports it: waiting for its first word and for how long, reasoning or writing, with the last words that arrived, and how long nothing new has come when that is long. A line that keeps changing is thought; a body from before this says nothing there.',
+  'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the stem is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since. While it is thinking, the same line says what the model itself is doing, as the agent reports it: waiting for its first word and for how long, reasoning or writing, with the last words that arrived, and how long nothing new has come when that is long. A line that keeps changing is thought; a body from before this says nothing there. While nothing is asked of it, the agent may be remembering: forming a memory of an episode that is over, which the same line then says.',
 ];
 
 /**
@@ -459,12 +461,13 @@ export class TalkScreen {
   private pulse: { read: number; words: string } = { read: 0, words: '' };
 
   /** What the brain is doing with the model right now, in words; empty when it says nothing (brain/pulse.ts). */
-  private beat(now: number): string {
+  private beat(now: number, fresh = false): string {
     if (now - this.pulse.read < 300 && now >= this.pulse.read) return this.pulse.words;
     let words = '';
     try {
       const b = beatOf(readFileSync(this.o.paths.pulse, 'utf8'));
-      if (b !== null) words = clean(beatWords(b, now, this.g.ellipsis));
+      // A pulse left behind by a body that died is no sign of anything going on now.
+      if (b !== null && !(fresh && now - b.at > STALE_PULSE_MS)) words = clean(beatWords(b, now, this.g.ellipsis));
     } catch { /* no request is under way, or this body has no pulse */ }
     this.pulse = { read: now, words };
     return words;
@@ -963,9 +966,11 @@ export class TalkScreen {
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
     // What the brain says of the request under way, where it says anything: thought is told apart from a hang by this.
-    const beat = word === 'thinking' || word === 'waking' ? this.beat(now) : '';
+    // A request to the model while no turn is owed is the agent forming a memory (brain/sleep.ts): nothing else asks the model then.
+    const remembering = word === 'resting' || word === 'waiting for you' ? this.beat(now, true) : '';
+    const beat = word === 'thinking' || word === 'waking' ? this.beat(now) : remembering;
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -996,8 +1001,8 @@ export class TalkScreen {
     const activity: Line | null = failed !== null
       ? [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} cannot get an answer from the model`, style: { fg: 'warn', bold: true } },
         { text: ` ${g.sep} ${failed.failures} in a row${wait === '' ? '' : ` ${g.sep} ${wait}`} ${g.sep} ${failed.message}`, style: { fg: 'dim' } }]
-      : active
-      ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: `${clock === '' ? '' : ` ${g.sep} ${clock}`}${beat === '' ? '' : ` ${g.sep} ${beat}`}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
+      : active || remembering !== ''
+      ? [{ text: `${g.spinner[active ? spin : Math.floor(now / SPIN_MS) % g.spinner.length]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${active ? doing : 'remembering'}`, style: { bold: true } }, { text: `${clock === '' ? '' : ` ${g.sep} ${clock}`}${beat === '' ? '' : ` ${g.sep} ${beat}`}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 
     const model = clean(this.o.env.TENERAL_MODEL ?? '').slice(0, 40);

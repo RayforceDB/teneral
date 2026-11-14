@@ -1467,3 +1467,22 @@ test('while the agent is thinking, the line over the input box says what the mod
   s.clock.at += 400;
   expect(line()).toContain('Mica is thinking');
 });
+
+test('while nothing is asked of it, a request to the model is the agent remembering, and the line says so; a pulse left behind long ago says nothing', () => {
+  const s = stage(110, 30, { name: 'Mica' });
+  settled(s);
+  const line = (): string => rows(s.live()).find((row) => row.includes('Mica is')) ?? '';
+  expect(line()).toBe('');
+  // The screen's clock, which is what a real pulse is stamped by.
+  const now = T0 + s.clock.at;
+  mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
+  writeFileSync(s.p.pulse, JSON.stringify({ at: new Date(now).toISOString(), asked: new Date(now - 2000).toISOString(), step: 'writing', received: 300, tail: 'My owner asked me to set up the mail' }));
+  s.clock.at += 400;
+  expect(line()).toContain('Mica is remembering');
+  expect(line()).toContain('the model is writing: …My owner asked me to set up the mail');
+  expect(line()).not.toContain('esc to interrupt');
+  // The same file, three minutes on: its body is gone, and nothing is going on.
+  s.clock.at += 3 * 60_000;
+  expect(line()).toBe('');
+  unlinkSync(s.p.pulse);
+});
