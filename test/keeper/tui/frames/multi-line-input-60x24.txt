@@ -1,8 +1,8 @@
 ╭─────────────────────────────────────────────────────────╮
 │                                                         │
-│   ▚▖  ▗▞   Talking with your teneral agent              │
-│    ▜██▛    Type to talk, Enter sends. /help lists the … │
-│    ░▒▒░                                                 │
+│   ▗▛▀▀▜▄▖   Talking with your teneral agent             │
+│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the… │
+│   ▝▜▄▄▟▘                                                │
 │                                                         │
 │   Directory    /home/owner/work/teneral                 │
 │   Individual   5e1f0a9c                                 │

@@ -2,11 +2,11 @@
 ──────────────────────────────────────╮
 │
                                       │
-│   ▚▖  ▗▞   Talking with Mica
+│   ▗▛▀▀▜▄▖   Talking with Mica
                                       │
-│    ▜██▛    Type to talk, Enter sends. /help lists the keys
- and commands.                        │
-│    ░▒▒░
+│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the key
+s and commands.                       │
+│   ▝▜▄▄▟▘
                                       │
 │
                                       │

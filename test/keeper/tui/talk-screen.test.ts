@@ -76,8 +76,8 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
   expectFrame('start-100x40', all);
   // The panel: a round frame across the width, the mark, the name from the soul's own file, and the facts.
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(97)}╮`);
-  expect(all).toContain('│   ▚▖  ▗▞   Talking with Mica');
-  expect(all).toContain('│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.');
+  expect(all).toContain('│   ▗▛▀▀▜▄▖   Talking with Mica');
+  expect(all).toContain('│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the keys and commands.');
   expect(all).toMatch(/│ {3}Directory {4}\/home\/owner\/work\/teneral +│/);
   expect(all).toMatch(/│ {3}Individual {3}5e1f0a9c +│/);
   expect(all).toMatch(/│ {3}Generation {3}2nd · e5f6a7b · has lived in 2 +│/);
@@ -1078,7 +1078,7 @@ test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, mar
   expectFrame('ascii-locale-80x44', all);
   expect(all).toMatch(/^[\x20-\x7e\n]*$/);
   expect(all).toContain('| mutation accepted  a1b2c3d -> e5f6a7b');
-  expect(all).toContain('|   \\\\  //   Talking with your teneral agent');
+  expect(all).toContain('|    .--._    Talking with your teneral agent');
   expect(all).toContain(`| [image 1 | png | 64x48 | ${png(64, 48).length} B]`);
   expect(all).toMatch(/\n gpt-6\.1-sol {3,}attached: image 1 \| Backspace at the start removes the last/);
   expect(all).toMatch(/^[|/\\-] The agent is thinking \| 0:01 \| esc to interrupt$/m);

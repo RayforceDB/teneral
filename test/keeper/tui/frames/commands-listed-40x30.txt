@@ -1,8 +1,8 @@
 ╭─────────────────────────────────────╮
 │                                     │
-│   ▚▖  ▗▞   Talking with your tener… │
-│    ▜██▛    Type to talk, Enter sen… │
-│    ░▒▒░                             │
+│   ▗▛▀▀▜▄▖   Talking with your tene… │
+│   █ ▟▙ ▐    Type to talk, Enter se… │
+│   ▝▜▄▄▟▘                            │
 │                                     │
 │   Directory    /home/owner/work/ten │
 │                eral                 │

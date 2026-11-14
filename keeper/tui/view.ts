@@ -285,8 +285,8 @@ export function welcome(w: Welcome, max: number, g: Glyphs): Line[] {
   if (inner >= markWidth + 28) {
     const beside: Line[] = [greeting, help, []];
     g.mark.forEach((row, i) => {
-      // The creature in teneral's own colour; the skin it left, under it, set back.
-      rows.push([{ text: '  ' }, { text: row, style: i === g.mark.length - 1 ? FAINT : BRAND }, { text: '   ' }, ...clip(beside[i] ?? [], inner - markWidth - 5, { text: g.ellipsis, style: DIM })]);
+      // The mark, whole, in teneral's own colour.
+      rows.push([{ text: '  ' }, { text: row, style: BRAND }, { text: '   ' }, ...clip(beside[i] ?? [], inner - markWidth - 5, { text: g.ellipsis, style: DIM })]);
     });
   } else {
     rows.push(...wrap(greeting, inner), ...wrap(help, inner));

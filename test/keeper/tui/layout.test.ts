@@ -222,9 +222,9 @@ test('the welcome panel: the mark, who is being talked to, and the facts as an a
   expect(rows).toEqual([
     '╭────────────────────────────────────────────────────────────────────╮',
     '│                                                                    │',
-    '│   ▚▖  ▗▞   Talking with Мира                                       │',
-    '│    ▜██▛    Type to talk, Enter sends. /help lists the keys and co… │',
-    '│    ░▒▒░                                                            │',
+    '│   ▗▛▀▀▜▄▖   Talking with Мира                                      │',
+    '│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the keys and c… │',
+    '│   ▝▜▄▄▟▘                                                           │',
     '│                                                                    │',
     '│   Directory    /home/owner/teneral                                 │',
     '│   Generation   3rd · a1b2c3d · has lived in 3                      │',
@@ -235,7 +235,7 @@ test('the welcome panel: the mark, who is being talked to, and the facts as an a
   // Without a name it says so plainly; a long value wraps under itself; a narrow panel leaves the mark out.
   const narrow = text(welcome({ name: null, facts: [['Directory', '/a/very/long/path/that/does/not/fit/in/the/panel/at/all']] }, 36, G));
   expect(narrow.join('\n')).toContain('Talking with your teneral agent');
-  expect(narrow.join('\n')).not.toContain('▜██▛');
+  expect(narrow.join('\n')).not.toContain('▟▙');
   for (const row of narrow) expect(row.length).toBeLessThanOrEqual(36);
   for (const max of [200, 120, 80, 50, 30, 12]) for (const row of welcome({ name: 'Mica', facts: [['A', 'b'.repeat(300)]] }, max, G)) expect(lineWidth(row)).toBeLessThanOrEqual(Math.max(max, 5));
   // Without UTF-8 the same panel is ASCII.

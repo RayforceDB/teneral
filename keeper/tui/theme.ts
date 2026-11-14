@@ -102,10 +102,11 @@ const UTF8 = {
   /** The corners of a panel: top left, top right, bottom left, bottom right. */
   corners: ['╭', '╮', '╰', '╯'],
   /**
-   * teneral's mark: a creature just out of its old skin. Wings still opening, the body under
-   * them, and below, drawn in shade, the skin it left. Each row is as wide as the others.
+   * teneral's mark, as the logo has it, in the few cells a terminal gives: a soft shell with a
+   * point drawn out of it at the top right, and inside it, off centre, what it holds. Each row is
+   * as wide as the others.
    */
-  mark: ['▚▖  ▗▞', ' ▜██▛ ', ' ░▒▒░ '],
+  mark: ['▗▛▀▀▜▄▖', '█ ▟▙ ▐ ', '▝▜▄▄▟▘ '],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
 };
 
@@ -136,7 +137,7 @@ const ASCII: Glyphs = {
   seg: '',
   segBack: '',
   corners: ['+', '+', '+', '+'],
-  mark: ['\\\\  //', ' (oo) ', ' \'::\' '],
+  mark: [' .--._ ', '( () ) ', ' `--\'  '],
   spinner: ['|', '/', '-', '\\'],
 };
 

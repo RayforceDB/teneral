@@ -1,8 +1,8 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                                 │
-│   ▚▖  ▗▞   Talking with Mica                                                                    │
-│    ▜██▛    Type to talk, Enter sends. /help lists the keys and commands.                        │
-│    ░▒▒░                                                                                         │
+│   ▗▛▀▀▜▄▖   Talking with Mica                                                                   │
+│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the keys and commands.                       │
+│   ▝▜▄▄▟▘                                                                                        │
 │                                                                                                 │
 │   Directory    /home/owner/work/teneral                                                         │
 │   Individual   5e1f0a9c                                                                         │

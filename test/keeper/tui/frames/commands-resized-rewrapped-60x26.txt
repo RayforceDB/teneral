@@ -2,11 +2,11 @@
 ──────────────────────────────────────╮
 │
                                       │
-│   ▚▖  ▗▞   Talking with your teneral agent
+│   ▗▛▀▀▜▄▖   Talking with your teneral agent
                                       │
-│    ▜██▛    Type to talk, Enter sends. /help lists the keys
- and commands.                        │
-│    ░▒▒░
+│   █ ▟▙ ▐    Type to talk, Enter sends. /help lists the key
+s and commands.                       │
+│   ▝▜▄▄▟▘
                                       │
 │
                                       │
