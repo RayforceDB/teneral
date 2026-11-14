@@ -2,6 +2,7 @@ import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { IMAGE_CHARS } from '../body/images';
 import { episodes, type Episode } from './episodes';
+import { health, healthNote } from './health';
 import { known, knownText } from './known';
 import { pinned } from './owned';
 import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
@@ -203,8 +204,11 @@ export interface Logbook {
  */
 export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
   // "Today" is the day of the journal's last event: the same journal always gives the same request.
-  const held = knownText(known(events), (events.at(-1)?.ts ?? '').slice(0, 10), MEMORY_MARK);
-  const knowing: ChatMessage[] = held === null ? [] : [{ role: 'user', content: held }];
+  const last = events.at(-1)?.ts ?? '';
+  // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
+  const ill = healthNote(health(events, Date.parse(last) || 0), MEMORY_MARK);
+  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
+  const knowing: ChatMessage[] = held === '' ? [] : [{ role: 'user', content: held }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
   const all = remembered(events);
   if (all.spans.length === 0) return nothingSwapped;

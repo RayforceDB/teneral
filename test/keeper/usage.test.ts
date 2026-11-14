@@ -62,9 +62,9 @@ test('the report says how the memory stands: what is remembered, what waits, wha
   const fact = ev({ id: 'f1', type: 'note', kind: 'memory.fact.v1', data: { text: 'The owner uses the work address', source: 'owner', episode: 'a1' }, ts: t(9), gen: 'g' });
   const intention = ev({ id: 'i1', type: 'note', kind: 'memory.intention.v1', data: { text: 'Send the weekly report' }, ts: t(9), gen: 'g' });
   expect(memoryLine([...a, ...b, ...c, memory, fact, intention], NOW)).toBe(
-    'Memory: 1 episodes remembered, 1 waiting to be (the oldest ended 5 h ago), 1 facts held, 1 intentions open.',
+    'Memory is well. 1 episodes remembered, 1 waiting to be (the oldest ended 5 h ago), 1 facts held, 1 intentions open.',
   );
-  expect(memoryLine([...a, memory], NOW)).toBe('Memory: 1 episodes remembered, none waiting, 0 facts held, 0 intentions open.');
+  expect(memoryLine([...a, memory], NOW)).toBe('Memory is well. 1 episodes remembered, none waiting, 0 facts held, 0 intentions open.');
   expect(memoryLine(c, NOW)).toBe('');
-  expect(formatUsage(usageReport([...a, { ...a[1]!, usage: { input: 5, output: 1 } } as JournalEvent, memory], NOW, 'g')).join('\n')).toContain('Memory: 1 episodes remembered');
+  expect(formatUsage(usageReport([...a, { ...a[1]!, usage: { input: 5, output: 1 } } as JournalEvent, memory], NOW, 'g')).join('\n')).toContain('Memory is well. 1 episodes remembered');
 });

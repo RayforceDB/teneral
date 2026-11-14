@@ -155,7 +155,7 @@ test('/memory shows how the memory stands, with a mark for everything the owner 
   const { notes, events } = life();
   const fact = note(FACT_KIND, { text: 'The owner is in Lisbon', source: 'owner', episode: 'e' });
   const lines = memoryCommand([...events, fact], '', Date.parse('2026-11-11T02:00:00Z')).lines;
-  expect(lines[0]).toStartWith('Memory: 2 episodes remembered');
+  expect(lines[0]).toStartWith('Memory is well. 2 episodes remembered');
   expect(lines).toContain(`  ${markOf(notes[0]!.id)}  2026-11-11 00:01  done    The first thing`);
   expect(lines.join('\n')).toContain(`${known([fact]).facts[0]!.mark}  [owner] The owner is in Lisbon`);
   expect(lines.join('\n')).toContain('/memory back [n]');

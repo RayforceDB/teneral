@@ -1486,3 +1486,21 @@ test('while nothing is asked of it, a request to the model is the agent remember
   expect(line()).toBe('');
   unlinkSync(s.p.pulse);
 });
+
+test('the status line says how the memory stands and what the last exam came to, once anything is remembered', () => {
+  const s = stage(120, 30, { name: 'Mica' });
+  settled(s);
+  const footer = (): string => rows(s.live()).at(-1) ?? '';
+  expect(footer()).not.toContain('memory');
+  const at = new Date(T0 - 58_000).toISOString();
+  const end = new Date(T0 - 50_000).toISOString();
+  const journaled = readFileSync(s.p.journal, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { id: string; type: string });
+  const first = journaled.find((e) => e.type === 'stimulus')!.id;
+  const last = journaled.findLast((e) => e.type === 'assistant')!.id;
+  s.journal({ type: 'note', kind: 'memory.episode.v1', data: { from: first, to: last, start: at, end, title: 'Hello', text: 'I said hello.', outcome: 'done' } }, s.clock.at);
+  const score = { questions: 30, passed: 29, nearness: 1 };
+  s.journal({ type: 'note', kind: 'memory.exam.result.v1', data: { recall: score, plain: score, told: score, written: true } }, s.clock.at);
+  // Worked out anew only now and then: the whole journal is read for it.
+  s.clock.at += 31_000;
+  expect(footer()).toContain('memory well · exam 97%');
+});

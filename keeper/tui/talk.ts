@@ -7,6 +7,7 @@ import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../.
 import { ownerCommand } from '../../species/offer';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
+import { health, healthBadge } from '../../brain/health';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
 import { Follower } from '../talk';
@@ -47,6 +48,8 @@ const INTERRUPT_MS = 5000;
 const TIP_MS = 20_000;
 /** A pulse older than this, while no turn is owed, was left behind by a body that is gone. */
 const STALE_PULSE_MS = 120_000;
+/** How often the status line works out anew how the memory stands. */
+const MEMORY_BADGE_MS = 30_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
 const PENDING_SHOWN = 12;
 
@@ -456,6 +459,19 @@ export class TalkScreen {
   private holding(): boolean {
     const alive = this.alive();
     return alive.supervisor && alive.body && this.standing.turn.busy && this.standing.mutation === null;
+  }
+
+  /** How the agent's memory stands, for the status line, and when that was last worked out: the whole journal is read for it, so not often. */
+  private memory: { read: number; badge: string } = { read: 0, badge: '' };
+
+  private memoryBadge(now: number): string {
+    if (this.memory.read !== 0 && now - this.memory.read < MEMORY_BADGE_MS && now >= this.memory.read) return this.memory.badge;
+    let badge = '';
+    try {
+      badge = healthBadge(health(readEvents(this.o.paths.journal), now));
+    } catch { /* a journal that cannot be read says nothing of the memory */ }
+    this.memory = { read: now, badge };
+    return badge;
   }
 
   /** The pulse file as it was last read, and when: it is looked at a few times a second at most. */
@@ -1045,7 +1061,7 @@ export class TalkScreen {
       pending: laid,
       activity,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, this.memoryBadge(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

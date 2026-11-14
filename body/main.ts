@@ -7,7 +7,8 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
-import { noteOf, parseWord, type Word } from '../brain/owned';
+import { RESULT_KIND, due, sit } from '../brain/exam';
+import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
 import { sleep } from '../brain/sleep';
@@ -250,7 +251,15 @@ for (;;) {
   // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
   if (await rest()) continue;
   if (quitting) break;
-  // Before waiting: what the store gained is written out, so that the next start finds it on disk.
+  // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
+  // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
+  try {
+    const events = standing(readEvents(journal));
+    if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
+  } catch (err) {
+    console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // And what the store gained is written out, so that the next start finds it on disk.
   try {
     past.sync();
     past.persist();

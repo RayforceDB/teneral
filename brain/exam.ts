@@ -184,6 +184,22 @@ export function lastResult(events: JournalEvent[]): (Result & { at: string }) | 
   return null;
 }
 
+/** An exam is sat again once this many memories have been formed since the last one. */
+export const EXAM_EVERY = 10;
+
+/** Whether it is time to sit the exam: something has been remembered, and enough since the last result. */
+export function due(events: JournalEvent[]): boolean {
+  let since = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type !== 'note') continue;
+    if (e.kind === RESULT_KIND) return since >= EXAM_EVERY;
+    if (e.kind === 'memory.episode.v1' || e.kind === 'memory.merge.v1') since += 1;
+  }
+  // Never sat: once there is anything to be examined on.
+  return since >= 1;
+}
+
 /** The share of its questions a score passed, from 0 to 1; 1 when it had none. */
 export const rate = (score: Score): number => (score.questions === 0 ? 1 : score.passed / score.questions);
 

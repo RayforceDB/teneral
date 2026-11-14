@@ -3,7 +3,8 @@
 import { tokens } from './tui/view';
 import type { JournalEvent } from '../brain/journal';
 import { known } from '../brain/known';
-import { memoryHealth } from '../brain/sleep';
+import { health } from '../brain/health';
+import { rate } from '../brain/exam';
 
 export interface Spent {
   requests: number;
@@ -32,19 +33,23 @@ export interface UsageReport {
   memory: string;
 }
 
-/** The agent's memory in a line: what is remembered, what waits, what could not be, and what it holds. */
+/** The agent's memory in a line or two: how it stands and why, what is remembered and waits, what it holds, and what its last exam came to. */
 export function memoryLine(events: JournalEvent[], now: number): string {
-  const health = memoryHealth(events);
+  const h = health(events, now);
   const held = known(events);
-  if (health.remembered + health.waiting + health.quarantined + held.facts.length + held.intentions.length === 0) return '';
-  const hours = health.oldest === null ? 0 : Math.max(0, Math.round((now - Date.parse(health.oldest)) / 3_600_000));
-  return [
-    `Memory: ${health.remembered} episodes remembered`,
-    health.waiting === 0 ? 'none waiting' : `${health.waiting} waiting to be (the oldest ended ${hours} h ago)`,
-    ...(health.quarantined === 0 ? [] : [`of ${health.quarantined} no memory could be formed`]),
+  if (h.remembered + h.waiting + h.quarantined + held.facts.length + held.intentions.length === 0) return '';
+  const hours = h.oldest === null ? 0 : Math.max(0, Math.round((now - Date.parse(h.oldest)) / 3_600_000));
+  const percent = (share: number): string => `${Math.round(share * 100)}%`;
+  const counts = [
+    `${h.remembered} episodes remembered`,
+    h.waiting === 0 ? 'none waiting' : `${h.waiting} waiting to be (the oldest ended ${hours} h ago)`,
+    ...(h.quarantined === 0 ? [] : [`of ${h.quarantined} no memory could be formed`]),
     `${held.facts.length} facts held`,
     `${held.intentions.length} intentions open`,
-  ].join(', ') + '.';
+  ].join(', ');
+  const exam = h.exam === null ? '' : ` Exam of ${h.exam.at.slice(0, 16).replace('T', ' ')}: recall found ${percent(rate(h.exam.recall))} of ${h.exam.recall.questions}, `
+    + `the words as they stand ${percent(rate(h.exam.plain))}${h.exam.told.questions === 0 ? '' : `, and the memories themselves told ${percent(rate(h.exam.told))} of ${h.exam.told.questions}`}.`;
+  return `Memory is ${h.state}${h.reasons.length === 0 ? '' : `: ${h.reasons.join('; ')}`}. ${counts}.${exam}`;
 }
 
 /** Add up every journaled usage: by span of time ending at `now`, and over the last day by what started the turn. */
