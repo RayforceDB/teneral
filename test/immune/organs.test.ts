@@ -760,5 +760,6 @@ test('an install that starts fetches the pinned archives its cache lacks, keeps 
 test('the seed pins the engine of its memory in its brain, by a pin the stem reads', () => {
   const pins = parsePins({ organs: null, engines: readFileSync(join(import.meta.dir, '..', '..', ENGINES_FILE), 'utf8') });
   expect(pins.map((pin) => pin.name)).toEqual(['rayforce']);
-  expect(pins[0]!.url).toMatch(/^https:\/\/github\.com\/RayforceDB\/rayforce\/releases\/download\/v[\d.]+\/rayforce-[\d.]+-linux-x86_64\.tar\.gz$/);
+  // A release, or a build of the development branch published for the time before a release carries what the brain needs.
+  expect(pins[0]!.url).toMatch(/^https:\/\/github\.com\/RayforceDB\/rayforce\/releases\/download\/[\w.-]+\/rayforce-[\w.-]+-linux-x86_64\.tar\.gz$/);
 });

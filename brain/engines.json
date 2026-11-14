@@ -1,7 +1,7 @@
 {
   "rayforce": {
-    "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
-    "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
-    "dir": "rayforce-3.0.2-linux-x86_64"
+    "url": "https://github.com/RayforceDB/rayforce/releases/download/dev-6b852898/rayforce-dev-6b852898-linux-x86_64.tar.gz",
+    "sha256": "fa6f94cdb50b2253e6d673d276bdea3d45602b7798c639afbb904880a5e717c9",
+    "dir": "rayforce-dev-6b852898-linux-x86_64"
   }
 }
