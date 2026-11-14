@@ -11,6 +11,7 @@ import type { ChatMessage, Provider, ToolSpec } from './provider';
 import { saysTooLong } from './retry';
 import { clip } from '../body/text';
 import { asText } from './stemnote';
+import { reflect } from './agenda';
 
 // Sleep is when the agent forms its memories. While nothing is asked of it, it takes the oldest
 // episode that is over and has no memory yet, and asks its own model, as itself, what it will
@@ -67,12 +68,14 @@ export interface SleepDeps {
   budgetChars?: number;
   /** Characters the logbook may take in a request, as brain/logbook.ts takes it; past it, memories are made into wider ones. */
   logbookChars?: number;
+  /** Characters shown as they happened in a turn's request: looking ahead (brain/agenda.ts) sends what a turn would. */
+  tailChars?: number;
   /** Aborts when something arrives: the agent wakes, and the memory is formed another time. */
   signal?: AbortSignal;
 }
 
-/** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `woken`: something arrived first, and nothing was written. */
-export type Slept = 'nothing' | 'remembered' | 'quiet' | 'quarantined' | 'merged' | 'woken';
+/** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `reflected`: the agent looked over what it is doing (brain/agenda.ts). `woken`: something arrived first, and nothing was written. */
+export type Slept = 'nothing' | 'remembered' | 'quiet' | 'quarantined' | 'merged' | 'reflected' | 'woken';
 
 /** How many memories of one kind are made into one of the next. */
 export const MERGE_COUNT = 6;
@@ -257,7 +260,11 @@ const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => 
 export async function sleep(d: SleepDeps): Promise<Slept> {
   const events = standing(readEvents(d.journal));
   const episode = waiting(events)[0];
-  if (episode === undefined) return merge(d, events);
+  if (episode === undefined) {
+    // Everything is remembered: first the memories are kept to their size, then, now and then, the agent looks ahead.
+    const merged = await merge(d, events);
+    return merged === 'nothing' ? reflect(d, events) : merged;
+  }
   const lived = events.slice(episode.from, episode.to);
   if (thin(lived)) {
     appendEvent(d.journal, d.gen, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet', voices: voicesOf(lived) } satisfies MemoryData });

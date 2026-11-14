@@ -422,12 +422,13 @@ const intend: Tool = {
     description:
       'Take on something to do later, so that you still know of it when this conversation is no longer in front of you: a promise to your owner, a thing to check tomorrow, a step that has to wait. ' +
       'It stays in every request, with a mark, until you call `done` for it. Say it so that it can be understood on its own, weeks from now. ' +
-      'Not for what you are about to do in this turn.',
+      'Not for what you are about to do in this turn. Open intentions are your agenda: a clock tick offers them to you in order.',
     parameters: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'What is to be done, and for whom' },
         due: { type: 'string', description: 'The day it is due, as YYYY-MM-DD, if a day was named' },
+        origin: { type: 'string', enum: ['taken', 'own', 'ask'], description: 'taken: you took it on for your owner or someone else (the default). own: your own idea, that nobody asked for. ask: a question to put to your owner when they next write' },
       },
       required: ['text'],
     },
@@ -437,7 +438,12 @@ const intend: Tool = {
     if (text.length < 8) throw new Error('say what is to be done in a sentence that can be understood on its own');
     const due = optional(args, 'due');
     if (due !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || Number.isNaN(Date.parse(due)))) throw new Error('due must be a day as YYYY-MM-DD');
-    const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: INTENTION_KIND, data: { text, ...(due === undefined ? {} : { due }) } satisfies IntentionData });
+    const origin = optional(args, 'origin');
+    if (origin !== undefined && origin !== 'taken' && origin !== 'own' && origin !== 'ask') throw new Error('origin must be one of taken, own, ask');
+    const note = appendEvent(ctx.journal, ctx.gen, {
+      type: 'note', kind: INTENTION_KIND,
+      data: { text, ...(origin === 'own' || origin === 'ask' ? { origin } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
+    });
     const mine = known([note]).intentions[0]!;
     return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
   },

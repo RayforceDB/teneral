@@ -13,6 +13,10 @@ import { withdrawn } from './owned';
 //
 // An intention is something to do later. It stays open until a record says it was done or given
 // up. An agent that forgets what it promised is worse than one that forgets what happened.
+// Most are taken on for someone, in the course of work. Two kinds are the agent's own, set down
+// when it looks over its memories (brain/agenda.ts): a thing nobody asked for that it means to do
+// in time of its own, and a question it means to put to its owner. Together, in order, the open
+// intentions are the agent's agenda: what a clock tick offers it (body/sensors.ts).
 
 export const FACT_KIND = 'memory.fact.v1';
 export const INTENTION_KIND = 'memory.intention.v1';
@@ -39,8 +43,14 @@ export interface Fact extends FactData {
   at: string;
 }
 
+/** Whose idea an intention was, when not taken on for someone: `own`, a thing nobody asked for; `ask`, a question for the owner. */
+export const ORIGINS = ['own', 'ask'] as const;
+export type Origin = (typeof ORIGINS)[number];
+
 export interface IntentionData {
   text: string;
+  /** Absent for what was taken on for the owner or anyone else. */
+  origin?: Origin;
   /** The day it is due, as YYYY-MM-DD, when it has one. */
   due?: string;
   episode?: string;
@@ -81,6 +91,7 @@ export function known(events: JournalEvent[]): Known {
       if (!text(d.text)) continue;
       intentions.set(e.id, {
         id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text,
+        ...(ORIGINS.includes(d.origin as Origin) ? { origin: d.origin as Origin } : {}),
         ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
       });
     } else if (e.kind === DONE_KIND) {
@@ -113,12 +124,18 @@ export const KNOWN_CHARS = 6000;
 export function knownText(held: Known, today: string, mark: string): string | null {
   if (held.facts.length === 0 && held.intentions.length === 0) return null;
   const lines: string[] = [];
-  if (held.intentions.length > 0) {
+  const todo = held.intentions.filter((i) => i.origin !== 'ask');
+  const asks = held.intentions.filter((i) => i.origin === 'ask');
+  if (todo.length > 0) {
     lines.push(`${mark} What you mean to do, each with its mark:`);
-    for (const i of held.intentions) {
+    for (const i of todo) {
       const due = i.due === undefined ? '' : i.due <= today ? ` [due ${i.due}, which has come]` : ` [due ${i.due}]`;
-      lines.push(`${i.mark}${due} ${i.text}`);
+      lines.push(`${i.mark}${i.origin === 'own' ? ' [your own idea]' : ''}${due} ${i.text}`);
     }
+  }
+  if (asks.length > 0) {
+    lines.push(`${mark} What you mean to ask your owner when they next write, each with its mark; close it with \`done\` once it is asked and answered:`);
+    for (const i of asks) lines.push(`${i.mark} ${i.text}`);
   }
   if (held.facts.length > 0) {
     const rows = held.facts.map((f) => `${f.mark} [${f.source}] ${f.text}`);
@@ -130,4 +147,17 @@ export function knownText(held: Known, today: string, mark: string): string | nu
     lines.push(...rows.slice(from));
   }
   return lines.join('\n');
+}
+
+/**
+ * The agenda: what is open and can be done without the owner, in the order to take it. First what
+ * is past its day or due today, the earliest day first; then what was taken on for someone, the
+ * oldest first; then the agent's own ideas. Questions for the owner are no part of it: they wait
+ * for the owner.
+ */
+export function agenda(held: Known, today: string): Intention[] {
+  const todo = held.intentions.filter((i) => i.origin !== 'ask');
+  const come = todo.filter((i) => i.due !== undefined && i.due <= today).sort((a, b) => a.due!.localeCompare(b.due!));
+  const rest = todo.filter((i) => !come.includes(i));
+  return [...come, ...rest.filter((i) => i.origin === undefined), ...rest.filter((i) => i.origin === 'own')];
 }

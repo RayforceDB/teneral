@@ -38,6 +38,9 @@ const TIMER_MAX_MS = 2 ** 31 - 1;
  * newest stimulus is a tick it has not finished answering: a night without the provider leaves one
  * tick to answer, not one for every interval.
  */
+/** What a tick says when nothing tells it the agenda. */
+const NO_AGENDA = 'Otherwise, if something is worth doing now, do it; if not, say so in one line.';
+
 export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
   if (!existsSync(soulDir) || !readdirSync(soulDir).some((name) => name.endsWith('.md'))) return false;
   const newest = events.findLastIndex((e) => e.type === 'stimulus');
@@ -50,23 +53,26 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
 /**
  * A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off.
  * `mayTick` is asked before each one; body/main.ts passes `clockMayTick` over the journal and the soul.
+ * `agenda` says what the agent means to do, in order (brain/agenda.ts): a tick offers it, and that is where
+ * the agent's initiative comes from.
  */
-export function clock(intervalMs: number, mayTick: () => boolean = () => true): Sensor {
+export function clock(intervalMs: number, mayTick: () => boolean = () => true, agenda: () => string = () => NO_AGENDA): Sensor {
   return (emit) => {
     // Not `<= 0`: NaN, from a mistyped setting, must also mean off. A timer given NaN fires without pause.
     if (!(intervalMs > 0)) return () => {};
     const timer = setInterval(() => {
       // This runs in a timer, where anything thrown ends the process. No answer means no tick.
+      let todo = NO_AGENDA;
       try {
         if (!mayTick()) return;
+        todo = agenda();
       } catch {
         return;
       }
       emit({
         source: 'clock',
         text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
-          'If you are waiting for an answer from them, keep waiting and say so in one line; do not start something instead. ' +
-          'Otherwise, if something on your backlog is worth doing now, do it; if not, say so in one line.',
+          `If you are waiting for an answer from them, keep waiting and say so in one line; do not start something instead. ${todo}`,
       });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);

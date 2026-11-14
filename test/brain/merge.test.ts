@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
+import { REFLECTION_KIND } from '../../brain/agenda';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
-import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
+import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { buildMessages } from '../../brain/memory';
 import { journalPast, when } from '../../brain/past';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
@@ -44,6 +45,8 @@ const said = (text: string): Reply => ({ text, toolCalls: [] });
 
 test('while the memories fit their room, nothing is made into one', async () => {
   const { journal } = life(8);
+  // It has looked over what it is doing already (brain/agenda.ts): only the memories are in question here.
+  appendEvent(journal, 'g1', { type: 'note', kind: REFLECTION_KIND, data: {} });
   const s = asleep(journal, [], 100_000);
   expect(await sleep(s.deps)).toBe('nothing');
   expect(s.seen).toHaveLength(0);

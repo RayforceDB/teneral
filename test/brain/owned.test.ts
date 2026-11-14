@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { REFLECTION_KIND } from '../../brain/agenda';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -82,7 +83,7 @@ test('a pinned stretch is never taken into a wider memory', async () => {
   clock = Date.parse('2026-11-01T00:00:00.000Z');
   const stretches = Array.from({ length: 8 }, (_, i) => [said(`please do thing ${i}`, LONG), replied(`thing ${i} done`)]);
   const notes = stretches.map((s, i) => memoryOf(s[0]!, s[1]!, `Thing ${i} ${'d'.repeat(300)}`));
-  const journal = journalOf([...stretches.flat(), ...notes, note(PIN_KIND, { event: stretches[2]![0]!.id }), said('now', LONG)]);
+  const journal = journalOf([...stretches.flat(), ...notes, note(PIN_KIND, { event: stretches[2]![0]!.id }), note(REFLECTION_KIND, {}), said('now', LONG)]);
   const provider: Provider = async () => ({ text: 'Title: Wide\nOutcome: done\n\nSeveral things in a row were asked of me and I did each of them.', toolCalls: [] });
   expect(await sleep({ journal, gen: 'g', provider, specs: [], system: () => 'S', logbookChars: 1500 })).toBe('nothing');
   // With the pin elsewhere there is a run of six, and it is made into one.

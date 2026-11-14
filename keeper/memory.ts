@@ -4,7 +4,7 @@
 
 import { episodes, type Episode } from '../brain/episodes';
 import type { JournalEvent } from '../brain/journal';
-import { known } from '../brain/known';
+import { agenda, known } from '../brain/known';
 import { PIN_SHARE, pinnedAmong } from '../brain/logbook';
 import { DEFAULT_BUDGET } from '../brain/memory';
 import { standing, type Word } from '../brain/owned';
@@ -49,7 +49,13 @@ function page(events: JournalEvent[], now: number): string[] {
     lines.push(...memories.slice(-LISTED).map((m: Memory) => `  ${markOf(m.id)}  ${when(m.start)}  ${m.outcome.padEnd(7)} ${brief(m.title)}`));
   }
   if (held.facts.length > 0) lines.push('', 'Facts held:', ...held.facts.map((f) => `  ${f.mark}  [${f.source}] ${brief(f.text, 90)}`));
-  if (held.intentions.length > 0) lines.push('', 'Intentions open:', ...held.intentions.map((i) => `  ${i.mark}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
+  const todo = agenda(held, new Date(now).toISOString().slice(0, 10));
+  const asks = held.intentions.filter((i) => i.origin === 'ask');
+  if (todo.length > 0) {
+    lines.push('', "Agenda, in the order a clock tick offers it (owed: taken on for someone; own: the agent's idea):");
+    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin === 'own' ? 'own ' : 'owed'}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
+  }
+  if (asks.length > 0) lines.push('', 'To ask you when you next write:', ...asks.map((i) => `  ${i.mark}  ${brief(i.text, 90)}`));
   return [...lines, '', ...HOW];
 }
 
