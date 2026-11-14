@@ -203,7 +203,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [],
+    facts: [], intentions: [], done: [], questions: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });

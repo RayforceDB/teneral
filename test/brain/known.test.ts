@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
+import { EXAM_KIND, questionsOf } from '../../brain/exam';
 import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, byMark, known, knownText } from '../../brain/known';
 import { buildMessages } from '../../brain/memory';
 import { journalPast } from '../../brain/past';
@@ -122,6 +123,7 @@ test('the two lists after a memory are read line by line, and a line that is not
       { source: 'owner', text: 'The owner wants answers in Russian', replaces: ['F1a2b3c4', 'Fdeadbeef'] },
     ],
     intentions: [{ text: 'Send the weekly report', due: '2026-11-20' }, { text: 'Ask about the staging quota' }],
+    done: [], questions: [],
   });
 });
 
@@ -195,4 +197,32 @@ test('forget stops holding a fact, and only a fact', async () => {
   await expect(tool('forget').run({ fact: held.intentions[0]!.mark, why: 'x' }, ctx)).rejects.toThrow('no fact you hold');
   expect(await tool('forget').run({ fact: held.facts[0]!.mark, why: 'they moved' }, ctx)).toBe('No longer held: The owner is in Lisbon');
   expect(known(readEvents(ctx.journal))).toMatchObject({ facts: [], intentions: [{ text: 'Check the mail tomorrow' }] });
+});
+
+test('a memory closes the intentions its stretch settled, by the marks they were shown with', async () => {
+  const open = intention('Send the report to the owner');
+  const other = intention('Renew the token before December');
+  const marks = known([open, other]).intentions.map((i) => i.mark);
+  const s = asleep([open, other], [{ text: `${MEMORY}\n\nDone:\n- ${marks[0]} sent it on Friday\n- Inothing0 never existed\n- no mark here`, toolCalls: [] }]);
+  expect(s.seen).toHaveLength(0);
+  await sleep(s.deps);
+  expect(s.seen[0]!.at(-1)!.content).toContain('For each thing you meant to do, listed above with its mark');
+  const events = readEvents(s.journal);
+  expect(known(events).intentions.map((i) => i.text)).toEqual(['Renew the token before December']);
+  expect(events.find((e) => e.type === 'note' && e.kind === DONE_KIND)).toMatchObject({ data: { intention: open.id, how: 'sent it on Friday' } });
+});
+
+test('a memory sets questions for the exam, each tied to the one message that answers it; a question tied to none is left out', async () => {
+  const s = asleep([], [{
+    text: `${MEMORY}\n\nQuestions:\n- Where should the weekly summaries be delivered? => reports go to new@example.org\n- What colour is the sky? => nothing like this was said\n- A third one that is past the limit => Noted both`,
+    toolCalls: [],
+  }]);
+  await sleep(s.deps);
+  expect(questionsOf(readEvents(s.journal))).toEqual([{ question: 'Where should the weekly summaries be delivered?', events: [s.first[0]!.id] }]);
+  expect(readEvents(s.journal).find((e) => e.type === 'note' && e.kind === EXAM_KIND)).toMatchObject({ data: { episode: s.first[0]!.id } });
+});
+
+test('the lists are read whatever marks a model puts around their names, and an outcome is asked for the main thing, not for life going on', () => {
+  const formed = parseMemory(`${MEMORY}\n\n**Done:**\n- I1a2b3c4: handed over\n\n## Questions:\n- "Who gets the report?" => "reports go to new"`, 600);
+  expect(formed).toMatchObject({ done: [{ mark: 'I1a2b3c4', how: 'handed over' }], questions: [{ question: '"Who gets the report?"', begins: 'reports go to new' }] });
 });
