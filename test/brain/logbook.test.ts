@@ -181,3 +181,18 @@ test('the logbook is held to the size chosen for it', () => {
   expect(shown.join('\n')).toContain('Memory 11');
   expect(shown.join('\n')).not.toContain('Memory 0\n');
 });
+
+test('of a stretch in which the owner said nothing, the memory system says so, and says when it was mostly read', () => {
+  const { a, b, c } = life(1000);
+  const voiced = (first: JournalEvent, last: JournalEvent, voices: object) =>
+    ev({ type: 'note', kind: EPISODE_KIND, data: { from: first.id, to: last.id, start: first.ts, end: last.ts, title: 'T', text: 'I did it.', outcome: 'done', voices } });
+  const notes = [voiced(a[0]!, a[1]!, { owner: 0, others: 900, tools: 4000, own: 300 }), voiced(b[0]!, b[1]!, { owner: 0, others: 0, tools: 10, own: 900 })];
+  const shown = buildMessages([...a, ...b, ...c.slice(0, 2), ...notes, c[2]!], 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content);
+  expect(shown[1]).toEndWith('What do you remember of it? Your owner said nothing in that stretch: most of it was what others wrote and what tools returned, which you read, not what you were told by your owner.');
+  expect(shown[3]).toEndWith('What do you remember of it? Your owner said nothing in that stretch.');
+  // Where the owner spoke, or where nothing was counted, nothing is added.
+  const plain = [voiced(a[0]!, a[1]!, { owner: 12, others: 900, tools: 4000, own: 300 }), memoryOf(b[0]!, b[1]!, 'The second thing', 'I did two.')];
+  const usual = buildMessages([...a, ...b, ...c.slice(0, 2), ...plain, c[2]!], 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content);
+  expect(usual[1]).toEndWith('What do you remember of it?');
+  expect(usual[3]).toEndWith('What do you remember of it?');
+});

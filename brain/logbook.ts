@@ -53,10 +53,23 @@ function when(ts: string): string {
   return Number.isNaN(at.getTime()) ? ts : `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
+/**
+ * What the memory system says of whose experience a memory is, where that matters: a stretch in
+ * which the owner said nothing. What such a memory holds came from other people, from tools, from
+ * pages, or from the agent itself, however it is worded, and none of it is the owner's word.
+ */
+function whose(m: Memory | Merge): string {
+  if (m.voices === undefined || m.voices.owner > 0) return '';
+  const outside = m.voices.others + m.voices.tools;
+  return outside > m.voices.own
+    ? ' Your owner said nothing in that stretch: most of it was what others wrote and what tools returned, which you read, not what you were told by your owner.'
+    : ' Your owner said nothing in that stretch.';
+}
+
 /** A memory as two messages: the question is the memory system's, the answer is the agent's own, as it wrote it. */
 function recalled(m: Memory | Merge): ChatMessage[] {
   return [
-    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?` },
+    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?${whose(m)}` },
     { role: 'assistant', content: `${m.title}\n\n${m.text}` },
   ];
 }
