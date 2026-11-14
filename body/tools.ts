@@ -356,7 +356,11 @@ const recallTool: Tool = {
     const query = str(args, 'query');
     const where = optional(args, 'in') ?? 'everything';
     if (!Object.hasOwn(IN, where)) throw new Error(`in must be one of: ${Object.keys(IN).join(', ')}`);
-    const found = pastOf(ctx).find(query, { kinds: IN[where], limit: count(args, 'limit', 8, 20) });
+    const past = pastOf(ctx);
+    const limit = count(args, 'limit', 8, 20);
+    // What the agent is answering right now holds the words it looks for and is in front of it already: one more is asked for, and that one left out.
+    const asking = past.asked();
+    const found = past.find(query, { kinds: IN[where], limit: limit + 1 }).filter((hit) => hit.doc !== asking).slice(0, limit);
     if (found.length === 0) return `Nothing in your journal holds these words${where === 'everything' ? '' : ` in "${where}"`}. Try other words, or the words another language would use for it.`;
     return cap(found.map((hit) => shown(hit.event, FOUND_CHARS)).join('\n\n'));
   },

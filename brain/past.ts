@@ -20,6 +20,8 @@ export interface Past {
   by: 'store' | 'journal';
   /** The events that answer `question` best, each with the event itself. */
   find(question: string, options?: { kinds?: Kind[]; limit?: number }): Found[];
+  /** Where the line of the latest thing said to the agent begins: what it is answering now, which is no find of its own past. Null when nothing was said yet. */
+  asked(): number | null;
   /** The event with this id and the ones around it, in order; null when the journal has no such event. */
   around(id: string, before: number, after: number): { events: JournalEvent[]; at: number } | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
@@ -62,6 +64,7 @@ export function journalPast(journal: string): Past {
   return {
     by: 'journal',
     find: finder(scanIndex(lines), (off) => readLine(journal, off)),
+    asked: () => lines().findLast((line) => line.event.type === 'stimulus')?.off ?? null,
     around(id, before, after) {
       const all = lines();
       const at = all.findIndex((line) => line.event.id === id);
@@ -83,6 +86,10 @@ function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Pas
     find(question, options) {
       store.sync();
       return finder(store.index, store.read)(question, options);
+    },
+    asked() {
+      store.sync();
+      return offsets("(select {from: events where: (== type 'stimulus) desc: off take: 1 off: off})")[0] ?? null;
     },
     around(id, before, after) {
       store.sync();

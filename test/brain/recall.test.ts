@@ -89,6 +89,7 @@ function openPastShared(journal: string): Past {
   const real = journalPast(journal);
   return {
     ...real, by: 'store',
+    asked: () => real.asked(),
     find(question, options) {
       store.sync();
       return recall(store.index, question, options).flatMap((hit) => { const event = store.read(hit.doc); return event === null ? [] : [{ ...hit, event }]; });
@@ -195,6 +196,13 @@ test('the recall tool gives what it found as events with their ids, and says so 
   expect(await tool('recall').run({ query: 'zzzzqqqq' }, ctx)).toContain('Nothing in your journal holds these words');
   await expect(tool('recall').run({ query: 'x', in: 'dreams' }, ctx)).rejects.toThrow('in must be one of');
   await expect(tool('recall').run({ query: 'x', limit: 'many' }, ctx)).rejects.toThrow('whole number');
+});
+
+test('what the agent is answering right now is not given back to it as a find', async () => {
+  const { journal } = life();
+  // "what next?" is the latest thing said; it holds the very words asked for.
+  expect(journalPast(journal).find('what next').map((f) => f.kind)).toEqual(['owner']);
+  expect(await tool('recall').run({ query: 'what next' }, context(journal))).toContain('Nothing in your journal holds these words');
 });
 
 test('the open tool shows the journal word for word around an event and marks the one asked for', async () => {
