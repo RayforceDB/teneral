@@ -1,6 +1,6 @@
 import type { JournalEvent } from './journal';
 import type { Span } from './episodes';
-import { withdrawn } from './owned';
+import { withdrawn, fromOwner } from './owned';
 
 // What the agent has remembered, as it lies in the journal. A memory is a note (see `note` in
 // brain/journal.ts): written once by brain/sleep.ts, never changed, and read back here. Everything
@@ -52,7 +52,7 @@ export function voicesOf(events: JournalEvent[]): Voices {
   const size = (value: unknown): number => (typeof value === 'string' ? value.length : value === undefined ? 0 : (JSON.stringify(value) ?? '').length);
   for (const e of events) {
     const r = e as { text?: unknown; source?: unknown; output?: unknown; toolCalls?: unknown };
-    if (e.type === 'stimulus') v[r.source === 'terminal' ? 'owner' : 'others'] += size(r.text);
+    if (e.type === 'stimulus') v[fromOwner(r.source) ? 'owner' : 'others'] += size(r.text);
     else if (e.type === 'assistant') v.own += size(r.text) + (Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? size(r.toolCalls) : 0);
     else if (e.type === 'tool.result') v.tools += size(r.output);
   }

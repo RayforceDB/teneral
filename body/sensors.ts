@@ -5,7 +5,12 @@ import type { JournalEvent } from '../brain/journal';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
 
 export interface Stimulus {
-  /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
+  /**
+   * Which sensor produced it, and with that whose word it is. 'terminal' is the owner, shown to the model as plain user text.
+   * A sensor of any other channel names its source `owner:<channel>` for a message it has made sure is the owner's, and only
+   * for that: the channel itself must vouch for the sender, and the sender must be who the owner said they are there. Everything
+   * else it hears gets a name of its own, and is someone else's word however it is signed. See `fromOwner` in brain/owned.ts.
+   */
   source: string;
   text: string;
 }

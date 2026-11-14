@@ -1,5 +1,5 @@
 import type { JournalEvent } from './journal';
-import { withdrawn } from './owned';
+import { fromOwner, withdrawn } from './owned';
 
 // What the agent knows and what it means to do, as they lie in the journal. Beside the memory of
 // an episode (brain/remembered.ts) there are two smaller things that outlive it.
@@ -18,11 +18,17 @@ import { withdrawn } from './owned';
 // in time of its own, and a question it means to put to its owner. Together, in order, the open
 // intentions are the agent's agenda: what a clock tick offers it (body/sensors.ts).
 //
+// A question is for whoever can answer it: the owner, one person, the people of some chat. Whom
+// it is for and where to reach them is the agent's to decide and to say, in its own words (`to`);
+// nothing here knows of any channel, and the agent asks by whatever way its body has.
+//
 // An idea of its own that the agent is not sure its owner allows is neither done nor dropped: it
-// is kept, waiting for the owner's word, and the agent puts it to the owner as a question. The
-// owner answers in the conversation, as they would anyone. A yes is recorded with the owner's own
-// words, which must stand in something the owner said after the idea was set down, and the idea
-// joins the agenda; a no closes it, with the reason. No idea is lost for want of a permission.
+// is kept, waiting for the owner's word, and the agent puts it to the owner as a question, where
+// it judges the owner will see it. A yes is recorded with the owner's own words, which must stand
+// in a message of the owner's that came after the idea was set down, and with where that message
+// came from; then the idea joins the agenda. A no closes it, with the reason. A message is the
+// owner's when its source says so (`fromOwner` in brain/owned.ts): the terminal, or any sensor
+// that has made sure of the sender. No idea is lost for want of a permission.
 
 export const FACT_KIND = 'memory.fact.v1';
 export const INTENTION_KIND = 'memory.intention.v1';
@@ -61,6 +67,8 @@ export interface IntentionData {
   origin?: Origin;
   /** An idea of its own that the agent is not sure its owner allows: it waits for the owner's word. */
   unsure?: true;
+  /** Whom a question is for and where to reach them, in the agent's own words. Absent: the owner, wherever the agent reaches them. */
+  to?: string;
   /** The day it is due, as YYYY-MM-DD, when it has one. */
   due?: string;
   episode?: string;
@@ -75,8 +83,9 @@ export interface Intention extends IntentionData {
   put: boolean;
   /** When it was last put to the owner. */
   putAt?: string;
-  /** The owner's words that allowed it, for an idea that waited and waits no longer. */
+  /** The owner's words that allowed it, for an idea that waited and waits no longer, and the source of the message they stood in. */
   allowed?: string;
+  allowedIn?: string;
 }
 
 export interface Known {
@@ -126,6 +135,7 @@ export function known(events: JournalEvent[]): Known {
       intentions.set(e.id, {
         id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text, waits: origin === 'ask' || unsure, put: false,
         ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
+        ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
         ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
       });
     } else if (e.kind === ALLOWED_KIND) {
@@ -133,6 +143,7 @@ export function known(events: JournalEvent[]): Known {
       if (idea !== undefined && idea.unsure === true && text(d.words)) {
         idea.waits = false;
         idea.allowed = d.words;
+        if (text(d.source)) idea.allowedIn = d.source;
       }
     } else if (e.kind === DONE_KIND) {
       if (typeof d.intention === 'string') gone.add(d.intention);
@@ -174,9 +185,12 @@ export function knownText(held: Known, today: string, mark: string): string | nu
     }
   }
   if (asks.length > 0) {
-    lines.push(`${mark} What waits for your owner's word, each with its mark: questions for them, and ideas of your own you were not sure they allow. `
-      + 'Put to them, with its mark, whatever is not yet asked. When they answer: `allowed` with their own words for an idea they say yes to, `done` for a question answered or an idea they refuse.');
-    for (const i of asks) lines.push(`${i.mark}${i.unsure === true ? ' [an idea, may I?]' : ''}${i.put ? ` [asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet]` : ' [not yet asked]'} ${i.text}`);
+    lines.push(`${mark} What waits for an answer, each with its mark: your questions, each for whoever you named, and ideas of your own you were not sure your owner allows. `
+      + 'Put each, with its mark, to whom it is for, where you judge they will see it. When the answer comes: `allowed` with your owner\'s own words for an idea they say yes to, `done` for a question answered or an idea refused.');
+    for (const i of asks) {
+      const whom = i.unsure === true ? ' [an idea, may I? for your owner]' : ` [for ${i.to ?? 'your owner'}]`;
+      lines.push(`${i.mark}${whom}${i.put ? ` [asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet]` : ' [not yet asked]'} ${i.text}`);
+    }
   }
   if (held.facts.length > 0) {
     const rows = held.facts.map((f) => `${f.mark} [${f.source}] ${f.text}`);
@@ -203,15 +217,17 @@ export function agenda(held: Known, today: string): Intention[] {
 }
 
 /**
- * The owner's message that holds `words`, among what they said in their terminal after `idea` was
- * set down; null when there is none. Spaces and case aside, the words must stand there as given:
- * a yes is the owner's to say, and is recorded only in the words they said it with.
+ * The owner's message that holds `words`, among those that reached the agent after `idea` was set
+ * down; null when there is none. It is the owner's when its source says so (`fromOwner`), by
+ * whatever sensor it came. Spaces and case aside, the words must stand there as given: a yes is
+ * the owner's to say, and is recorded only in the words it was said with.
  */
-export function ownerSaid(events: JournalEvent[], idea: Intention, words: string): JournalEvent | null {
+export function ownerSaid(events: JournalEvent[], idea: Intention, words: string): (JournalEvent & { type: 'stimulus' }) | null {
   const flat = (value: string): string => value.toLowerCase().replace(/\s+/g, ' ').trim();
   const wanted = flat(words);
   if (wanted.length < 2) return null;
   const from = events.findIndex((e) => e.id === idea.id);
   if (from === -1) return null;
-  return events.slice(from + 1).findLast((e) => e.type === 'stimulus' && e.source === 'terminal' && typeof e.text === 'string' && flat(e.text).includes(wanted)) ?? null;
+  const found = events.slice(from + 1).findLast((e) => e.type === 'stimulus' && fromOwner(e.source) && typeof e.text === 'string' && flat(e.text).includes(wanted));
+  return (found as (JournalEvent & { type: 'stimulus' }) | undefined) ?? null;
 }

@@ -1,5 +1,5 @@
 import type { JournalEvent } from './journal';
-import { backNote, standing } from './owned';
+import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
 import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
@@ -178,8 +178,10 @@ function stimulusText(source: unknown, text: unknown): string {
   const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]')
     // Nor may anything that arrives pass for the agent's own memory (brain/logbook.ts).
     .replaceAll(MEMORY_MARK, '[not memory]');
+  // Only the label a sensor gave says whose word something is (brain/owned.ts): the same label inside what someone else sent is their text.
+  const honest = fromOwner(source) ? shown : shown.replaceAll(`[${OWNER_PREFIX}`, `[not ${OWNER_PREFIX}`);
   // No provider takes an empty message, and the agent should still know that something arrived.
-  return shown.trim() === '' ? '[empty message]' : shown;
+  return honest.trim() === '' ? '[empty message]' : honest;
 }
 
 /**

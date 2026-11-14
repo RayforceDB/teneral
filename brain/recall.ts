@@ -1,3 +1,4 @@
+import { fromOwner } from './owned';
 import type { JournalEvent } from './journal';
 import { FACT_KIND } from './known';
 import { EPISODE_KIND, MERGE_KIND } from './remembered';
@@ -80,7 +81,7 @@ export function postings(text: string): Posting[] {
 export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null {
   const r = e as { text?: unknown; source?: unknown; output?: unknown; args?: unknown; kind?: unknown; data?: unknown };
   let found: { kind: Kind; text: string } | null = null;
-  if (e.type === 'stimulus') found = { kind: r.source === 'terminal' ? 'owner' : 'heard', text: asText(r.text) };
+  if (e.type === 'stimulus') found = { kind: fromOwner(r.source) ? 'owner' : 'heard', text: asText(r.text) };
   else if (e.type === 'assistant') found = { kind: 'reply', text: asText(r.text) };
   else if (e.type === 'tool.intent') found = { kind: 'did', text: asText(r.args) };
   else if (e.type === 'tool.result') found = { kind: 'tool', text: asText(r.output) };

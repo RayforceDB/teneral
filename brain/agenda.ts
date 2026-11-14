@@ -19,8 +19,9 @@ import type { SleepDeps, Slept } from './sleep';
 // No idea is lost. Whatever the agent sets down in form is kept; when many of its own are open it
 // is told so and asked to close what no longer matters, and what it closes stays in the journal
 // with the reason. An idea it is not sure its owner allows is kept as one that waits for the
-// owner's word: the agent puts it to the owner, at the next tick or when the owner next writes,
-// and the owner answers in the conversation (brain/known.ts).
+// owner's word, and a question is kept for whoever the agent says can answer it. To whom each
+// goes, and by what way, is the agent's choice: nothing here names a channel (brain/known.ts).
+// What got no answer is put again after a while, to the same people.
 //
 // It is asked rarely, after several new memories, and with the request a turn would send, so that
 // most of it is still in the provider's cache. An answer that is not in form sets down nothing.
@@ -35,10 +36,10 @@ export const OWN_OPEN_MANY = 7;
 /** How many lines of the agenda a clock tick offers, and how much of each. */
 const OFFERED = 5;
 const OFFERED_CHARS = 240;
-/** What was put to the owner and not answered is put to them again after this long, and again each time as long passes. */
+/** What was asked and not answered is asked again after this long, and again each time as long passes. */
 export const REMIND_MS = 24 * 3_600_000;
 
-/** What waits for the owner and is to be put to them now: never asked, or asked long enough ago with no answer. */
+/** What waits for an answer and is to be put now: never asked, or asked long enough ago with no answer. */
 export function toAsk(held: Known, now: number): Intention[] {
   return held.intentions.filter((i) => i.waits && (!i.put || now - Date.parse(i.putAt ?? '') >= REMIND_MS));
 }
@@ -71,7 +72,8 @@ export function reflectQuestion(held: Known): string {
     'Call no tool. Reply with these lists and nothing else, each only when there is something for it:',
     'Agenda:\n- [] <a thing you mean to do, that nobody asked for and that you are sure you may do>\n- [YYYY-MM-DD] <the same, when it has a day>',
     'Unsure:\n- <a thing you would do if your owner allows it, said so that they can answer yes or no>',
-    'Ask:\n- <any other question for your owner, put so that it can be answered in a line>',
+    'Ask:\n- [whom it is for, and where you will reach them] <a question, put so that it can be answered in a line>\n- [] <the same, when it is for your owner>\n'
+    + 'A question goes to whoever can answer it: your owner, one person, the people of some chat. Whom to ask and where is yours to choose.',
     'Done:\n- I1a2b3c4 <how it ended>\nFor each thing in your list above that is settled, or no longer worth doing: its mark, and in a few words why.',
     'If there is nothing for any of them, reply with the one word: Nothing',
   ].join('\n\n');
@@ -81,7 +83,7 @@ export interface Looked {
   own: { text: string; due?: string }[];
   /** Ideas that wait for the owner's word. */
   unsure: string[];
-  asks: string[];
+  asks: { text: string; to?: string }[];
   done: { mark: string; how: string }[];
 }
 
@@ -89,6 +91,7 @@ const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(
 const HEADINGS: Record<string, keyof Looked> = { 'agenda:': 'own', 'unsure:': 'unsure', 'ask:': 'asks', 'done:': 'done' };
 const OWN_LINE = /^-\s*\[\s*(\d{4}-\d{2}-\d{2})?\s*\]\s*(.+)$/;
 const ASK_LINE = /^-\s*(.+)$/;
+const TO_LINE = /^-\s*\[([^\]]*)\]\s*(.+)$/;
 const DONE_LINE = /^-\s*(I[0-9a-zA-Z]{4,12})\b[\s:,-]*(.*)$/;
 
 /** What a reply sets down, or the reason it is not in form. A line that is not in form is left out. */
@@ -109,10 +112,14 @@ export function parseLook(reply: string): Looked | { problem: string } {
     if (list === 'own' && found.own.length < LIST_MAX) {
       const m = OWN_LINE.exec(item);
       if (m && m[2]!.trim().length >= 8) found.own.push({ text: m[2]!.trim(), ...(m[1] ? { due: m[1] } : {}) });
-    } else if ((list === 'asks' || list === 'unsure') && found[list].length < LIST_MAX) {
-      // A model may bracket these as it does the others; the brackets are no part of the question.
+    } else if (list === 'unsure' && found.unsure.length < LIST_MAX) {
+      // A model may bracket these as it does the others; the brackets are no part of the idea.
       const m = ASK_LINE.exec(item.replace(/^-\s*\[[^\]]*\]\s*/, '- '));
-      if (m && m[1]!.trim().length >= 8) found[list].push(m[1]!.trim());
+      if (m && m[1]!.trim().length >= 8) found.unsure.push(m[1]!.trim());
+    } else if (list === 'asks' && found.asks.length < LIST_MAX) {
+      const m = TO_LINE.exec(item) ?? ASK_LINE.exec(item);
+      const [to, text] = m === null ? ['', ''] : m.length === 3 ? [m[1]!.trim(), m[2]!.trim()] : ['', m[1]!.trim()];
+      if (text.length >= 8) found.asks.push({ text, ...(to !== '' && !/^(your |my |the )?owner$/i.test(to) ? { to } : {}) });
     } else if (list === 'done' && found.done.length < 24) {
       const m = DONE_LINE.exec(item);
       if (m) found.done.push({ mark: m[1]!, how: m[2]!.trim() });
@@ -149,10 +156,10 @@ export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Sle
       const fresh = (text: string): boolean => !said.has(text) && said.add(text) !== undefined;
       const own = looked.own.filter((i) => fresh(i.text));
       const unsure = looked.unsure.filter(fresh);
-      const asks = looked.asks.filter(fresh);
+      const asks = looked.asks.filter((ask) => fresh(ask.text));
       for (const i of own) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...i, origin: 'own' } satisfies IntentionData });
       for (const text of unsure) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { text, origin: 'own', unsure: true } satisfies IntentionData });
-      for (const text of asks) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { text, origin: 'ask' } satisfies IntentionData });
+      for (const ask of asks) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...ask, origin: 'ask' } satisfies IntentionData });
       let closed = 0;
       for (const settled of looked.done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);
@@ -182,13 +189,16 @@ export function offered(held: Known, now: number): string {
   const today = new Date(now).toISOString().slice(0, 10);
   const todo = agenda(held, today);
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
-  // What waits for the owner comes first, when it was never put to them or they have not answered for long: an idea nobody answers is as good as lost.
+  // What waits for an answer comes first, when it was never asked or was asked long ago: an idea nobody answers is as good as lost.
   const unasked = toAsk(held, now);
   const ask = unasked.length === 0 ? '' : [
-    'First, what waits for your owner and is to be put to them now:',
-    ...unasked.slice(0, OFFERED).map((i) => `${i.mark} ${i.unsure === true ? '[an idea, may I?] ' : ''}${i.put ? `[asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet: remind them] ` : '[not yet asked] '}${line(i.text)}`),
-    'Put these to them now, each with its mark and short enough to answer in a line: in your reply here, which they read in their terminal when they come, '
-    + 'and by any other way your owner has given you to reach them, where they will see it sooner. A reminder is one line, not the case made again. '
+    'First, what waits for an answer and is to be put now:',
+    ...unasked.slice(0, OFFERED).map((i) => {
+      const whom = i.unsure === true ? '[an idea, may I? for your owner] ' : `[for ${i.to ?? 'your owner'}] `;
+      return `${i.mark} ${whom}${i.put ? `[asked ${(i.putAt ?? '').slice(0, 10)}, no answer yet: remind them] ` : '[not yet asked] '}${line(i.text)}`;
+    }),
+    'Put each to whom it is for, with its mark and short enough to answer in a line, by the way you judge they will see it soonest; which way that is, is yours to choose. '
+    + 'What you say in your reply here your owner reads when they next come to you, and no one else does. A reminder is one line, not the case made again. '
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
   if (todo.length === 0) return `${ask}Nothing ${ask === '' ? '' : 'else '}is on your agenda. If something is worth doing now all the same, do it; if not, say so in one line.`;

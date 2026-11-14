@@ -1,3 +1,4 @@
+import { fromOwner } from './owned';
 import type { JournalEvent } from './journal';
 import { stemNote } from './stemnote';
 
@@ -157,7 +158,7 @@ export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
 export function thin(events: JournalEvent[]): boolean {
   let said = 0;
   for (const e of events) {
-    if (e.type === 'stimulus' && e.source === 'terminal') return false;
+    if (e.type === 'stimulus' && fromOwner(e.source)) return false;
     if (e.type === 'tool.intent' || e.type === 'tool.result') return false;
     if (e.type === 'assistant') {
       const r = e as { text?: unknown; toolCalls?: unknown };

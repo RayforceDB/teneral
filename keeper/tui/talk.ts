@@ -474,7 +474,7 @@ export class TalkScreen {
     try {
       const events = standing(readEvents(this.o.paths.journal));
       badge = healthBadge(health(events, now));
-      const count = known(events).intentions.filter((i) => i.waits).length;
+      const count = known(events).intentions.filter((i) => i.waits && i.to === undefined).length;
       waits = count === 0 ? '' : `${count} for you`;
     } catch { /* a journal that cannot be read says nothing of the memory */ }
     this.memory = { read: now, badge, waits };

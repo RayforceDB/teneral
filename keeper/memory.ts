@@ -53,11 +53,18 @@ function page(events: JournalEvent[], now: number): string[] {
   const asks = held.intentions.filter((i) => i.waits);
   if (todo.length > 0) {
     lines.push('', "Agenda, in the order a clock tick offers it (owed: taken on for someone; own: the agent's idea; yes: an idea you allowed):");
-    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin !== 'own' ? 'owed' : i.allowed === undefined ? 'own ' : 'yes '}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
+    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin !== 'own' ? 'owed' : i.allowed === undefined ? 'own ' : `yes (${i.allowedIn ?? '?'})`}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
   }
-  if (asks.length > 0) {
-    lines.push('', 'Waiting for your word. Answer the agent in the conversation; an idea it is not sure of is kept until you say yes or no:');
-    lines.push(...asks.map((i) => `  ${i.mark}  ${i.unsure === true ? 'idea    ' : 'question'}${i.put ? `  asked ${(i.putAt ?? '').slice(0, 10)}` : '  not yet asked'}  ${brief(i.text, 90)}`));
+  const mine = asks.filter((i) => i.to === undefined);
+  const others = asks.filter((i) => i.to !== undefined);
+  const asked = (i: (typeof asks)[number]): string => (i.put ? `asked ${(i.putAt ?? '').slice(0, 10)}` : 'not yet asked');
+  if (mine.length > 0) {
+    lines.push('', 'Waiting for your word. Answer the agent wherever you talk to it; an idea it is not sure of is kept until you say yes or no:');
+    lines.push(...mine.map((i) => `  ${i.mark}  ${i.unsure === true ? 'idea    ' : 'question'}  ${asked(i).padEnd(16)}  ${brief(i.text, 90)}`));
+  }
+  if (others.length > 0) {
+    lines.push('', 'Questions the agent has for others:');
+    lines.push(...others.map((i) => `  ${i.mark}  ${asked(i).padEnd(16)}  for ${brief(i.to!, 40)}: ${brief(i.text, 70)}`));
   }
   return [...lines, '', ...HOW];
 }

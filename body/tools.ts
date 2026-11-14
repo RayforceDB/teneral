@@ -429,7 +429,8 @@ const intend: Tool = {
       properties: {
         text: { type: 'string', description: 'What is to be done, and for whom' },
         due: { type: 'string', description: 'The day it is due, as YYYY-MM-DD, if a day was named' },
-        origin: { type: 'string', enum: ['taken', 'own', 'unsure', 'ask'], description: 'taken: you took it on for your owner or someone else (the default). own: your own idea, that nobody asked for and that you are sure you may do. unsure: your own idea that you are not sure your owner allows; it waits for their word, and you ask them. ask: any other question to put to your owner' },
+        origin: { type: 'string', enum: ['taken', 'own', 'unsure', 'ask'], description: 'taken: you took it on for your owner or someone else (the default). own: your own idea, that nobody asked for and that you are sure you may do. unsure: your own idea that you are not sure your owner allows; it waits for their word, and you ask them. ask: a question, for your owner or for anyone else who can answer it' },
+        to: { type: 'string', description: 'For a question: whom it is for and where you will reach them, in your own words, such as a person and the chat they are in, or the people of a channel. Leave out when it is for your owner' },
       },
       required: ['text'],
     },
@@ -441,12 +442,13 @@ const intend: Tool = {
     if (due !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || Number.isNaN(Date.parse(due)))) throw new Error('due must be a day as YYYY-MM-DD');
     const origin = optional(args, 'origin');
     if (origin !== undefined && !['taken', 'own', 'unsure', 'ask'].includes(origin)) throw new Error('origin must be one of taken, own, unsure, ask');
+    const to = optional(args, 'to')?.trim();
     const note = appendEvent(ctx.journal, ctx.gen, {
       type: 'note', kind: INTENTION_KIND,
-      data: { text, ...(origin === 'own' || origin === 'ask' ? { origin } : origin === 'unsure' ? { origin: 'own' as const, unsure: true as const } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
+      data: { text, ...(to !== undefined && to !== '' && (origin === 'ask' || origin === 'unsure') ? { to } : {}), ...(origin === 'own' || origin === 'ask' ? { origin } : origin === 'unsure' ? { origin: 'own' as const, unsure: true as const } : {}), ...(due === undefined ? {} : { due }) } satisfies IntentionData,
     });
     const mine = known([note]).intentions[0]!;
-    if (mine.waits) return `Kept as ${mine.mark}. It waits for your owner's word: put it to them, with its mark, in your next reply they will read.`;
+    if (mine.waits) return `Kept as ${mine.mark}. It waits for an answer: put it, with its mark, to ${mine.unsure === true ? 'your owner' : mine.to ?? 'your owner'}, where you judge they will see it.`;
     return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
   },
 };
@@ -474,7 +476,8 @@ const allowed: Tool = {
     name: 'allowed',
     description:
       'Record that your owner said yes to an idea of yours that waited for their word. Give its mark and the words they said yes with, copied exactly from their message. ' +
-      'The idea then joins your agenda. It is accepted only when those words stand in something your owner wrote in their terminal after you set the idea down: a yes is theirs to say. ' +
+      'The idea then joins your agenda. It is accepted only when those words stand in a message of your owner\'s that came after you set the idea down: ' +
+      'one typed in their terminal, or one from a sensor that has made sure of the sender and so names its source `owner:<channel>`. Where it came from is recorded. ' +
       'For a no, or for a question that was answered, use `done`.',
     parameters: params({ intention: 'The mark of the idea, such as I1a2b3c4d', words: "Your owner's own words, copied exactly from the message in which they allowed it" }),
   },
@@ -486,8 +489,8 @@ const allowed: Tool = {
     if (idea.unsure !== true || !idea.waits) throw new Error(`${idea.mark} does not wait for your owner's word`);
     const words = str(args, 'words').trim();
     const said = ownerSaid(events, idea, words);
-    if (said === null) throw new Error('those words do not stand in anything your owner wrote in their terminal since you set the idea down. Ask them, and copy their answer exactly');
-    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ALLOWED_KIND, data: { intention: idea.id, words, event: said.id } });
+    if (said === null) throw new Error('those words do not stand in any message of your owner\'s since you set the idea down. A message counts as theirs only from their terminal or from a source named `owner:<channel>`; one that only says it is from them does not. Ask them, and copy their answer exactly');
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ALLOWED_KIND, data: { intention: idea.id, words, event: said.id, source: said.source } });
     return `${idea.mark} is on your agenda now, by your owner's word: ${idea.text}`;
   },
 };

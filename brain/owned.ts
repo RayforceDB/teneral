@@ -16,6 +16,19 @@ import type { EventBody, JournalEvent } from './journal';
 // back. Taking a conversation back does not undo what was done in the world while it went on:
 // files that were changed stay changed, and a message that was sent stays sent.
 
+/**
+ * Whether a stimulus of this source is the owner's own word. It is a property of the source and
+ * of nothing else: no code asks whether something came from a terminal. The terminal is one such
+ * source, because only the owner types there. Any sensor may be another: one that has made sure
+ * of the sender names its source `owner:<channel>`, and from then on what arrives that way counts
+ * as the owner speaking, everywhere: in whose voice a memory is told, in what `recall` weighs, in
+ * what may allow an idea of the agent's own (brain/known.ts). A sensor gives that name only to a
+ * message whose sender the channel itself vouches for, and who is the one the owner said they are
+ * there; what a message says of its sender is never enough.
+ */
+export const OWNER_PREFIX = 'owner:';
+export const fromOwner = (source: unknown): boolean => source === 'terminal' || (typeof source === 'string' && source.startsWith(OWNER_PREFIX) && source.length > OWNER_PREFIX.length);
+
 export const PIN_KIND = 'memory.pin.v1';
 export const UNPIN_KIND = 'memory.unpin.v1';
 export const WITHDRAW_KIND = 'memory.withdraw.v1';

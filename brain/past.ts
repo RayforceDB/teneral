@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { readEvents, type JournalEvent } from './journal';
 import { episodes, type Episode } from './episodes';
-import { BACK_KIND, standing, wasSaid } from './owned';
+import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { openRay, type Ray } from './ray';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { remembered } from './remembered';
@@ -223,7 +223,7 @@ export const when = (ts: string): string => `${ts.slice(0, 16).replace('T', ' ')
 function speaker(e: JournalEvent): string {
   const r = e as { source?: unknown; name?: unknown; ok?: unknown };
   switch (e.type) {
-    case 'stimulus': return r.source === 'terminal' ? 'your owner' : `[${String(r.source)}]`;
+    case 'stimulus': return r.source === 'terminal' ? 'your owner' : fromOwner(r.source) ? `your owner [${String(r.source)}]` : `[${String(r.source)}]`;
     case 'assistant': return 'you';
     case 'tool.intent': return `you called ${String(r.name)}`;
     case 'tool.result': return r.ok === false ? 'the tool failed' : 'the tool returned';
