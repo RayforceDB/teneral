@@ -88,6 +88,10 @@ const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
+// A fresh individual never inherits this install's personal accounts or agenda. These integrations
+// are explicitly scoped to its workspace; the former parent-directory guesses are not a fallback.
+const zulipCredentialPath = process.env.TENERAL_ZULIP_CREDENTIALS_FILE ?? join(workspace, '.teneral', 'zulip.json');
+const mailConfigPath = process.env.TENERAL_MAIL_CONFIG_FILE ?? join(workspace, '.teneral', '.env');
 // Optional numeric Zulip user id, explicitly configured by the owner. Absent or invalid, no
 // Zulip sender may shorten provider retry backoff; ordinary conversation still works.
 const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
@@ -107,7 +111,7 @@ if (stoppedJobs.length > 0) console.error(`[jobs] stopped previous-generation gr
 process.on('exit', () => stopCurrentJobs(journal, gen));
 // One-time import only: after this the journal is the live agenda, and the JSON file is never rewritten.
 try {
-  const imported = importLegacyWork(journal, gen, join(ownerDir, '..', 'work.json'));
+  const imported = importLegacyWork(journal, gen, process.env.TENERAL_LEGACY_WORK_FILE ?? join(workspace, '.teneral', 'work.json'));
   if (imported > 0) console.error(`[work] imported ${imported} active commitments into the journal agenda`);
 } catch (err) {
   console.error(`[work] legacy agenda not imported: ${err instanceof Error ? err.message : String(err)}`);
@@ -251,13 +255,13 @@ const sensors: Sensor[] = [
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
   }),
-  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
+  zulip({ conversations: true, credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
   // Reactions require an event queue; the existing message poll has no such events.
   // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
   emit => {
     let timer: ReturnType<typeof setInterval> | undefined;
     const reactions = zulipReactionPoller({
-      credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')),
+      credentials: () => zulipCredentials(zulipCredentialPath),
       events: () => readEvents(journal),
       checkpoint: (cursor: ZulipQueueCursor) => {
         const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
@@ -272,7 +276,7 @@ const sensors: Sensor[] = [
     return () => { clearTimeout(start); if (timer) clearInterval(timer); reactions.stop(); };
   },
   mail({
-    key: () => mailKey(process.env, join(workspace, '..', '..', '.env')),
+    key: () => mailKey(process.env, mailConfigPath),
     events: () => readEvents(journal),
     quiet: id => appendEvent(journal, gen, { type: 'note', kind: 'mail.quiet.v1', data: id }),
   }),

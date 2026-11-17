@@ -1,9 +1,10 @@
 import { join } from 'node:path';
+import { dirname } from 'node:path';
 import type { Tool } from './tools';
 import { zulipCredentials } from './zulip';
 
 export async function zulipRequest(workspace: string, path: string, method = 'GET', fields?: Record<string, string>, send: typeof fetch = fetch): Promise<any> {
-  const c = zulipCredentials(join(workspace, '..', 'mica-zulip.json'));
+  const c = zulipCredentials(process.env.TENERAL_ZULIP_CREDENTIALS_FILE ?? join(workspace, '.teneral', 'zulip.json'));
   if (!c) throw new Error('Zulip is not configured');
   const url = new URL('/api/v1/' + path, c.site);
   if (method === 'GET' && fields) url.search = new URLSearchParams(fields).toString();

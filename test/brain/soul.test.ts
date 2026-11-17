@@ -95,3 +95,13 @@ test('birth is a short dialogue, not autonomous repository work', async () => {
   expect(prompt).toContain('stop for their answer');
   expect(prompt).toContain('No clock tick, sensor notification or general initiative rule overrides');
 });
+
+test('an empty installation does not inherit another individual\'s account or agenda', async () => {
+  const main = await Bun.file(new URL('../../body/main.ts', import.meta.url)).text();
+  expect(main).not.toContain("join(workspace, '..', 'mica-zulip.json')");
+  expect(main).not.toContain("join(ownerDir, '..', 'work.json')");
+  expect(main).toContain("process.env.TENERAL_ZULIP_CREDENTIALS_FILE");
+  expect(main).toContain("process.env.TENERAL_MAIL_CONFIG_FILE");
+  const tools = await Bun.file(new URL('../../body/zulip-tools.ts', import.meta.url)).text();
+  expect(tools).not.toContain("join(workspace, '..', 'mica-zulip.json')");
+});
