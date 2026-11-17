@@ -14,13 +14,19 @@ export async function zulipRequest(workspace: string, path: string, method = 'GE
   if (data.result !== 'success') throw new Error('Zulip request was not successful');
   return data;
 }
-export function replyRoute(message: any, self: number): Record<string, string> {
+export function replyRoute(message: any, self: number, group = false): Record<string, string> {
   if (message.type === 'stream' && Number.isSafeInteger(message.stream_id) && typeof message.subject === 'string') {
     return { type: 'stream', to: String(message.stream_id), topic: message.subject };
   }
   if (message.type === 'private' && Array.isArray(message.display_recipient)) {
     const ids = message.display_recipient.map((p: any) => p.id).filter((id: unknown) => Number.isSafeInteger(id) && id !== self);
-    if (ids.length) return { type: 'direct', to: JSON.stringify(ids) };
+    // A group DM is not a private one-to-one conversation. Never copy its whole recipient
+    // list for an ordinary reply: private owner work must not leak to the other participants.
+    // An explicit group=true is required when the reply really is for everyone in that DM.
+    if (ids.length === 1 || group) return { type: 'direct', to: JSON.stringify(ids) };
+    if (Number.isSafeInteger(message.sender_id) && message.sender_id > 0 && message.sender_id !== self) {
+      return { type: 'direct', to: JSON.stringify([message.sender_id]) };
+    }
   }
   throw new Error('Cannot safely route a reply to this message');
 }
@@ -29,15 +35,16 @@ function integer(value: unknown): number {
   return value;
 }
 export const zulipReply: Tool = {
-  spec: { name: 'zulip_reply', description: 'Reply in the same Zulip DM or stream topic as an existing message. Use for Zulip conversations, not console replies. Do not disclose private console history or secrets. A failed send may have succeeded remotely: check history before retrying.', parameters: {
-    type: 'object', properties: { message_id: { type: 'integer' }, content: { type: 'string' } }, required: ['message_id', 'content'],
+  spec: { name: 'zulip_reply', description: 'Reply to a Zulip DM or stream topic. In a group DM this replies only to its sender unless group=true is explicitly set; never assume other participants should see private work. Use for Zulip conversations, not console replies. Do not disclose private console history or secrets. A failed send may have succeeded remotely: check history before retrying.', parameters: {
+    type: 'object', properties: { message_id: { type: 'integer' }, content: { type: 'string' }, group: { type: 'boolean', description: 'Only for a group DM: deliberately reply to every participant instead of just its sender.' } }, required: ['message_id', 'content'],
   } },
   async run(args, ctx) {
     const a = args as Record<string, unknown>; const id = integer(a.message_id);
     if (typeof a.content !== 'string' || !a.content.trim() || a.content.length > 10000) throw new Error('Content must be 1–10000 characters');
     const original = await zulipRequest(ctx.workspace, `messages/${id}`, 'GET', { apply_markdown: 'false' });
     const me = await zulipRequest(ctx.workspace, 'users/me');
-    const route = replyRoute(original.message, me.user_id);
+    if (a.group !== undefined && typeof a.group !== 'boolean') throw new Error('group must be boolean');
+    const route = replyRoute(original.message, me.user_id, a.group === true);
     const result = await zulipRequest(ctx.workspace, 'messages', 'POST', { ...route, content: a.content });
     return `Zulip reply sent: message ${result.id}`;
   },
