@@ -70,10 +70,28 @@ test('fresh setups receive reusable follow-through guidance without personal not
   expect(system).toContain('Do not infer authorization from your own generated promises');
   expect(system).toContain('Do not invent tasks to stay busy');
   expect(system).toContain('It is empty');
+  expect(system).not.toContain('Mica');
+  expect(system).toContain('I am a teneral');
+  expect(system).toContain('it is not inherited from another individual');
 });
 
 test('fresh discovery guidance is bounded and does not confer owner permission', async () => {
  const prompt=await Bun.file(new URL('../../brain/prompt.md',import.meta.url)).text();
  const system=composeSystem(prompt,soulDir(),'/tmp/discovery-journal');
  for(const phrase of ['Advance queued commitments before discovering new work', 'not itself standing permission', 'at most three candidates', 'at most one bounded outcome', 'work.evidence', 'small exploration budget', 'do not retry blocked tasks without new evidence', 'do not create recursive tasks']) expect(system).toContain(phrase);
+});
+
+test('a fresh seed gets no personal identity, while its own soul may choose one', async () => {
+  const prompt = await Bun.file(new URL('../../brain/prompt.md', import.meta.url)).text();
+  expect(prompt).not.toMatch(/\bMica\b/);
+  expect(composeSystem(prompt, soulDir(), '/tmp/fresh')).not.toContain('Mica');
+  expect(composeSystem(prompt, soulDir({ 'SOUL.md': '# Wren\nI am Wren.' }), '/tmp/named')).toContain('I am Wren.');
+});
+
+test('birth is a short dialogue, not autonomous repository work', async () => {
+  const prompt = await Bun.file(new URL('../../brain/prompt.md', import.meta.url)).text();
+  expect(prompt).toContain('Birth is a conversation, not an autonomous work session');
+  expect(prompt).toContain('ask what my owner may call me');
+  expect(prompt).toContain('stop for their answer');
+  expect(prompt).toContain('No clock tick, sensor notification or general initiative rule overrides');
 });

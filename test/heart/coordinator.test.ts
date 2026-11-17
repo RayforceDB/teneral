@@ -50,7 +50,7 @@ test('an owner pulse is coalesced and does not call the model by itself', async 
   const journal = setup();
   const pulses: string[] = [];
   let remembered = 0;
-  const heart = new Heart({ events: () => readEvents(journal), emit: s => pulses.push(s.text), reflect: async () => { throw new Error('not requested'); }, remember: async () => { remembered++; return false; }, onError: () => {} });
+  const heart = new Heart({ born: () => true, events: () => readEvents(journal), emit: s => pulses.push(s.text), reflect: async () => { throw new Error('not requested'); }, remember: async () => { remembered++; return false; }, onError: () => {} });
   heart.requestPulse(); heart.requestPulse();
   expect(await heart.next()).toBe('pulse');
   expect(pulses).toHaveLength(1);
@@ -65,7 +65,7 @@ test('reflection asks for a pulse for a newly ready task, not a recursive reflec
   const state: HeartState = { look: false, pulse: false };
   afterTurn(state, readEvents(journal));
   expect(state.look).toBe(true);
-  const heart = new Heart({ events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {
+  const heart = new Heart({ born: () => true, events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {
     appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'Do the next safe step.', origin: 'own', episode: 'fixture' } });
   }, remember: async () => false, onError: () => {} });
   heart.completed(readEvents(journal));
@@ -79,7 +79,7 @@ test('an unchanged reflection gives one follow-up to existing waiting work, not 
   appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'Continue the repository work.' });
   appendEvent(journal, 'g', { type: 'assistant', text: 'I have recorded the current dependency.', toolCalls: [] });
   appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'Publish the verified work.', work: { status: 'waiting', next: 'Check whether the current review requirement has changed.', attempts: 0, resumeAt: 0 } } });
-  const heart = new Heart({ events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {}, remember: async () => false, onError: () => {} });
+  const heart = new Heart({ born: () => true, events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {}, remember: async () => false, onError: () => {} });
   heart.completed(readEvents(journal));
   expect(await heart.next()).toBe('reflect');
   expect(await heart.next()).toBe('turn');
@@ -88,4 +88,16 @@ test('an unchanged reflection gives one follow-up to existing waiting work, not 
   expect(pulse?.type === 'stimulus' && pulse.text.includes('do not retry an external action without checking its receipt or new evidence')).toBe(true);
   appendEvent(journal, 'g', { type: 'assistant', text: 'Nothing new yet.', toolCalls: [] });
   expect(await heart.next()).toBe('wait');
+});
+
+test('a fresh individual waits for its first dialogue instead of starting idle work', async () => {
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-birth-heart-')), 'journal.jsonl');
+  let reflected = 0;
+  const heart = new Heart({ events: () => readEvents(journal), born: () => false, emit: () => { throw new Error('no agenda before birth'); }, reflect: async () => { reflected++; }, remember: async () => { throw new Error('no memory work before birth'); }, onError: () => {} });
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'birth', text: 'Hello.' });
+  heart.requestPulse(); heart.completed(readEvents(journal));
+  expect(await heart.next()).toBe('turn');
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Hello. What may I call you?', toolCalls: [] });
+  expect(await heart.next()).toBe('wait');
+  expect(reflected).toBe(0);
 });

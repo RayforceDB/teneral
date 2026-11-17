@@ -38,6 +38,8 @@ export function agendaPulse(events: JournalEvent[], now = Date.now(), reportMs?:
 }
 export interface HeartDeps {
   events: () => JournalEvent[];
+  /** No idle work while the individual has not written its first soul and met its owner. */
+  born: () => boolean;
   emit: (s: Stimulus) => void;
   reflect: () => Promise<unknown>;
   remember: () => Promise<boolean>;
@@ -53,6 +55,9 @@ export class Heart {
   completed(events: JournalEvent[], enabled = true, from?: number): void { afterTurn(this.state, events, enabled, from); }
   async next(): Promise<Beat> {
     if (needsTurn(standing(this.d.events()))) return 'turn';
+    // An empty soul means the birth dialogue is still under way. Do not replace it with
+    // reflection, agenda discovery or autonomous work, even when this heart was already asked.
+    if (!this.d.born()) { this.state = { look: false, pulse: false }; return 'wait'; }
     if (this.state.pulse) {
       this.state.pulse = false;
       this.d.emit(agendaPulse(this.d.events(), this.d.now?.()));

@@ -352,6 +352,7 @@ async function rest(): Promise<boolean> {
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 const heart = new Heart({
   events: () => readEvents(journal),
+  born: () => clockMayTick(readEvents(journal), soulDir),
   emit,
   reflect: async () => {
     const woken = new AbortController();
