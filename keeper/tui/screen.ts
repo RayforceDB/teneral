@@ -137,12 +137,15 @@ export class Screen {
  * scrolls away into the terminal's own scrollback, where the terminal's scrollbar, selection,
  * copy and search work on it; under it a live region of a few rows is redrawn in place.
  *
- * Between two writes the terminal's cursor always rests, hidden, on the first column of the live
+ * Normally the terminal's cursor rests between writes, hidden, on the first column of the live
  * region's first row, and it is only ever moved relative to there. That one rule is what keeps
  * the screen clean: whatever the terminal does to the rows when its window changes size (cut
  * them, or wrap them again and move them), the cursor stays with the row it was on, so erasing
  * from the cursor down takes exactly the live region, old shape and all, and nothing above it.
  * The cursor the owner sees in the input is drawn, as a cell with its colours swapped.
+ * Paging is the exception: it names absolute rows, paints the conversation above the live region,
+ * and puts that region at the terminal's bottom, so wheel and page keys never move the bottom UI.
+ * New finished rows wait in the queue until the owner returns to the newest page or leaves.
  *
  * No row is ever written into the last column: a full row would leave the cursor waiting to
  * wrap, and terminals differ on what happens next.
@@ -150,8 +153,15 @@ export class Screen {
 export class Inline {
   /** The live rows as they were last written; null when the region has to be written whole. */
   private shown: string[] | null = null;
+  private live: Line[] = [];
   private cols = 0;
   private queue: Line[] = [];
+  /** Finished rows retained for paging, bounded independently of the journal's size. */
+  private history: Line[] = [];
+  /** First history row shown in the paging viewport; null while the terminal follows output. */
+  private anchor: number | null = null;
+  /** Last history row the owner has seen, while anchored; new rows wait below it. */
+  private seen = 0;
   private on = false;
 
   constructor(private readonly term: Term) {}
@@ -168,13 +178,55 @@ export class Inline {
   start(): void {
     this.on = true;
     this.shown = null;
-    // On a line of its own, whatever was printed before without a line break.
-    this.term.write('\x1b[?25l\x1b[?2004h\r');
+    // SGR wheel reports belong to the client while it runs; all other mouse events are left alone.
+    this.term.write('\x1b[?25l\x1b[?2004h\x1b[?1002h\x1b[?1006h\r');
   }
 
   /** Rows that are finished: printed above the live region with the next `paint`, in order, never again. */
   print(rows: Line[]): void {
+    this.history.push(...rows);
     this.queue.push(...rows);
+    const excess = Math.max(0, this.history.length - 20_000);
+    if (excess > 0) this.history.splice(0, excess);
+    if (this.anchor !== null) this.anchor = Math.max(0, this.anchor - excess);
+    this.seen = Math.max(0, this.seen - excess);
+  }
+
+  /** Page or wheel through only the rows above the live region. */
+  page(delta: number, wheel = false): boolean {
+    if (!this.on || delta === 0) return false;
+    const { rows } = this.term.size();
+    const room = Math.max(1, rows - Math.max(1, this.shown?.length ?? 0));
+    if (room < 2) return false;
+    const before = `${this.anchor}:${this.seen}`;
+    if (this.anchor === null) {
+      if (delta >= 0) return false;
+      this.anchor = Math.max(0, this.history.length - this.queue.length - room);
+      this.seen = this.history.length - this.queue.length;
+    }
+    const step = wheel ? 3 : room;
+    const top = Math.max(0, this.history.length - room);
+    this.anchor = Math.max(0, Math.min(top, this.anchor + delta * step));
+    this.seen = Math.max(0, Math.min(this.history.length, this.seen + delta * step));
+    if (delta > 0 && this.seen >= this.history.length - this.queue.length) this.resume();
+    if (before === `${this.anchor}:${this.seen}`) return false;
+    this.shown = null;
+    return true;
+  }
+
+  /** Put the next paint at the live boundary; queued rows still belong to native scrollback. */
+  private resume(): void {
+    const { rows } = this.term.size();
+    const room = Math.max(0, rows - (this.shown?.length ?? 0));
+    this.anchor = Math.max(0, this.history.length - this.queue.length - room);
+    this.seen = this.history.length - this.queue.length;
+    this.shown = null;
+  }
+
+  /** Back to the newest conversation, without discarding what is being typed or drawn. */
+  follow(): void {
+    if (this.anchor === null) return;
+    this.resume();
   }
 
   /** The live region is written whole with the next `paint`: after the window changed, or when asked to. */
@@ -186,11 +238,34 @@ export class Inline {
   paint(live: Line[]): void {
     if (!this.on) return;
     const { cols, rows } = this.term.size();
+    this.live = live;
     const depth = this.term.caps.depth;
     const max = Math.max(1, cols - 1);
     const next = live.slice(-Math.max(1, rows - 1)).map((row) => encode(row, max, depth));
     let out = '';
-    if (this.queue.length > 0 || this.shown === null || this.shown.length !== next.length || cols !== this.cols) {
+    if (this.anchor !== null) {
+      out += '\r';
+      const first = Math.max(0, rows - Math.max(1, next.length));
+      const room = Math.max(0, first);
+      const end = Math.min(this.history.length, Math.max(this.anchor + room, this.seen));
+      for (let i = 0; i < room; i++) {
+        const row = this.anchor + i < end ? this.history[this.anchor + i] : undefined;
+        out += `\x1b[${i + 1};1H${row === undefined ? '' : encode(row, max, depth)}\x1b[K`;
+      }
+      for (let i = 0; i < next.length; i++) out += `\x1b[${first + i + 1};1H${next[i]}\x1b[K`;
+      out += `\x1b[${first + 1};1H`;
+      if (this.seen >= this.history.length - this.queue.length) {
+        // Committed rows already have their native transcript position. Only rows received while
+        // anchored take the CRLF path; redraw the viewport afterward so those rows appear at once.
+        for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
+        this.queue = [];
+        this.anchor = null;
+        out += next.map((row) => `${row}\x1b[K`).join('\r\n');
+        out += '\x1b[J';
+        if (next.length > 1) out += `\x1b[${next.length - 1}A`;
+        out += '\r';
+      }
+    } else if (this.queue.length > 0 || this.shown === null || this.shown.length !== next.length || cols !== this.cols) {
       // From the first row of the region: the finished rows, then the region anew, then nothing below it.
       for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
       out += next.map((row) => `${row}\x1b[K`).join('\r\n');
@@ -214,9 +289,14 @@ export class Inline {
   /** Print what is queued, take the live region away and give the terminal back, its cursor under the last row printed. Safe to call twice. */
   stop(): void {
     if (!this.on) return;
+    if (this.anchor !== null) {
+      this.resume();
+      this.paint(this.live);
+    }
+    this.anchor = null;
     this.paint([]);
     this.on = false;
-    this.term.write('\x1b[0m\x1b[?2004l\x1b[?25h');
+    this.term.write('\x1b[0m\x1b[?1006l\x1b[?1002l\x1b[?2004l\x1b[?25h');
   }
 }
 

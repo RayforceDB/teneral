@@ -186,7 +186,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   expect(s.term.vt.all()).not.toMatch(/▸|Tab completes|\/generations/);
   expect(channel(s)).toEqual([]);
   expect(s.term.vt.alt).toBe(false);
-  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1006)).toBe(false);
+  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1002) || s.term.vt.modes.has(1006)).toBe(true);
 });
 
 test('Tab completes the chosen command, with a blank after it when something may follow; without a list Tab is what it was', () => {
