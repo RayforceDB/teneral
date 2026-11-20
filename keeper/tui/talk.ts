@@ -755,14 +755,20 @@ export class TalkScreen {
           { name: 'help', about: 'the keys and commands', run: '/help' },
         ],
       },
-      // Only while something runs: what the agent started in the background and left, so that "the tests are running" can be seen here.
-      ...(this.jobsRunning.length === 0 ? [] : [{
-        label: 'jobs', icon: 'jobs' as const, tone: 'accent' as const, note: `${this.jobsRunning.length} running`, hot: true,
-        items: (): MenuItem[] => [
-          ...this.jobsRunning.map((job) => ({ name: job.name, about: job.command.replace(/\s+/g, ' '), run: null })),
-          { name: 'when one ends', about: 'the agent is woken and told, as soon as no turn is running', run: null },
-        ],
-      }]),
+      // Only while something runs: what the agent started and left, a command in the background or a subagent, so that "the tests are running" can be seen here.
+      ...((): Action[] => {
+        const subagents = this.standing.subagents;
+        const running = this.jobsRunning.length + subagents.length;
+        if (running === 0) return [];
+        return [{
+          label: 'jobs', icon: 'jobs', tone: 'accent', note: `${running} running`, hot: true,
+          items: (): MenuItem[] => [
+            ...subagents.map((a) => ({ name: `subagent ${a.name}`, about: a.task, run: null })),
+            ...this.jobsRunning.map((job) => ({ name: job.name, about: job.command.replace(/\s+/g, ' '), run: null })),
+            { name: 'when one ends', about: 'the agent is woken and told, as soon as no turn is running', run: null },
+          ],
+        }];
+      })(),
     ];
   }
 
@@ -1262,7 +1268,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.subagents.map(a => `${a.name}:${a.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -1328,7 +1334,7 @@ export class TalkScreen {
       cols, rows, g,
       pending: laid,
       activity,
-      workers: s.workers,
+      subagents: s.subagents,
       edit: this.edit,
       inputFocused: this.bar === null,
       about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
