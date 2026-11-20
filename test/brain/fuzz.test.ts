@@ -248,6 +248,18 @@ function checkChat(messages: ReturnType<typeof buildMessages>): void {
 function checkIsTail(trimmed: ReturnType<typeof buildMessages>, whole: ReturnType<typeof buildMessages>): void {
   const kept = trimmed.slice(1);
   if (kept.length === 1 && (kept[0]!.content ?? '').startsWith('[context] The last exchange was too large')) return;
+  // The steps since the newest stimulus were themselves too many: the stimulus, a line saying so, and the latest steps, which are the end of the whole.
+  const gap = kept.findIndex((m) => m.role === 'user' && (m.content ?? '').startsWith('[context] You have taken more steps'));
+  if (gap !== -1) {
+    const steps = kept.slice(gap + 1);
+    const asked = whole[whole.findLastIndex((m) => m.role === 'user')]!;
+    const said = kept[gap - 1];
+    if (gap !== 1 || said?.role !== 'user' || JSON.stringify(said.images) !== JSON.stringify(asked.images)) throw new Error('the latest steps do not stand after the stimulus they were taken for');
+    if (JSON.stringify(said) !== JSON.stringify(asked) && !(said.content ?? '').includes('characters dropped here')) throw new Error('the stimulus before the latest steps is not the newest one');
+    if (steps.length === 0 || steps[0]!.role !== 'assistant') throw new Error('the latest steps do not begin with a reply');
+    if (JSON.stringify(steps) !== JSON.stringify(whole.slice(whole.length - steps.length))) throw new Error('the latest steps are not the end of the whole request');
+    return;
+  }
   const tail = whole.slice(whole.length - kept.length);
   const newest = kept.findLastIndex((m) => m.role === 'user');
   kept.forEach((m, i) => {

@@ -4,7 +4,7 @@ import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
-import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, quietReply } from './quiet';
+import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, SAME_REQUEST_REPLY, quietReply } from './quiet';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
@@ -153,6 +153,11 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   // Rounds in a row made of nothing but calls that do nothing (noOpCall). The second ends the turn.
   let idleRounds = 0;
+  // The request of the round before, and how many rounds in a row began with that same request.
+  // Every round adds to the journal, so the same request again means the agent is not being shown
+  // what it just did; it would do it again for as long as it is asked. The third ends the turn.
+  let lastRequest = '';
+  let sameRequests = 0;
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
     // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
@@ -166,8 +171,21 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     let halved = false;
     let reply: Reply;
     let streamed = false;
-    for (;;) {
+    for (let attempt = 0; ; attempt++) {
       const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars });
+      if (attempt === 0) {
+        const request = JSON.stringify(messages);
+        sameRequests = round > 0 && request === lastRequest ? sameRequests + 1 : 0;
+        lastRequest = request;
+        if (sameRequests >= 2) {
+          // As at the round limit: over something the model never saw, no finished reply is written, so that stays owed.
+          journal.refresh();
+          if (arrivedSince(journal.read(), shown)) return 'done';
+          appendEvent(d.journal, d.gen, { type: 'assistant', text: SAME_REQUEST_REPLY, toolCalls: [] });
+          d.onText?.(SAME_REQUEST_REPLY);
+          return 'done';
+        }
+      }
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; }, onTextDelta: delta => { if (delta !== '') { d.onDelta?.(delta); streamed = true; } } });

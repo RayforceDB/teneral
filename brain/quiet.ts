@@ -5,6 +5,8 @@ export const QUIET_REPLY = '[teneral: no reply]';
 export const ROUND_LIMIT_REPLY = '[round limit reached; waiting for the next stimulus]';
 // What ends a turn that went on in calls that do nothing (brain/loop.ts). Shown: unlike a quiet tick, nothing settled it.
 export const NO_OP_REPLY = '[stopped: only calls that do nothing; waiting for the next stimulus]';
+// What ends a turn whose request stopped changing (brain/loop.ts): the agent was not being shown its own last steps. Shown, for the owner to see.
+export const SAME_REQUEST_REPLY = '[stopped: the request stopped changing, so my last steps were not being shown to me; waiting for the next stimulus]';
 export const quietReply = (text: string): boolean => {
   const rest = text.trim();
   if (rest === '') return false;
