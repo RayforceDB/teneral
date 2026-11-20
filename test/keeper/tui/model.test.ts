@@ -64,16 +64,21 @@ test('thinking while a reply is owed, running <tool> while a call has no result,
   expect(word(...born, said('hi'), calling(), intent('c', 'ba\x1b[31msh\nmore', {}))).toBe('running bash more');
 });
 
-test('active subagents keep their tasks in status and clear on result or interruption', () => {
+test('subagents are in the status from the note that starts one to the note that ends it, across turns, and go with the generation', () => {
   const born = [started(), ready(), birth(), reply('I am here.')];
-  const single = after(...born, said('delegate'), intent('s1', 'subagent', { task: 'Review the request boundary' }));
-  expect(single.workers).toEqual([{ callId: 's1', label: 'worker', task: 'Review the request boundary' }]);
-  const batch = stand(single, intent('batch', 'subagents', { jobs: [{ label: 'api', task: 'Review the API' }, { label: 'recovery', task: 'Check restart recovery' }] }));
-  expect(batch.workers.map(w => [w.label, w.task])).toEqual([['worker', 'Review the request boundary'], ['api', 'Review the API'], ['recovery', 'Check restart recovery']]);
-  expect(stand(batch, result('s1', true, '{}')).workers.map(w => w.label)).toEqual(['api', 'recovery']);
-  expect(stand(stand(batch, result('s1', true, '{}')), result('batch', true, '{}')).workers).toEqual([]);
-  expect(stand(batch, ev({ type: 'turn.interrupted' })).workers).toEqual([]);
-  expect(stand(batch, started(B)).workers).toEqual([]);
+  const note = (name: string, state: string, task = `Do ${name}`) => ev({ type: 'note', kind: 'body.subagent.v1', data: { name, gen: A, task, dir: '/x', state } });
+  const one = after(...born, said('delegate'), note('api', 'running', 'Review the API'));
+  expect(one.subagents).toEqual([{ name: 'api', task: 'Review the API' }]);
+  const two = stand(one, note('recovery', 'running', 'Check restart\nrecovery'));
+  expect(two.subagents).toEqual([{ name: 'api', task: 'Review the API' }, { name: 'recovery', task: 'Check restart recovery' }]);
+  // It outlives the turn that started it, and an interruption of the agent's turn.
+  expect(stand(stand(two, reply('Both are running.')), ev({ type: 'turn.interrupted' })).subagents.map(a => a.name)).toEqual(['api', 'recovery']);
+  const ended = stand(two, note('api', 'ended'));
+  expect(ended.subagents.map(a => a.name)).toEqual(['recovery']);
+  expect(stand(ended, note('api', 'told')).subagents.map(a => a.name)).toEqual(['recovery']);
+  // A name used again is one subagent.
+  expect(stand(two, note('api', 'running', 'Review it again')).subagents).toContainEqual({ name: 'api', task: 'Review it again' });
+  expect(stand(two, started(B)).subagents).toEqual([]);
 });
 
 test('waiting for you: the last finished reply ended with a question mark, and nothing has arrived since', () => {

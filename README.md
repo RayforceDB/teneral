@@ -392,11 +392,13 @@ To start over as a new individual, run `./one down`, delete `soul/`, `memory/`, 
 
 ### Subagents
 
-The agent can start workers of its own, with its `subagent` tool: each does one task beside the agent's own turns and outlives the turn that started it. A subagent has the agent's hands (`read`, `write`, `edit`, `look`, `bash`) and nothing else: it cannot mutate, speak in a chat, touch the agent's memory or agenda, or start a subagent of its own. It knows only the task the agent wrote for it.
+The agent can start workers of its own with its `subagent` tool. Each does one task beside the agent's own turns and outlives the turn that started it. A subagent has the agent's hands (`read`, `write`, `edit`, `look`, `bash`) and nothing else: it cannot mutate, speak in a chat, touch the agent's memory or agenda, or start a subagent of its own. It knows only the task the agent wrote for it.
 
-It never works in the agent's workspace. Each gets a copy of it as it stands, uncommitted work included, and what it changed comes back as a branch (`child/<name>-<id>`) holding one commit, which the agent looks at and takes with `git cherry-pick` or leaves. So two subagents, or a subagent and the agent, cannot write over each other.
+It never works in the agent's workspace. Each gets a copy of it as it stands, uncommitted work included, and what it changed comes back as the branch `subagent/<name>`, holding one commit, which the agent looks at and takes with `git cherry-pick` or leaves. Two subagents, or a subagent and the agent, cannot write over each other, and a name is not used again while the branch of an earlier one still stands.
 
-When one ends the agent is woken and told, with its report and the branch; the report is a worker's word, not yours, and the agent is told so. One that ran out of steps, time or tokens is asked once more for what it had, so it does not come back with nothing; one that was running when the body restarted is closed as cut off, with its last words. Its whole journal stays in `.teneral/children/<name>-<id>/journal.jsonl`. While any runs, the `jobs` action under the footer of `./one talk` names them. The limits are settings: `TENERAL_SUBAGENTS`, `TENERAL_SUBAGENT_STEPS`, `TENERAL_SUBAGENT_MINUTES`, `TENERAL_SUBAGENT_TOKENS`, and `TENERAL_SUBAGENT_MODEL` for a cheaper model.
+When one ends the agent is woken and told, with its report and the branch. The report is a worker's word, not yours, and the agent is told so. One that ran out of steps, time or tokens is asked once more for what it had, so none comes back with nothing; one that was running when the body restarted is closed as cut off, with its last words. Its whole journal stays in `.teneral/subagents/<name>-<id>/journal.jsonl`.
+
+In `./one talk` each running subagent has a row over the input box, with its name and its task, and the `jobs` action under the footer counts them with the commands the agent left running. The limits are settings: `TENERAL_SUBAGENTS`, `TENERAL_SUBAGENT_STEPS`, `TENERAL_SUBAGENT_MINUTES`, `TENERAL_SUBAGENT_TOKENS`, and `TENERAL_SUBAGENT_MODEL` for a cheaper model.
 
 ### Changing the model while it runs
 

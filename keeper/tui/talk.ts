@@ -13,7 +13,6 @@ import { configured } from '../../stem/configuration';
 import { health, healthBadge } from '../../brain/health';
 import { known } from '../../brain/known';
 import { JOB_KIND, jobHistory, jobStatus, type JobRecord } from '../../body/jobs';
-import { CHILD_KIND, childHistory, type ChildRecord } from '../../body/children';
 import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
@@ -259,8 +258,6 @@ export class TalkScreen {
   /** The jobs the agent started and left running, by name, as the journal read here records them; and those of them that run now. */
   private jobs = new Map<string, JobRecord>();
   private jobsRunning: JobRecord[] = [];
-  /** The agent's subagents, by name, as the journal read here records them. One is running until its note says it ended. */
-  private children = new Map<string, ChildRecord>();
   private bar: number | null = null;
   /** The menu an action opened: what can be done there, and which of it the keys are on. */
   private menu: { title: string; items: MenuItem[]; chosen: number } | null = null;
@@ -484,10 +481,6 @@ export class TalkScreen {
 
   private take(e: JournalEvent, live: boolean): void {
     this.transcript.add(e, this.standing, live);
-    if (e.type === 'note' && e.kind === CHILD_KIND) {
-      for (const [name, child] of childHistory([e])) this.children.set(name, child);
-      this.dirty = true;
-    }
     if (e.type === 'note' && e.kind === JOB_KIND) {
       for (const [name, job] of jobHistory([e])) this.jobs.set(name, job);
       this.readJobs();
@@ -764,13 +757,13 @@ export class TalkScreen {
       },
       // Only while something runs: what the agent started and left, a command in the background or a subagent, so that "the tests are running" can be seen here.
       ...((): Action[] => {
-        const subagents = [...this.children.values()].filter((child) => child.state === 'running');
+        const subagents = this.standing.subagents;
         const running = this.jobsRunning.length + subagents.length;
         if (running === 0) return [];
         return [{
           label: 'jobs', icon: 'jobs', tone: 'accent', note: `${running} running`, hot: true,
           items: (): MenuItem[] => [
-            ...subagents.map((child) => ({ name: `subagent ${child.name}`, about: child.task.replace(/\s+/g, ' '), run: null })),
+            ...subagents.map((a) => ({ name: `subagent ${a.name}`, about: a.task, run: null })),
             ...this.jobsRunning.map((job) => ({ name: job.name, about: job.command.replace(/\s+/g, ' '), run: null })),
             { name: 'when one ends', about: 'the agent is woken and told, as soon as no turn is running', run: null },
           ],
@@ -1275,7 +1268,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.subagents.map(a => `${a.name}:${a.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -1341,7 +1334,7 @@ export class TalkScreen {
       cols, rows, g,
       pending: laid,
       activity,
-      workers: s.workers,
+      subagents: s.subagents,
       edit: this.edit,
       inputFocused: this.bar === null,
       about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],

@@ -320,8 +320,8 @@ export interface Live {
   edit: Edit;
   /** Whether the input owns the visible cursor. False while an action on the bar is selected. */
   inputFocused?: boolean;
-  /** Active delegated workers: one row each, while their tool calls remain open. */
-  workers: { label: string; task: string }[];
+  /** The agent's subagents that run now: one row each, with its task. */
+  subagents: { name: string; task: string }[];
   /** The footer's left side, the most needed first: the model, the directory, the generation. */
   about: string[];
   /** The footer's right side: one thing worth knowing, and how full the model's context is. Either may be empty. */
@@ -592,8 +592,8 @@ export function liveRows(v: Live): Line[] {
   let blank = menu === null;
   let first = true;
   let activity = menu !== null ? null : v.activity;
-  let workers = menu !== null ? [] : v.workers.map(w => clip([
-    { text: `  ${g.quiet} `, style: FAINT }, { text: `${w.label}: `, style: DIM }, { text: w.task, style: FAINT },
+  let subagents = menu !== null ? [] : v.subagents.map(a => clip([
+    { text: `  ${g.quiet} `, style: FAINT }, { text: `${a.name}: `, style: DIM }, { text: a.task, style: FAINT },
   ], max, { text: g.ellipsis, style: FAINT }));
   let framed = true;
   let chipped = true;
@@ -602,14 +602,14 @@ export function liveRows(v: Live): Line[] {
     ...pending,
     ...(pending.length > 0 && blank ? [[]] : []),
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
-    ...workers,
+    ...subagents,
     ...(menu !== null ? [] : framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
     ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : menu !== null ? menuRows(menu, max, shown, g, menuFramed) : first ? footer : []),
     ...bar,
   ];
   const fits = (): boolean => build().length <= room;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
-  while (!fits() && workers.length > 0) workers = workers.slice(1);
+  while (!fits() && subagents.length > 0) subagents = subagents.slice(1);
   // The row under an open menu says what the keys do there, so it stays; the menu gives up rows, then its frame.
   if (!fits() && menu === null) bar = [];
   if (!fits()) blank = false;
