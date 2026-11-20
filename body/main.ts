@@ -15,14 +15,14 @@ import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { appendEvent, readEvents } from '../brain/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
 import { DEFAULT_BUDGET, needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
 import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
-import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
+import { TIMER_MAX_MS, clockMayTick, clockTick, inbox, owner, ownerStimulus, terminal, tickAt, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
@@ -268,25 +268,25 @@ function settleWords(): void {
  * go out, so it is retired here and the agent is told, to make again what is still wanted. The
  * owner is asked nothing and sees only offers that can go out.
  */
-const staleOffers: Sensor = (emit) => {
-  const look = (): void => {
-    try {
-      const install = speciesInstall(repoRoot(import.meta.dir));
-      // Hear where the species stands: the owner's screen says what it brings (/update) from this, and
-      // an offer is stale against this. A fetch only moves the remote's own refs; nothing is merged.
-      const species = speciesRef(workspace, process.env.TENERAL_UPSTREAM);
-      if (!('problem' in species) && species.remote) gitRemote(install.root, install.auth, ['fetch', '--quiet', species.remote.name, species.remote.branch]);
-      const gone = retireStale(install);
-      if (gone.length > 0) emit({ source: 'species', text: retiredText(gone) });
-    } catch { /* no install around this body, or no species known here: nothing to retire */ }
-  };
-  const first = setTimeout(look, 60_000);
-  const timer = setInterval(look, 10 * 60_000);
-  return () => { clearTimeout(first); clearInterval(timer); };
-};
+const OFFERS_FIRST_MS = 60_000;
+const OFFERS_EVERY_MS = 10 * 60_000;
+let offersLookAt = Date.now() + OFFERS_FIRST_MS;
+/** That look, when its time has come; what the agent is told when an offer was retired, or null. The heart asks (heart/coordinator.ts). */
+function staleOffers(now: number): Stimulus | null {
+  if (now < offersLookAt) return null;
+  offersLookAt = now + OFFERS_EVERY_MS;
+  try {
+    const install = speciesInstall(repoRoot(import.meta.dir));
+    // Hear where the species stands: the owner's screen says what it brings (/update) from this, and
+    // an offer is stale against this. A fetch only moves the remote's own refs; nothing is merged.
+    const species = speciesRef(workspace, process.env.TENERAL_UPSTREAM);
+    if (!('problem' in species) && species.remote) gitRemote(install.root, install.auth, ['fetch', '--quiet', species.remote.name, species.remote.branch]);
+    const gone = retireStale(install);
+    return gone.length > 0 ? { source: 'species', text: retiredText(gone) } : null;
+  } catch { return null; /* no install around this body, or no species known here: nothing to retire */ }
+}
 
 const sensors: Sensor[] = [
-  staleOffers,
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => {
     quitting = true;
@@ -297,29 +297,6 @@ const sensors: Sensor[] = [
   }),
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
-  // Heartbeat and /heart share the same pulse construction; only the owner command is manual.
-  clock(
-    heartbeatMinutes * 60_000,
-    () => {
-      const events = journalNow();
-      // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
-      if (!clockMayTick(events, soulDir) || (ownTokensDay !== null && ownSpend(events, Date.now()) >= ownTokensDay)) return false;
-      // Time of its own is time at rest: no tick while the owner is in conversation, none when the
-      // agenda holds nothing that can be acted on now, and fewer when the last ones came to nothing.
-      const current = standing(events), now = Date.now();
-      return restIn(current, now, restMs) === 0 && tickDue(current, now, heartbeatMinutes * 60_000)
-        && worthATick(known(current), now, reportAsk(current, now, reportHours * 3_600_000));
-    },
-    () => {
-      const events = journalNow(), now = Date.now();
-      const text = agendaFor(events, now, reportHours * 3_600_000);
-      // What waits and was offered for a look is not offered again before a wait that doubles.
-      for (const item of followUps(known(standing(events)), now).slice(0, 5)) {
-        if (item.work !== undefined) appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: item.id, work: lookedAt(item.work, now) } });
-      }
-      return text;
-    },
-  ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
   ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
     url: process.env.TENERAL_RAYBOARD_URL,
@@ -414,7 +391,8 @@ async function turn(): Promise<{ error: unknown } | null> {
 /** Sleeps until a sensor emits or the agent is told to quit, or for `ms` when given. */
 function idle(ms?: number): Promise<void> {
   return new Promise<void>((resolve) => {
-    const timer = ms === undefined ? undefined : setTimeout(resolve, ms);
+    // A delay longer than a timer holds would fire at once.
+    const timer = ms === undefined ? undefined : setTimeout(resolve, Math.min(ms, TIMER_MAX_MS));
     wake = () => { clearTimeout(timer); resolve(); };
     idleWake = wake;
   }).then(() => { wake = null; idleWake = null; });
@@ -489,6 +467,32 @@ async function rest(): Promise<boolean> {
 
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+/** When this body started: the clock counts from here until it has given a tick of its own. */
+const startedAt = Date.now();
+const heartbeatMs = heartbeatMinutes * 60_000;
+/** When the next tick of the clock is due; undefined with no clock. */
+function nextTickAt(events: JournalEvent[]): number | undefined {
+  const last = events.findLast((e) => e.type === 'stimulus' && e.source === 'clock');
+  return tickAt(startedAt, last === undefined ? undefined : Date.parse(last.ts), heartbeatMs);
+}
+/** Whether time of its own may be given now. Heartbeat and /heart share the same pulse construction; only the owner command is manual. */
+function mayTick(events: JournalEvent[], now: number): boolean {
+  // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
+  if (!clockMayTick(events, soulDir) || (ownTokensDay !== null && ownSpend(events, now) >= ownTokensDay)) return false;
+  // Time of its own is time at rest: no tick while the owner is in conversation, none when the
+  // agenda holds nothing that can be acted on now, and fewer when the last ones came to nothing.
+  const current = standing(events);
+  return restIn(current, now, restMs) === 0 && tickDue(current, now, heartbeatMs)
+    && worthATick(known(current), now, reportAsk(current, now, reportHours * 3_600_000));
+}
+/** What a tick offers; what waits and is offered for a look is not offered again before a wait that doubles. */
+function tickAgenda(events: JournalEvent[], now: number): string {
+  const text = agendaFor(events, now, reportHours * 3_600_000);
+  for (const item of followUps(known(standing(events)), now).slice(0, 5)) {
+    if (item.work !== undefined) appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: item.id, work: lookedAt(item.work, now) } });
+  }
+  return text;
+}
 /** The length of the journal when the store was last written out before a sleep. */
 let tidiedAt = -1;
 /** How often a job the agent left running is looked at, while there is one: its end sends no signal of its own. */
@@ -511,16 +515,26 @@ const heart = new Heart({
   remember: rest,
   // What the agent waits for: a job it left running, then its own work that has come due. An owner's interruption holds both until something new arrives.
   arrived: () => {
-    const events = journalNow();
-    if (quitting || heldByInterrupt(events)) return null;
-    return endedJob(journal, gen, events) ?? dueWork(journal, gen, Date.now(), events);
+    if (quitting) return null;
+    const events = journalNow(), now = Date.now();
+    const own = heldByInterrupt(events) ? null : endedJob(journal, gen, events) ?? dueWork(journal, gen, now, events);
+    // And the species, heard from now and then: an offer it has moved past is retired, and the agent told.
+    return own ?? staleOffers(now);
   },
   nextLook: () => {
-    const events = journalNow();
-    if (heldByInterrupt(events)) return undefined;
-    const due = workDueAt(events);
-    const times = [...(due === undefined ? [] : [due - Date.now()]), ...(jobsLeftRunning(events, gen) ? [JOB_LOOK_MS] : [])];
-    return times.length === 0 ? undefined : Math.min(...times);
+    const events = journalNow(), now = Date.now();
+    const due = heldByInterrupt(events) ? undefined : workDueAt(events);
+    const job = !heldByInterrupt(events) && jobsLeftRunning(events, gen);
+    return Math.min(offersLookAt - now, ...(due === undefined ? [] : [due - now]), ...(job ? [JOB_LOOK_MS] : []));
+  },
+  // The clock: time of the agent's own, offered at rest when a tick is due and there is something to offer.
+  tick: () => {
+    const events = journalNow(), now = Date.now();
+    return clockTick(now, nextTickAt(events), () => mayTick(events, now), () => tickAgenda(events, now));
+  },
+  nextTick: () => {
+    const at = nextTickAt(journalNow());
+    return at === undefined ? undefined : at - Date.now();
   },
   backlog: () => memoryHealth(standing(journalNow())).waiting,
   restMs,

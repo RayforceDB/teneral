@@ -17,6 +17,10 @@ import { clockText, type Stimulus } from '../body/sensors';
 // asks whether one has come (`arrived`) after every turn and at every wake, and says how long the
 // body may sleep before one can (`waitFor`). No sensor keeps a timer of its own for any of it.
 //
+// The clock is here as well: a tick, which offers the agenda as time of the agent's own, is one
+// more thing the heart chooses at rest when it is due (`tick`). So every turn the agent begins
+// without being spoken to is begun in this file.
+//
 // Everything else the agent does for itself waits for rest: forming memories, making them into
 // wider ones, looking ahead, and the clock's ticks that offer time of its own. Rest begins when
 // the owner has said nothing for a while. Until then nothing of the agent's own stands between
@@ -32,6 +36,8 @@ export const REST_MINUTES = 10;
 const BACKLOG = 4;
 /** Never asked again sooner than this: a time already past that nothing takes up must not spin the body. */
 const LOOK_FLOOR_MS = 1000;
+/** How long before a tick that was due and not given is asked for again. */
+const TICK_AGAIN_MS = 60_000;
 /** The agent's own tools for its agenda: a turn that used one has kept its own account. */
 const AGENDA_TOOLS = new Set(['work', 'intend', 'done', 'allowed']);
 
@@ -101,6 +107,13 @@ export interface HeartDeps {
   arrived?: () => Stimulus | null;
   /** Milliseconds until something it waits for may have come; undefined when it waits for nothing with a time. */
   nextLook?: () => number | undefined;
+  /**
+   * A tick of the clock, with the agenda: time of the agent's own, when one is due and the caller's
+   * own conditions allow it; null otherwise. Asked only at rest.
+   */
+  tick?: () => Stimulus | null;
+  /** Milliseconds until the next tick is due, 0 or less when one is overdue; undefined with no clock. */
+  nextTick?: () => number | undefined;
   now?: () => number;
   /** Milliseconds of the owner's silence after which rest begins. */
   restMs?: number;
@@ -123,7 +136,14 @@ export class Heart {
     const rest = this.restIn();
     let look: number | undefined;
     try { look = this.d.nextLook?.(); } catch { look = undefined; }
-    const times = [...(rest > 0 ? [rest + 1000] : []), ...(look === undefined ? [] : [Math.max(LOOK_FLOOR_MS, look)])];
+    let tick: number | undefined;
+    try { tick = this.d.nextTick?.(); } catch { tick = undefined; }
+    const times = [
+      ...(rest > 0 ? [rest + 1000] : []),
+      ...(look === undefined ? [] : [Math.max(LOOK_FLOOR_MS, look)]),
+      // A tick that is overdue and still not given is held by something a new arrival or the passing of time changes: asked again in a while, not at once.
+      ...(tick === undefined ? [] : [tick > 0 ? tick : TICK_AGAIN_MS]),
+    ];
     return times.length === 0 ? undefined : Math.min(...times);
   }
   async next(): Promise<Beat> {
@@ -149,6 +169,13 @@ export class Heart {
       if (come !== null) { this.d.emit(come); return 'wake'; }
     } catch (error) { this.d.onError(error); }
     if (this.restIn() > 0 && (this.d.backlog?.() ?? 0) < BACKLOG) return 'wait';
+    // At rest, time of its own comes before the work of memory, as a tick always could: one is offered when it is due.
+    if (this.restIn() === 0) {
+      try {
+        const tick = this.d.tick?.() ?? null;
+        if (tick !== null) { this.d.emit(tick); return 'pulse'; }
+      } catch (error) { this.d.onError(error); }
+    }
     const before = standing(this.d.events());
     const had = pulseNeeded(known(before), this.now()) || followUps(known(before), this.now()).length > 0;
     if (!(await this.d.remember())) return 'wait';

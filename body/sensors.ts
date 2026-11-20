@@ -42,7 +42,7 @@ export function terminal(lines: AsyncIterable<string>, onQuit: () => void): Sens
 }
 
 /** The longest delay a timer holds; a longer one fires at once. About 24 days. */
-const TIMER_MAX_MS = 2 ** 31 - 1;
+export const TIMER_MAX_MS = 2 ** 31 - 1;
 
 /**
  * Whether a tick may be given now. Not before the soul holds a file: until then the agent is in the
@@ -75,28 +75,32 @@ export function routineClock(text: string): boolean {
 }
 
 /**
- * A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off.
- * `mayTick` is asked before each one; body/main.ts passes `clockMayTick` over the journal and the soul.
- * `agenda` says what the agent means to do, in order (brain/agenda.ts): a tick offers it, and that is where
- * the agent's initiative comes from.
+ * When the next tick of the clock is due: `intervalMs` after the last one, or after this body
+ * started when it has given none. Undefined when there is no clock: 0, or anything that is not a
+ * positive number (NaN, from a mistyped setting, must also mean off).
  */
-export function clock(intervalMs: number, mayTick: () => boolean = () => true, agenda: () => string = () => NO_AGENDA): Sensor {
-  return (emit) => {
-    // Not `<= 0`: NaN, from a mistyped setting, must also mean off. A timer given NaN fires without pause.
-    if (!(intervalMs > 0)) return () => {};
-    const timer = setInterval(() => {
-      // This runs in a timer, where anything thrown ends the process. No answer means no tick.
-      let todo = NO_AGENDA;
-      try {
-        if (!mayTick()) return;
-        todo = agenda();
-      } catch {
-        return;
-      }
-      emit({ source: 'clock', text: `${clockText(new Date())} ${todo}` });
-    }, Math.min(intervalMs, TIMER_MAX_MS));
-    return () => clearInterval(timer);
-  };
+export function tickAt(startedAt: number, lastTick: number | undefined, intervalMs: number): number | undefined {
+  if (!(intervalMs > 0)) return undefined;
+  return Math.max(startedAt, lastTick ?? 0) + intervalMs;
+}
+
+/**
+ * A tick of the clock, so the agent gets time of its own; null when none is due at `now` or
+ * `mayTick` says no. It is the heart that asks, at rest (heart/coordinator.ts): no timer gives
+ * ticks by itself. body/main.ts passes `clockMayTick` over the journal and the soul. `agenda` says
+ * what the agent means to do, in order (brain/agenda.ts): a tick offers it, and that is where the
+ * agent's initiative comes from. A check that throws means no tick.
+ */
+export function clockTick(now: number, at: number | undefined, mayTick: () => boolean = () => true, agenda: () => string = () => NO_AGENDA): Stimulus | null {
+  if (at === undefined || now < at) return null;
+  let todo = NO_AGENDA;
+  try {
+    if (!mayTick()) return null;
+    todo = agenda();
+  } catch {
+    return null;
+  }
+  return { source: 'clock', text: `${clockText(new Date(now))} ${todo}` };
 }
 
 /** Messages other agents and programs dropped into this agent's inbox directory. */
