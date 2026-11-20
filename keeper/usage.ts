@@ -5,6 +5,7 @@ import type { JournalEvent } from '../brain/journal';
 import { known } from '../brain/known';
 import { health } from '../brain/health';
 import { rate } from '../brain/exam';
+import { SUBAGENT_KIND } from '../brain/agenda';
 
 export interface Spent {
   requests: number;
@@ -25,6 +26,8 @@ export const share = (s: Spent): string => (s.input > 0 ? `${Math.round((s.cache
 export const REMEMBERING = 'remembering';
 /** The requests in which the agent looks over what it is doing and sets down its agenda (brain/agenda.ts). */
 export const LOOKING_AHEAD = 'looking ahead';
+/** And for what the agent's subagents cost. */
+export const SUBAGENTS = 'subagents';
 
 export interface UsageReport {
   /** By span of time, the widest last. */
@@ -65,8 +68,8 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
   ];
   const sources = new Map<string, Spent>();
   let source = 'the start';
-  const add = (s: Spent, input: number, cached: number, output: number): void => {
-    s.requests += 1;
+  const add = (s: Spent, input: number, cached: number, output: number, requests = 1): void => {
+    s.requests += requests;
     s.input += input;
     s.cached += Math.min(cached, input);
     s.output += output;
@@ -79,21 +82,24 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
     }
     // A reply carries what its request cost. So does a memory (brain/sleep.ts), whose request is no part of any turn.
     const memory = e.type === 'note' && typeof f.kind === 'string' && f.kind.startsWith('memory.') && typeof f.data === 'object' && f.data !== null;
-    const told = memory ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
+    // And a subagent (body/subagents.ts): the note of its end carries all that its requests cost, which no turn of the agent's shows.
+    const subagent = e.type === 'note' && f.kind === SUBAGENT_KIND && typeof f.data === 'object' && f.data !== null && (f.data as Record<string, unknown>).state === 'ended';
+    const told = memory || subagent ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
     if (typeof told !== 'object' || told === null) continue;
     const u = told as Record<string, unknown>;
     const input = count(u.input);
     const output = count(u.output);
     const cached = count(u.cached);
+    const requests = subagent ? Math.max(1, count(u.requests)) : 1;
     const at = Date.parse(typeof f.ts === 'string' ? f.ts : '');
     for (const span of spans) {
       const inSpan = Number.isNaN(span.from) ? generation !== null && f.gen === generation : Number.isFinite(at) ? at >= span.from : span.from === -Infinity;
-      if (inSpan) add(span.spent, input, cached, output);
+      if (inSpan) add(span.spent, input, cached, output, requests);
     }
     if (Number.isFinite(at) && at >= now - 24 * HOUR) {
-      const name = memory ? (f.kind === 'memory.reflection.v1' ? LOOKING_AHEAD : REMEMBERING) : source;
+      const name = subagent ? SUBAGENTS : memory ? (f.kind === 'memory.reflection.v1' ? LOOKING_AHEAD : REMEMBERING) : source;
       if (!sources.has(name)) sources.set(name, NONE());
-      add(sources.get(name)!, input, cached, output);
+      add(sources.get(name)!, input, cached, output, requests);
     }
   }
   return {

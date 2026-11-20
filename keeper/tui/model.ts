@@ -164,11 +164,15 @@ export function stand(s: Standing, e: JournalEvent): Standing {
       return { ...next, trouble: null, tool: null, asked: false };
     case 'note': {
       if (f.kind === SUBAGENT_KIND && typeof f.data === 'object' && f.data !== null) {
-        // Running until its note says it ended; it outlives the turn that started it.
+        // There from the note that starts it, or sets it waiting, to the note that ends it; it outlives the turn that started it.
         const d = f.data as Record<string, unknown>;
         const name = cut(flat(clean(asText(d.name))), 32);
         const others = s.subagents.filter((a) => a.name !== name);
-        return { ...next, subagents: d.state === 'running' && name !== '' ? [...others, { name, task: cut(flat(clean(asText(d.task))), 200) }] : others };
+        if (name === '' || (d.state !== 'running' && d.state !== 'queued')) return { ...next, subagents: others };
+        const task = cut(flat(clean(asText(d.task))), 200);
+        // One that waits for a place keeps its row where it stood when it starts.
+        const row = { name, task: d.state === 'queued' ? `(waits for a place) ${task}` : task };
+        return { ...next, subagents: s.subagents.some((a) => a.name === name) ? s.subagents.map((a) => (a.name === name ? row : a)) : [...others, row] };
       }
       if (f.kind !== 'turn.failed' || typeof f.data !== 'object' || f.data === null) return next;
       const d = f.data as Record<string, unknown>;

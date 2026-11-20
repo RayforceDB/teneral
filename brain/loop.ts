@@ -23,6 +23,8 @@ export interface TurnDeps {
   /** Called with a tool's name just before it runs. */
   onTool?: (name: string) => void;
   maxRounds?: number;
+  /** Who stopped the turn when `signal` aborts, as the results of the calls it cut read. Without it, the owner: only they interrupt the agent's own turns. */
+  stoppedBy?: { cut: string; notRun: string };
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
   /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
@@ -269,7 +271,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       }
       if (d.signal?.aborted) {
         // The owner interrupted before this call began. As above: no intent, and a result all the same.
-        appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok: false, output: NOT_RUN_FOR_OWNER });
+        appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok: false, output: d.stoppedBy?.notRun ?? NOT_RUN_FOR_OWNER });
         continue;
       }
       // The intent goes to disk first, so a crash mid-tool is told apart from one before it.
@@ -303,7 +305,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       // Interrupted while it ran: the result says so first, whatever the tool made of being stopped.
       if (d.signal?.aborted) {
         ok = false;
-        output = `${CUT_BY_OWNER}\n${output}`;
+        output = `${d.stoppedBy?.cut ?? CUT_BY_OWNER}\n${output}`;
       }
       // Well-formed, too: half of a character pair in the journal would go into every later request.
       appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok, output: output.toWellFormed() });

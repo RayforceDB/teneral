@@ -151,6 +151,9 @@ export function initiativeText(m: Initiative): string {
   return parts.join('; ');
 }
 
+/** The notes of a subagent's life in the agent's journal (body/subagents.ts): queued, running, ended, told. */
+export const SUBAGENT_KIND = 'body.subagent.v1';
+
 /**
  * What the turns woken by a clock tick spent in the day ending at `now`, in tokens read and written:
  * the cost of the agent's time of its own, which its owner may cap (TENERAL_OWN_TOKENS_DAY).
@@ -158,9 +161,17 @@ export function initiativeText(m: Initiative): string {
 export function ownSpend(events: JournalEvent[], now: number): number {
   let own = false;
   let spent = 0;
+  // Subagents started in time of its own: what they cost is its own time's cost too, counted when they end.
+  const started = new Set<string>();
   for (const e of events) {
     if (e.type === 'stimulus') own = e.source === 'clock';
     else if (own && e.type === 'assistant' && e.usage !== undefined && Date.parse(e.ts) >= now - DAY_MS) spent += (e.usage.input ?? 0) + (e.usage.output ?? 0);
+    else if (e.type === 'note' && e.kind === SUBAGENT_KIND && typeof e.data === 'object' && e.data !== null) {
+      const d = e.data as { name?: unknown; state?: unknown; usage?: { input?: unknown; output?: unknown } };
+      if (typeof d.name !== 'string') continue;
+      if (d.state === 'running' || d.state === 'queued') { if (own) started.add(d.name); }
+      else if (d.state === 'ended' && started.delete(d.name) && Date.parse(e.ts) >= now - DAY_MS) spent += (Number(d.usage?.input) || 0) + (Number(d.usage?.output) || 0);
+    }
   }
   return spent;
 }

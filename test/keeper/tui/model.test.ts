@@ -78,6 +78,10 @@ test('subagents are in the status from the note that starts one to the note that
   expect(stand(ended, note('api', 'told')).subagents.map(a => a.name)).toEqual(['recovery']);
   // A name used again is one subagent.
   expect(stand(two, note('api', 'running', 'Review it again')).subagents).toContainEqual({ name: 'api', task: 'Review it again' });
+  // One that waits for a place has its row already, and keeps the row's place when it starts.
+  const waits = stand(two, note('later', 'queued', 'Wait'));
+  expect(waits.subagents.at(-1)).toEqual({ name: 'later', task: '(waits for a place) Wait' });
+  expect(stand(stand(waits, note('extra', 'running')), note('later', 'running', 'Wait')).subagents.map(a => [a.name, a.task])).toEqual([['api', 'Review the API'], ['recovery', 'Check restart recovery'], ['later', 'Wait'], ['extra', 'Do extra']]);
   expect(stand(two, started(B)).subagents).toEqual([]);
 });
 
