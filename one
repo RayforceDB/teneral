@@ -688,7 +688,11 @@ case "$command" in
       esac
     done
     # The worktrees are gone from where git knew them, so it forgets them; the lineage's commits
-    # stay reachable under a name of their own.
+    # stay reachable under a name of their own. The stem keeps the two locked against exactly this
+    # (stem/supervisor.ts), so here, where forgetting is meant, they are unlocked first.
+    git worktree list --porcelain | sed -n 's/^worktree //p' | grep -E '/\.teneral/(live|candidate)$' | while IFS= read -r tree; do
+      git worktree unlock "$tree" 2>/dev/null || true
+    done
     git worktree prune
     if git show-ref --verify --quiet refs/heads/lineage/local; then
       git branch -m lineage/local "past/$(basename "$past")"

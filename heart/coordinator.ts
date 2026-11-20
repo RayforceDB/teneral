@@ -117,6 +117,8 @@ export interface HeartDeps {
   now?: () => number;
   /** Milliseconds of the owner's silence after which rest begins. */
   restMs?: number;
+  /** The least time between two looks for what the agent waits for. Default: a second. */
+  lookFloorMs?: number;
 }
 
 /** Chooses one bounded activity between turns. Incoming work is checked before and after every request. */
@@ -140,12 +142,39 @@ export class Heart {
     try { tick = this.d.nextTick?.(); } catch { tick = undefined; }
     const times = [
       ...(rest > 0 ? [rest + 1000] : []),
-      ...(look === undefined ? [] : [Math.max(LOOK_FLOOR_MS, look)]),
+      ...(look === undefined ? [] : [Math.max(this.d.lookFloorMs ?? LOOK_FLOOR_MS, look)]),
       // A tick that is overdue and still not given is held by something a new arrival or the passing of time changes: asked again in a while, not at once.
       ...(tick === undefined ? [] : [tick > 0 ? tick : TICK_AGAIN_MS]),
     ];
     return times.length === 0 ? undefined : Math.min(...times);
   }
+  /**
+   * Does one piece of the heart's own work, settling a turn or the work of rest, and goes on
+   * looking meanwhile for what the agent waits for. Such a piece is a request to the model and can
+   * take a minute; a job that ends in that minute is told then, not after it. What has come is
+   * emitted like anything that arrives, and the body lets the turn it owes begin as it does for a
+   * message. After one has come nothing more is looked for: the next beat is that turn.
+   */
+  private async during<T>(work: () => Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let over = false;
+    const look = (): void => {
+      let ms: number | undefined;
+      try { ms = this.d.nextLook?.(); } catch { ms = undefined; }
+      if (over || ms === undefined) return;
+      timer = setTimeout(() => {
+        if (over) return;
+        try {
+          const come = this.d.arrived?.() ?? null;
+          if (come !== null) { this.d.emit(come); return; }
+        } catch { /* asked again at the next beat, where a failure is reported */ }
+        look();
+      }, Math.max(this.d.lookFloorMs ?? LOOK_FLOOR_MS, ms));
+    };
+    look();
+    try { return await work(); } finally { over = true; clearTimeout(timer); }
+  }
+
   async next(): Promise<Beat> {
     if (needsTurn(standing(this.d.events()))) return 'turn';
     // An empty soul means the birth dialogue is still under way. Do not replace it with
@@ -159,7 +188,7 @@ export class Heart {
     }
     if (this.state.look) {
       this.state.look = false;
-      try { await this.d.settle(); } catch (error) { this.d.onError(error); }
+      try { await this.during(() => this.d.settle()); } catch (error) { this.d.onError(error); }
       // A step it named is queued, and is told below when its time comes (`arrived`): no tick is made up here.
       return 'reflect';
     }
@@ -178,7 +207,7 @@ export class Heart {
     }
     const before = standing(this.d.events());
     const had = pulseNeeded(known(before), this.now()) || followUps(known(before), this.now()).length > 0;
-    if (!(await this.d.remember())) return 'wait';
+    if (!(await this.during(() => this.d.remember()))) return 'wait';
     // A look ahead may have set down something that can be begun: offer it now, not at the next tick.
     const after = standing(this.d.events());
     if (!had && !needsTurn(after) && this.restIn() === 0 && pulseNeeded(known(after), this.now())) this.d.emit(agendaPulse(after, this.now()));
