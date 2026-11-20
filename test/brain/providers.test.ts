@@ -69,6 +69,11 @@ test('the context window of a model is the documented one, and null where nothin
   // Paid for by a ChatGPT plan, the model the setup offers has the smaller window its page gives for plan use.
   expect(contextWindow('chatgpt', 'gpt-6.1-sol')).toBe(500_000);
   expect(contextWindow('chatgpt', 'gpt-6-astra')).toBe(1_050_000);
+  // The 6.2 models: the API's window by key, the plan's default by sign-in, where the two differ for each.
+  expect(contextWindow('openai', 'gpt-6.2-astra')).toBe(1_050_000);
+  expect(contextWindow('openai', 'gpt-6.2-sol')).toBe(1_050_000);
+  expect(contextWindow('chatgpt', 'gpt-6.2-astra')).toBe(272_000);
+  expect(contextWindow('chatgpt', 'gpt-6.2-sol')).toBe(500_000);
   // Every model the table offers at setup has a window.
   for (const p of PROVIDERS) for (const model of p.models) expect(contextWindow(p.id, model)).toBeGreaterThan(0);
   // Not guessed: an unknown model, a snapshot not listed, a hand-typed endpoint, an unknown provider, a name from Object's own.

@@ -133,6 +133,8 @@ export function planNotice(env: Record<string, string | undefined>): string | nu
  * model, so a name is matched whole and a snapshot not listed is not guessed at.
  */
 const WINDOWS: Readonly<Record<string, number>> = {
+  // GPT-6.2, from https://developers.openai.com/api/docs/models/gpt-6.2-astra and .../gpt-6.2-sol ("1,050,000 context window"), read 2026-11-20.
+  'gpt-6.2-astra': 1_050_000, 'gpt-6.2-sol': 1_050_000,
   'gpt-6.1-sol': 1_050_000, 'gpt-6.1-terra': 1_050_000,
   'gpt-6-astra': 1_050_000, 'gpt-6-sol': 1_050_000, 'gpt-6-luna': 1_050_000, 'gpt-6-cyber': 1_050_000,
   'gpt-5.6-sol': 1_050_000, 'gpt-5.6-terra': 1_050_000, 'gpt-5.6-luna': 1_050_000, 'gpt-5.6-cyber': 400_000,
@@ -149,7 +151,12 @@ const WINDOWS: Readonly<Record<string, number>> = {
  * name the sign-in route teneral uses; the smaller number is taken for it, as the one that does not
  * promise room that may not be there.
  */
-const PLAN_WINDOWS: Readonly<Record<string, number>> = { 'gpt-6.1-sol': 500_000 };
+const PLAN_WINDOWS: Readonly<Record<string, number>> = {
+  'gpt-6.1-sol': 500_000,
+  // The Codex models page (https://learn.chatgpt.com/docs/models, read 2026-11-20) gives "Default context in Codex" as 272,000 tokens for
+  // GPT-6.2 Astra and 500,000 for GPT-6.2 Sol, of the "up to 1 million" each supports. As above, it does not name this route; the default is taken.
+  'gpt-6.2-astra': 272_000, 'gpt-6.2-sol': 500_000,
+};
 
 /**
  * The model's context window in tokens, or null when it is not known: a model the table does not
