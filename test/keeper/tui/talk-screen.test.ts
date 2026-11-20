@@ -1685,7 +1685,7 @@ test('paging holds an old conversation still while output waits, then returns to
   expect(s.term.vt.text()).toBe(old);
   expect(s.term.vt.scrollback.length).toBe(scrollback);
 
-  for (let i = 0; i < 20; i++) s.type('\x1b[6~');
+  s.type('\x1b[6~');
   s.frame();
   expect(s.term.vt.text()).toContain('new answer');
   expect(s.term.vt.text().split('\n').slice(-6)).toEqual(old.split('\n').slice(-6));

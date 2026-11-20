@@ -243,6 +243,56 @@ test('a change of size leaves no debris, whether the terminal cuts its rows or w
   }
 });
 
+test('returning to live emits rows received while anchored exactly once, without replaying history', () => {
+  const term = fakeTerm(30, 8);
+  const inline = new Inline(term);
+  const live = lines('live1', 'live2');
+  inline.print(lines(...Array.from({ length: 20 }, (_, i) => `row${i}`)));
+  inline.start();
+  inline.paint(live);
+  inline.page(-1);
+  inline.paint(live);
+  const old = term.vt.text();
+  inline.print(lines('while anchored'));
+  inline.paint(live);
+  expect(term.vt.text()).toBe(old);
+  const before = term.written.join('');
+  expect((before.match(/row14\x1b\[K\r\n/g) ?? []).length).toBe(1);
+
+  expect(inline.page(1)).toBe(true);
+  inline.paint(live);
+  const written = term.written.join('');
+  expect(written).toContain('while anchored\x1b[K\r\n');
+  expect((written.match(/while anchored\x1b\[K\r\n/g) ?? []).length).toBe(1);
+  expect((written.match(/row14\x1b\[K\r\n/g) ?? []).length).toBe(1);
+  expect(term.vt.text()).toBe('row15\nrow16\nrow17\nrow18\nrow19\nwhile anchored\nlive1\nlive2');
+  expect(term.vt.all().split('\n').filter((row) => row === 'while anchored')).toHaveLength(1);
+
+  inline.page(-1);
+  inline.paint(live);
+  inline.stop();
+  expect((term.written.join('').match(/while anchored\x1b\[K\r\n/g) ?? []).length).toBe(1);
+  expect(term.vt.all().split('\n')).toEqual([...Array.from({ length: 20 }, (_, i) => `row${i}`), 'while anchored']);
+});
+
+test('following output from an old page uses the same native transcript transition', () => {
+  const term = fakeTerm(30, 8);
+  const inline = new Inline(term);
+  const live = lines('live1', 'live2');
+  inline.print(lines(...Array.from({ length: 20 }, (_, i) => `row${i}`)));
+  inline.start();
+  inline.paint(live);
+  inline.page(-1);
+  inline.paint(live);
+  inline.print(lines('while anchored'));
+  inline.follow();
+  inline.paint(live);
+  expect((term.written.join('').match(/while anchored\x1b\[K\r\n/g) ?? []).length).toBe(1);
+  expect((term.written.join('').match(/row14\x1b\[K\r\n/g) ?? []).length).toBe(1);
+  inline.stop();
+  expect(term.vt.all().split('\n')).toEqual([...Array.from({ length: 20 }, (_, i) => `row${i}`), 'while anchored']);
+});
+
 test('stopping prints what is still queued, takes the live region away and gives the terminal back with its cursor under the last row', () => {
   const term = fakeTerm(30, 8);
   term.vt.write('$ ./one talk\r\n');
