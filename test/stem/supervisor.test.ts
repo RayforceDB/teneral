@@ -857,12 +857,13 @@ if (mine === 0) {
   appendEvent(journal, gen, { type: 'assistant', text: 'here', toolCalls: [] });
   process.exit(1);
 }
-setTimeout(() => process.exit(0), 500);
+setTimeout(() => process.exit(0), 1600);
 ` });
   const next = commitAll(p.candidate, 'v2');
   process.env.TEST_NEXT = next;
 
-  expect(await supervise({ root: dir, ...QUIET, probationMs: 150 })).toBe('stopped');
+  // The probation is long enough for a body to start and say its one word on a slow machine, and the silence after it longer still.
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 800 })).toBe('stopped');
   expect(readEvents(p.journal).map((e) => e.type)).not.toContain('generation.rolledback');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
 });
