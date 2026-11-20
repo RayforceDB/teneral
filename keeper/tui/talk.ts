@@ -8,6 +8,8 @@ import { install, ownerCommand, publishing, speciesUpdate } from '../../species/
 import { readApproval } from '../../immune/approval';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
+import { modelCommand } from '../model';
+import { configured } from '../../stem/configuration';
 import { health, healthBadge } from '../../brain/health';
 import { known } from '../../brain/known';
 import { standing } from '../../brain/owned';
@@ -572,7 +574,20 @@ export class TalkScreen {
     this.interrupted();
     this.answers();
     if (this.ticks % 8 === 1) this.readName();
+    if (this.ticks % 8 === 1) this.readModel();
     this.paint();
+  }
+
+  /** The model and its provider as `.env` has them now: the owner may change them while this client is up (`/model`, `./one setup`). */
+  private readModel(): void {
+    const now = configured(this.o.paths.root);
+    if (now === null) return;
+    for (const key of ['TENERAL_MODEL', 'TENERAL_PROVIDER'] as const) {
+      if (this.o.env[key] === now[key]) continue;
+      if (now[key] === undefined) delete this.o.env[key];
+      else this.o.env[key] = now[key];
+      this.dirty = true;
+    }
   }
 
   private readName(): void {
@@ -719,6 +734,7 @@ export class TalkScreen {
           { name: 'history', about: 'the earlier conversation that was read from the journal', run: '/history' },
           { name: 'tools', about: 'show or hide what each tool call returned', run: '/tools' },
           { name: 'heart', about: 'give the agenda one pulse now', run: '/heart' },
+          { name: 'model', about: 'the model the agent thinks with, and how to change it', run: '/model' },
           { name: 'help', about: 'the keys and commands', run: '/help' },
         ],
       },
@@ -960,6 +976,18 @@ export class TalkScreen {
           lines = [`It could not be read: ${err instanceof Error ? err.message : String(err)}`];
         }
         return this.page('what the model was asked for', lines);
+      }
+      case '/model': {
+        // The owner's word about the model (keeper/model.ts): written to .env once tested, where the stem finds it. The agent is not told by the command itself.
+        if (arg !== '' && arg !== 'list') this.say(`Testing ${clean(arg)} with two requests ${this.g.ellipsis}`);
+        void modelCommand(this.o.paths.root, arg).then((lines) => {
+          if (this.closed) return;
+          const shown = clean(lines.join('\n')).split('\n');
+          if (shown.length === 1) this.say(shown[0]!); else this.page('the model', shown);
+          this.readModel();
+          this.paint();
+        });
+        return;
       }
       case '/heart':
         // The body turns this owner line into one bounded pulse; it is not a second running turn.

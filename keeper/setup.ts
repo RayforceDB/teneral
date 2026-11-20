@@ -3,6 +3,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { join } from 'node:path';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, userAgent, type ProviderEntry } from '../brain/providers';
+import { MANAGED } from '../stem/configuration';
 import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } from '../brain/signin';
 
 // The owner's first-run setup: `./one setup`. It offers the providers in brain/providers.ts, asks
@@ -24,8 +25,7 @@ export interface Io {
 /** Exit status: the chosen provider signs in through a browser, and the port for its way back is not open yet. See `one`. */
 export const NEEDS_CALLBACK = 76;
 
-/** The variables the setup decides. Everything else in an existing `.env` is the owner's and is kept. */
-const MANAGED = ['TENERAL_PROVIDER', 'TENERAL_BASE_URL', 'TENERAL_API_KEY', 'TENERAL_MODEL'];
+// The variables the setup decides are `MANAGED`. Everything else in an existing `.env` is the owner's and is kept.
 
 const FRESH = `# Written by ./one setup. Run it again to change the provider.
 # Values go in plain: no quotes, no comment after a value. Docker passes the line on as written.
@@ -293,7 +293,7 @@ export function plainDialogue(io: Io): Dialogue {
 
 /** Said once after a first sign-in: whose plan pays, and where that is managed. */
 export const PLAN_NOTICE = `You're using your ChatGPT plan: requests the agent makes use your plan or its credits. You can review and limit that in ChatGPT settings: ${CHATGPT_USAGE_URL}`;
-export const NEXT_STEP = './one up starts the agent with it. One that is already running keeps its old configuration until ./one down and ./one up.';
+export const NEXT_STEP = './one up starts the agent with it. One that is already running takes it up within a few seconds: its body is started again.';
 
 export interface SetupOptions {
   root: string;

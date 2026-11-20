@@ -41,6 +41,7 @@ test('/help prints the table: every command for the screen client, with the key 
     '  /stop              interrupt what the agent is doing now',
     '  /approve [commit]  approve the mutation the agent asked about, or the commit or offer named',
     '  /offers            what waits for your approval before it goes out to the species',
+    '  /model [name]      the model the agent thinks with; with a name, test that one and change to it',
     '  /heart             give the agenda one pulse now',
     "  /publish [commit]  how the agent's work goes out to the species; with a commit, let that offer go",
     '  /update [take]     what the species brings that the agent has not taken; take has it merged',

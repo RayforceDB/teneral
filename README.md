@@ -244,7 +244,7 @@ What the ChatGPT sign-in does:
 - When the sign-in has ended (30 days without a renewal, or you disconnected the app), `./one logs` says `sign in again with ./one setup`. Running it again reuses the registration and asks OpenAI only to confirm the account.
 - On a machine with no browser, run the setup in a checkout on a machine that has one, and copy its `.teneral/auth/chatgpt.json` to the same place here over a secure channel; or forward the port for the time of the setup (`ssh -L 1455:127.0.0.1:1455 <machine>`) and open the address locally.
 
-To change provider or sign in again, run `./one setup`. It asks before replacing an existing `.env`, keeps the settings in it that are not about the provider, and writes nothing unless the test requests work. A running agent keeps its old configuration until `./one down` and `./one up`. Model replies come whole, not streamed to your terminal, with either protocol.
+To change provider or sign in again, run `./one setup`. It asks before replacing an existing `.env`, keeps the settings in it that are not about the provider, and writes nothing unless the test requests work. A running agent takes up what the setup wrote within a few seconds, with no `./one down`; see [Changing the model while it runs](#changing-the-model-while-it-runs). Model replies come whole, not streamed to your terminal, with either protocol.
 
 **Not verified against the real service.** The ChatGPT sign-in was built from OpenAI's documentation and tested end to end against a stand-in that is as strict as that documentation reads; no account was available to try the real one. If an assumption is wrong, the setup's test requests are where it shows, before anything is written: a failed sign-in or test prints OpenAI's status and message. The open points: whether a first registration is accepted from any open-source app without prior arrangement; whether tool calls made in one request are accepted back in the next without the model's reasoning items, which are not kept (see `BACKLOG.md`); whether tools grouped in one namespace come back under their plain names; and which models your plan lists.
 
@@ -277,6 +277,7 @@ To change provider or sign in again, run `./one setup`. It asks before replacing
 | `/offers` | what waits for your approval before it goes out to the species; `/approve <commit>` lets one go. See [Offering a change to the species](#offering-a-change-to-the-species) |
 | `/publish`, `/publish <commit>` | how the agent's work goes out to the species and where every offer stands: what waits for you, what you approved that was never sent, what was sent, each with the line to type for it. With a commit it lets that waiting offer go out and tells the agent to send it, or tells the agent again about one that has your yes and was not sent |
 | `/memory` | how the agent's memory stands, with a mark for each memory, fact and intention; then `/memory pin`, `unpin`, `withdraw <mark>` or `back [n]`. See [Memory](#memory) |
+| `/model`, `/model <name>`, `/model list` | the model the agent thinks with; with a name, test that model and change to it; see [Changing the model while it runs](#changing-the-model-while-it-runs) |
 | `/plain` | how to get the plain text client |
 | `/help` | the keys and commands |
 | `//...` | send the agent a line that begins with a slash: it arrives with one |
@@ -285,7 +286,7 @@ To change provider or sign in again, run `./one setup`. It asks before replacing
 
 PageUp and PageDown page by a screen; the wheel scrolls three rows at a time. The client asks for SGR button-event mouse reports so it can handle the wheel, and disables that mode on exit. Clicks and drags are not acted on; in terminals that support it, hold Shift for native mouse selection. Dragging the terminal's own scrollbar still moves its whole viewport, including the live rows. The cursor you see in the box is drawn by the client; the terminal's own cursor is hidden while the client runs and is given back when it ends.
 
-Esc interrupts a turn. Nothing else in the client stops the agent or changes it; `./one down` and `./one back` do that. Leaving takes the live region away and leaves the conversation in the scrollback, with one line saying that the agent goes on. When the terminal goes away without a word (a closed window, a dropped connection), the client notices within about half a minute and ends by itself. Any number of terminals can be attached at once. Each sees the same replies, and what was typed in the others marked as such. The client keeps a bounded part of the conversation in memory, whatever the size of the journal. When the window changes size the live region is drawn anew at the new width; what was already printed is the terminal's to wrap, as with any output. One limit: a terminal that wraps its rows again, made much narrower and lower in a single step, can push the top of the old live region out of reach, and a few of its rows may then stay in the scrollback. The colours, the mark and the glyphs are in one place, `keeper/tui/theme.ts`: true colour, with the nearest of 256 or 16 colours where that is what the terminal has, chosen to read on a dark background and on a light one; `NO_COLOR` is honoured, and a locale that is not UTF-8 gets ASCII marks.
+Esc interrupts a turn, and `/model` changes the model it thinks with. Nothing else in the client stops the agent or changes it; `./one down` and `./one back` do that. Leaving takes the live region away and leaves the conversation in the scrollback, with one line saying that the agent goes on. When the terminal goes away without a word (a closed window, a dropped connection), the client notices within about half a minute and ends by itself. Any number of terminals can be attached at once. Each sees the same replies, and what was typed in the others marked as such. The client keeps a bounded part of the conversation in memory, whatever the size of the journal. When the window changes size the live region is drawn anew at the new width; what was already printed is the terminal's to wrap, as with any output. One limit: a terminal that wraps its rows again, made much narrower and lower in a single step, can push the top of the old live region out of reach, and a few of its rows may then stay in the scrollback. The colours, the mark and the glyphs are in one place, `keeper/tui/theme.ts`: true colour, with the nearest of 256 or 16 colours where that is what the terminal has, chosen to read on a dark background and on a light one; `NO_COLOR` is honoured, and a locale that is not UTF-8 gets ASCII marks.
 
 ### Commands
 
@@ -297,7 +298,7 @@ A line that is a slash, a word of lower-case letters and, after a blank, whateve
 - A name that is no command is not sent to the agent. One line says so and names the nearest command, and what you typed stays in the box to be put right. The same goes for words after a command that takes none (`/stop now`).
 - To send the agent a line that begins with a slash, begin it with two: `//help me` arrives as `/help me`. That is rarely needed. A path such as `/home/you/notes.txt`, a slash further on in the line, a slash followed by a blank, a name with a capital or a digit in it, and any text of several lines are not commands: they are not listed, not coloured, and sent as they are, and a path that names an image is attached as before.
 
-The plain client has `/help`, `/stop`, `/approve`, `/offers`, `/heart`, `/publish` and `/quit`, typed whole; `/help` lists them there.
+The plain client has `/help`, `/stop`, `/approve`, `/offers`, `/model`, `/heart`, `/publish`, `/update` and `/quit`, typed whole; `/help` lists them there.
 
 ### Interrupting
 
@@ -380,9 +381,21 @@ Settings, in `.env`:
 | `TENERAL_FORK` | Your fork of the species, as `owner/name`, where offers are pushed. Unset: your repository of the species' name, found by asking GitHub whose token it is. |
 | `TENERAL_PUBLISH` | Whether the agent may offer changes to the species and report on others': `ask` (the default; you approve each commit), `auto` or `off`. See [Offering a change to the species](#offering-a-change-to-the-species). |
 
-`./one setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./one down` and `./one up`.
+`./one setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./one down` and `./one up`; the exception is the first four, which a running agent takes up [by itself](#changing-the-model-while-it-runs).
 
 To start over as a new individual, run `./one down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`. A ChatGPT sign-in lives in `.teneral/auth/` and goes with it, and so do the individual's signing key and your GitHub token; keep that directory to stay signed in.
+
+### Changing the model while it runs
+
+Which model the agent thinks with, and where it comes from, is four lines of `.env`: `TENERAL_PROVIDER`, `TENERAL_BASE_URL`, `TENERAL_API_KEY` and `TENERAL_MODEL`. The stem looks at the file every two seconds. When those lines say something else than before, and nothing an agent needs is missing from them, it stops the agent's body and starts it again with the new ones. Nothing else restarts: not the container, not the stem, not `./one talk`. The journal is the agent's memory, so the conversation goes on where it was, and a turn that was in progress begins again from what the journal holds of it. This is not counted as a crash, and the journal gets a note of kind `provider.changed` with the provider and the model, never the key. A file that is incomplete (a key taken out, a sign-in not made) changes nothing; `./one logs` says what is missing, and the agent goes on as it was.
+
+There are three ways to change those lines:
+
+- **`/model <name>` in `./one talk`**, for another model of the same provider. The model is first asked the setup's two test requests, with the key or the sign-in the agent itself uses, and `.env` is written only when both come back right; otherwise nothing changes and the reason is shown. `/model` alone says which model and provider are configured, and `/model list` asks the provider which models it has for you.
+- **`./one setup`, in another terminal**, for another provider, a new key or a new sign-in. It tests before it writes, as always, and the running agent takes up what it wrote.
+- **Editing `.env` by hand.** Nothing is tested then: a model's name the provider does not know shows in `./one talk` as an agent that cannot get an answer from its model, and putting the line right mends it the same way.
+
+Only those four lines are taken up while the agent runs; every other setting still waits for `./one down` and `./one up`. A variable you gave the container yourself, through `ONE_DOCKER_ARGS`, stands until `.env` is next changed. A provider that refuses two requests at once may refuse `/model`'s test while the agent is in the middle of a turn: try it when the agent is at rest.
 
 ### How your lines reach it
 

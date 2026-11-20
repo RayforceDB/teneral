@@ -438,7 +438,7 @@ test('an address too long for the window is not shown in part: the screen says w
   const tight = r.term.vt.text().split('\n');
   expect(tight).toHaveLength(16);
   expect(tight[2]).toBe('  Ready');
-  expect(tight.slice(-4)).toEqual(['    ./one up starts the agent with it.', '    One that is already running keeps its old', '    configuration until ./one down and ./one up.', ' Enter goes on']);
+  expect(tight.slice(-4)).toEqual(['    ./one up starts the agent with it.', '    One that is already running takes it up within a few', '    seconds: its body is started again.', ' Enter goes on']);
   r.press('\r');
   expect(await r.status).toBe(0);
 });

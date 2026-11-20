@@ -1409,3 +1409,43 @@ test('the owner sets how long a gate may take: minutes or seconds, nothing usabl
   expect(allowance('99999999', 60_000)).toBe(2_147_483_647);
   for (const none of [undefined, '', 'many', '-1']) expect(allowance(none, 60_000)).toBeUndefined();
 });
+
+// --- the owner changes the model while the agent runs ---
+
+test('a model changed in .env reaches the running agent: its body is started again with it, and no crash is counted', async () => {
+  // Says which model it was started with, and stays up until it is the second one.
+  const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_MODEL, process.env.TENERAL_API_KEY].join('|') });
+if (process.env.TENERAL_MODEL === 'second') process.exit(0);
+setInterval(() => {}, 1000);
+` });
+  const p = paths(dir);
+  const env = (model: string): string => `TENERAL_PROVIDER=openai\nTENERAL_BASE_URL=https://api.test/v1\nTENERAL_API_KEY=k\nTENERAL_MODEL=${model}\n`;
+  writeFileSync(join(dir, '.env'), env('first'));
+  const names = ['TENERAL_PROVIDER', 'TENERAL_BASE_URL', 'TENERAL_API_KEY', 'TENERAL_MODEL'] as const;
+  const before = names.map((name) => process.env[name]);
+  Object.assign(process.env, { TENERAL_PROVIDER: 'openai', TENERAL_BASE_URL: 'https://api.test/v1', TENERAL_API_KEY: 'k', TENERAL_MODEL: 'first' });
+  const said: string[] = [];
+  const told = (): string[] => (existsSync(p.journal) ? readEvents(p.journal) : []).flatMap((e) => (e.type === 'stimulus' ? [e.text] : []));
+  // The owner, once the first body is up.
+  const owner = setInterval(() => {
+    if (told().length === 0) return;
+    clearInterval(owner);
+    writeFileSync(join(dir, '.env'), env('second'));
+  }, 20);
+  try {
+    expect(await supervise({ root: dir, ...QUIET, configPollMs: 20, log: (line) => said.push(line) })).toBe('stopped');
+    expect(process.env.TENERAL_MODEL).toBe('second');
+  } finally {
+    clearInterval(owner);
+    names.forEach((name, i) => { if (before[i] === undefined) delete process.env[name]; else process.env[name] = before[i]; });
+  }
+  expect(told()).toEqual(['openai|first|k', 'openai|second|k']);
+  const events = readEvents(p.journal);
+  expect(started(events)).toBe(2);
+  expect(events.find((e) => e.type === 'note' && e.kind === 'provider.changed')).toMatchObject({ data: { provider: 'openai', model: 'second' } });
+  expect(events.map((e) => e.type)).not.toContain('generation.rolledback');
+  expect(said.filter((line) => /second/.test(line))).toEqual(['the owner changed the model to second (OpenAI API key); starting the agent again with it']);
+  expect(said.join('\n')).not.toMatch(/restarting in|crash|api\.test/);
+});

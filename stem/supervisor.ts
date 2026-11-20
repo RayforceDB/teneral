@@ -10,9 +10,10 @@ import {
   appendEvent, isMutationRejection, isMutationRequest, journalSize, readEvents, readEventsFrom, rejectionFor, type JournalEvent,
 } from '../brain/journal';
 import { parsePins, provideOrgans } from '../immune/organs';
-import { authDir } from '../brain/providers';
+import { authDir, providerFor } from '../brain/providers';
 import { cageNotice, takeApprovals } from '../immune/approval';
 import { isInert } from '../immune/protected';
+import { describe, watchConfiguration, type Managed } from './configuration';
 
 /** The agent exits with this code to ask for a mutation. */
 export const MUTATION_EXIT = 75;
@@ -258,6 +259,14 @@ function answerPendingMutation(p: Paths, gen: string, events: JournalEvent[]): b
   return false;
 }
 
+/** The kind of the note the stem journals when the owner changed the model while the agent ran. */
+export const PROVIDER_CHANGED = 'provider.changed';
+
+/** Journals which model the agent thinks with from here on, and from which provider. Never the key or the address. */
+function noteProvider(p: Paths, gen: string, to: Managed): void {
+  appendEvent(p.journal, gen, { type: 'note', kind: PROVIDER_CHANGED, data: { provider: providerFor(to.TENERAL_PROVIDER).id, model: to.TENERAL_MODEL ?? '' } });
+}
+
 /**
  * Whether the current generation still has to show it can reply. One that was promoted over
  * another is on probation until its first assistant event; one with nothing to go back to never is.
@@ -474,6 +483,8 @@ export interface Options {
   probationMs?: number;
   /** A run that lasted at least this long before ending abnormally gives the generation its restart budget back. Default 1 hour. */
   stableRunMs?: number;
+  /** How often `.env` is looked at for the owner changing the model or its provider (stem/configuration.ts). Default 2 s. */
+  configPollMs?: number;
   /** Where the body's stderr is shown as it comes. Default: this process's stderr. */
   stderr?: (chunk: Uint8Array) => void;
   log?: (line: string) => void;
@@ -522,6 +533,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
   const restartBudget = opts.restartBudget ?? 10;
   const probationMs = opts.probationMs ?? 600_000;
   const stableRunMs = opts.stableRunMs ?? 3_600_000;
+  const configPollMs = opts.configPollMs ?? 2_000;
   const showStderr = opts.stderr ?? ((chunk: Uint8Array) => { process.stderr.write(chunk); });
   const gates = opts.gates
     ?? ((dir: string, from: string, to: string, stop?: AbortSignal) => runGates(dir, from, to, DEFAULT_CHECKS, {
@@ -597,6 +609,16 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
     /** The commit last rejected, and how many times in a row it has been. */
     let rejected: { commit: string; times: number } | null = null;
     const delayAfter = (count: number) => Math.min(restartDelayMs * count, RESTART_DELAY_CAP_MS);
+    // The owner may change the model, or where it comes from, while the agent runs: `.env` is looked at, and what
+    // it newly says is put in this process's environment, which every body and every run of the gates is given.
+    const configuration = watchConfiguration(p.root, process.env, log);
+    /** Takes up a change made while no body was running: during the gates, or a wait. The next body starts with it. */
+    const reconfigure = (gen: string): void => {
+      const to = configuration.take();
+      if (to === null) return;
+      log(`the owner changed the model to ${describe(to)}; the agent starts with it`);
+      try { noteProvider(p, gen, to); } catch { /* the note is a courtesy; the change is not */ }
+    };
 
     /**
      * Whether the stem of `next` is another than the one of `gen`, which is the one running here:
@@ -642,6 +664,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         return 'halted';
       }
       const gen = state.current;
+      reconfigure(gen);
       // The organs this generation pins, from its own commit: after a rollback that is the older pin,
       // whose tree is still in the cache. A tree that is gone is unpacked again from its archive. When
       // that is gone too, nothing is started: a body without the organ it was gated with would only
@@ -685,7 +708,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       const said = forwardStderr(running.stderr, showStderr);
       const record: ChildRecord = { pid: running.pid, gen, cmd };
       writeFileSync(p.child, JSON.stringify(record));
-      const timers: { ready?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout>; probation?: ReturnType<typeof setTimeout> } = {};
+      const timers: { ready?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout>; probation?: ReturnType<typeof setTimeout>; config?: ReturnType<typeof setInterval> } = {};
       // Ask first; a generation that does not go within the grace period is killed outright.
       const stop = () => {
         if (timers.kill !== undefined) return;
@@ -699,6 +722,18 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         try { ready = isReady(); } catch { /* not ready */ }
         if (!ready) stop();
       }, readyTimeoutMs);
+      /** This run was ended because the owner changed the model: the body is started again with it, and nothing is counted. */
+      let reconfigured = false;
+      timers.config = setInterval(() => {
+        // Once told to stop, a body is not told again, and what `.env` says then is taken up before the next start.
+        if (timers.kill !== undefined || stopping) return;
+        const to = configuration.take();
+        if (to === null) return;
+        reconfigured = true;
+        log(`the owner changed the model to ${describe(to)}; starting the agent again with it`);
+        try { noteProvider(p, gen, to); } catch { /* the note is a courtesy; the change is not */ }
+        stop();
+      }, configPollMs);
       /** This run was ended because a newly promoted generation stayed silent. */
       let silent = false;
       if (probation) {
@@ -727,6 +762,7 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       clearTimeout(timers.ready);
       clearTimeout(timers.kill);
       clearTimeout(timers.probation);
+      clearInterval(timers.config);
       terminate = null;
       rmSync(p.child, { force: true });
       const lastWords = await said.tail();
@@ -758,6 +794,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
       }
 
       if (decision === 'stop') return 'stopped';
+      // Ended by this stem for the owner's change, not by a fault of its own: started again at once, and not held
+      // against the generation. One that asked for a mutation in the same moment is judged as it asked.
+      if (reconfigured && !silent && decision !== 'gate') continue;
       if (decision === 'halt') {
         const why = spent ? `kept crashing after ${restartBudget} restarts` : `exited with ${code}`;
         log(`generation ${gen} ${why} and there is nothing to roll back to`);

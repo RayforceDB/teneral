@@ -28,6 +28,8 @@ export const COMMANDS: readonly Command[] = [
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
+  // Answered by keeper/model.ts; the stem takes up what it writes to `.env` (stem/configuration.ts).
+  { name: '/model', hint: '[name]', about: 'the model the agent thinks with; with a name, test that one and change to it', plain: true },
   { name: '/heart', hint: '', about: 'give the agenda one pulse now', plain: true },
   // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
   { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },
