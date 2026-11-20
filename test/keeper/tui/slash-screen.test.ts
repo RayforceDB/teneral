@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { approve } from '../../../keeper/owner';
 import type { Report } from '../../../species/offer';
 import { COMMANDS, takes } from '../../../keeper/commands';
+import { trackBackground } from '../../../body/jobs';
 import { png } from './pictures';
 import { A, B, T0, expectFrame, stage, type Stage } from './stage';
 
@@ -615,4 +616,33 @@ test('/model prints what .env says of the model and goes to nobody; the footer f
   for (let i = 0; i < 8; i++) s.app.tick();
   expect(s.live()).toContain('gpt-6.1-terra');
   expect(s.live()).not.toContain('gpt-6.1-sol');
+});
+
+test('a job the agent left running is an action of its own under the footer while it runs, with what it runs in its menu', async () => {
+  const s = stage(100, 35);
+  settled(s);
+  expect(rows(s.live()).at(-1)).not.toContain('jobs');
+  // A real process group of this test's own: whether a job runs is asked of the system, not of the journal.
+  const p = Bun.spawn(['setsid', 'sleep', '300'], { stdout: 'ignore', stderr: 'ignore' });
+  try {
+    let job = null as ReturnType<typeof trackBackground>;
+    for (let i = 0; i < 100 && job === null; i++) { await Bun.sleep(10); job = trackBackground(s.p.journal, A, 'full-suite', p.pid, s.p.root, 'bun test > /tmp/full.log 2>&1'); }
+    expect(job).not.toBeNull();
+    s.app.tick();
+    s.frame();
+    expect(rows(s.live()).at(-1)).toContain('jobs');
+    expect(rows(s.live()).at(-1)).toContain('1 running');
+    // It is the marked action, so Down goes to it and Enter opens it.
+    s.type(DOWN);
+    s.type(ENTER);
+    expect(s.live()).toContain('full-suite');
+    expect(s.live()).toContain('bun test > /tmp/full.log 2>&1');
+    p.kill('SIGKILL');
+    await p.exited;
+    for (let i = 0; i < 9; i++) s.app.tick();
+    s.frame();
+    // Gone from the row, and the menu that stood on it with it.
+    expect(rows(s.live()).at(-1)).not.toContain('jobs');
+    expect(s.live()).not.toContain('full-suite');
+  } finally { p.kill('SIGKILL'); }
 });

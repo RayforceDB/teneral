@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TOOLS } from '../../body/tools';
-import { jobHistory, stopPreviousJobs } from '../../body/jobs';
+import { endedJobs, jobHistory, stopPreviousJobs } from '../../body/jobs';
 import { readEvents } from '../../brain/journal';
 
 function tool(name: string) {
@@ -97,5 +97,46 @@ test('a reused PGID is not killed when none of the recorded member identities su
   } finally {
     try { process.kill(-bash.pid, 'SIGKILL'); } catch {}
     try { process.kill(-other.pid, 'SIGKILL'); } catch {}
+  }
+});
+
+test('a job left running wakes the agent once when it ends, and not while a turn runs', async () => {
+  const { ctx } = setup();
+  const out = await tool('bash').run({ name: 'suite', command: 'sleep 0.3 >/dev/null 2>&1 &' }, ctx);
+  expect(out).toContain('background job suite; you are woken when it ends');
+  const told: { source: string; text: string }[] = [];
+  let busy = true;
+  const stop = endedJobs(ctx.journal, 'g1', () => busy, 20)((s) => told.push(s));
+  try {
+    await Bun.sleep(600);
+    // It has ended, but a turn is running: the agent may be waiting for it there.
+    expect(told).toEqual([]);
+    expect(jobHistory(readEvents(ctx.journal)).get('suite')?.state).toBe('running');
+    busy = false;
+    await Bun.sleep(150);
+    expect(told).toHaveLength(1);
+    expect(told[0]!.source).toBe('work');
+    expect(told[0]!.text).toStartWith('The background job suite that you left running has ended. It ran: sleep 0.3');
+    expect(jobHistory(readEvents(ctx.journal)).get('suite')).toMatchObject({ state: 'stopped', reason: 'ended' });
+    await Bun.sleep(100);
+    expect(told).toHaveLength(1);
+  } finally { stop(); }
+});
+
+test('a job of another generation, one still running and one the agent stopped wake nobody', async () => {
+  const { dir, ctx } = setup();
+  await tool('bash').run({ name: 'old', command: 'sleep 0.2 >/dev/null 2>&1 &' }, { ...ctx, gen: 'g0' });
+  await tool('bash').run({ name: 'long', command: 'sleep 300 >/dev/null 2>&1 & echo $! > pid' }, ctx);
+  await tool('bash').run({ name: 'halted', command: 'sleep 300 >/dev/null 2>&1 &' }, ctx);
+  await tool('jobs').run({ action: 'stop', name: 'halted' }, ctx);
+  const told: unknown[] = [];
+  const stop = endedJobs(ctx.journal, 'g1', () => false, 20)((s) => told.push(s));
+  try {
+    await Bun.sleep(500);
+    expect(told).toEqual([]);
+  } finally {
+    stop();
+    await tool('jobs').run({ action: 'stop', name: 'long' }, ctx);
+    expect(await gone(Number(readFileSync(join(dir, 'pid'), 'utf8')))).toBe(true);
   }
 });

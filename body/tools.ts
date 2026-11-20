@@ -276,7 +276,7 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
   const note = heldOpen && !timedOut && !interrupted
     ? '\n[something this command started is still running and holds its output open; it was left running, and what it prints from now on is not read]'
     : '';
-  const job = tracked !== null ? `\n[background job ${tracked.name}; use jobs action=stop name=${tracked.name} to stop it after a restart]` : '';
+  const job = tracked !== null ? `\n[background job ${tracked.name}; you are woken when it ends, so there is no need to wait for it or to set a time to look; jobs action=stop name=${tracked.name} stops it]` : '';
   return `${status}\n${output.text()}${note}${job}`;
 }
 

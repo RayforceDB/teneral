@@ -111,7 +111,7 @@ const UTF8 = {
   mark: ['▗▛▀▀▜▄▖', '█ ▟▙ ▐ ', '▝▜▄▄▟▘ '],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   /** The marks of the actions under the footer: what changes the agent, what goes out, what it holds, and the rest. */
-  icons: { mutate: '↻', publish: '↑', memory: '◉', more: '≡' },
+  icons: { mutate: '↻', publish: '↑', memory: '◉', more: '≡', jobs: '»' },
   /** The keys, as they are named on the caps drawn for them. */
   keys: { down: '↓', sides: '←→', choose: '↑↓', enter: '↵', esc: 'esc' },
 };
@@ -145,7 +145,7 @@ const ASCII: Glyphs = {
   corners: ['+', '+', '+', '+'],
   mark: [' .--._ ', '( () ) ', ' `--\'  '],
   spinner: ['|', '/', '-', '\\'],
-  icons: { mutate: '~', publish: '^', memory: 'o', more: '=' },
+  icons: { mutate: '~', publish: '^', memory: 'o', more: '=', jobs: '>' },
   keys: { down: 'Down', sides: 'Left/Right', choose: 'Up/Down', enter: 'Enter', esc: 'Esc' },
 };
 

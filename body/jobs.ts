@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
+import type { Sensor } from './sensors';
 
 /** A surviving process group created by one bash call. Notes are the durable registry. */
 export const JOB_KIND = 'body.job.v1';
@@ -151,4 +152,34 @@ export function stopCurrentJobs(journal: string, gen: string): void {
   for (const job of jobHistory(readRegistry(journal)).values()) {
     if (job.gen === gen && job.state === 'running') stop(journal, gen, job, 'process-exit');
   }
+}
+
+/** What the agent is told when a job it left running has ended. It reads as the work sensor's other wakes do. */
+export function endedText(job: Pick<JobRecord, 'name' | 'command'>): string {
+  return `The background job ${job.name} that you left running has ended. It ran: ${job.command}\nNothing told you how it went: look once at what it left (its exit status, its log), then go on with what waited for it and record the state with work. If you told someone it was running, or that you would say how it went, tell them now, in the place where you said it. If you already have its result and have said it, there is nothing to do.`;
+}
+
+/**
+ * Wakes the agent when a job of this generation that it left running has ended. Without this an
+ * agent that says "the tests are running" and ends its turn hears nothing of them until a time it
+ * set itself, or the clock's next tick. While a turn runs nothing is said: the agent may be
+ * waiting for the job in that very turn; it is told when the turn is over. The record is closed
+ * in the journal before the agent is told, so a job is told once, whatever happens after.
+ */
+export function endedJobs(journal: string, gen: string, busy: () => boolean, intervalMs = 2000, read: () => JournalEvent[] = () => readEvents(journal)): Sensor {
+  return (emit) => {
+    const timer = setInterval(() => {
+      try {
+        if (busy()) return;
+        for (const job of jobHistory(read()).values()) {
+          if (job.gen !== gen || job.state !== 'running' || jobStatus(job) !== 'gone') continue;
+          appendEvent(journal, gen, { type: 'note', kind: JOB_KIND, data: { ...job, state: 'stopped', reason: 'ended' } });
+          emit({ source: 'work', text: endedText(job) });
+          // One at a time: the next is told after the turn this one starts.
+          return;
+        }
+      } catch { console.error('[jobs] Could not look at the background jobs; will retry.'); }
+    }, intervalMs);
+    return () => clearInterval(timer);
+  };
 }

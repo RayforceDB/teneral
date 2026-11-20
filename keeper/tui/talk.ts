@@ -12,6 +12,7 @@ import { modelCommand } from '../model';
 import { configured } from '../../stem/configuration';
 import { health, healthBadge } from '../../brain/health';
 import { known } from '../../brain/known';
+import { JOB_KIND, jobHistory, jobStatus, type JobRecord } from '../../body/jobs';
 import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
@@ -254,6 +255,9 @@ export class TalkScreen {
   /** Commits the species has that the lineage has not taken, as this install last heard: a mutation proposed from outside. */
   private speciesAhead = 0;
   /** The action the keys are on, while they are on the row of actions under the footer; null while they are in the input. */
+  /** The jobs the agent started and left running, by name, as the journal read here records them; and those of them that run now. */
+  private jobs = new Map<string, JobRecord>();
+  private jobsRunning: JobRecord[] = [];
   private bar: number | null = null;
   /** The menu an action opened: what can be done there, and which of it the keys are on. */
   private menu: { title: string; items: MenuItem[]; chosen: number } | null = null;
@@ -477,6 +481,10 @@ export class TalkScreen {
 
   private take(e: JournalEvent, live: boolean): void {
     this.transcript.add(e, this.standing, live);
+    if (e.type === 'note' && e.kind === JOB_KIND) {
+      for (const [name, job] of jobHistory([e])) this.jobs.set(name, job);
+      this.readJobs();
+    }
     try {
       this.standing = stand(this.standing, e);
     } catch { /* an event of a shape nobody foresaw changes nothing */ }
@@ -575,7 +583,16 @@ export class TalkScreen {
     this.answers();
     if (this.ticks % 8 === 1) this.readName();
     if (this.ticks % 8 === 1) this.readModel();
+    if (this.ticks % 8 === 1) this.readJobs();
     this.paint();
+  }
+
+  /** Which of the agent's jobs run now: asked of the system, since a job ends without a word in the journal until the body notices. */
+  private readJobs(): void {
+    let running: JobRecord[] = [];
+    try { running = [...this.jobs.values()].filter((job) => job.state === 'running' && jobStatus(job) === 'running'); } catch { /* nothing to show */ }
+    if (running.map((job) => job.name).join('\n') !== this.jobsRunning.map((job) => job.name).join('\n')) this.dirty = true;
+    this.jobsRunning = running;
   }
 
   /** The model and its provider as `.env` has them now: the owner may change them while this client is up (`/model`, `./one setup`). */
@@ -738,6 +755,14 @@ export class TalkScreen {
           { name: 'help', about: 'the keys and commands', run: '/help' },
         ],
       },
+      // Only while something runs: what the agent started in the background and left, so that "the tests are running" can be seen here.
+      ...(this.jobsRunning.length === 0 ? [] : [{
+        label: 'jobs', icon: 'jobs' as const, tone: 'accent' as const, note: `${this.jobsRunning.length} running`, hot: true,
+        items: (): MenuItem[] => [
+          ...this.jobsRunning.map((job) => ({ name: job.name, about: job.command.replace(/\s+/g, ' '), run: null })),
+          { name: 'when one ends', about: 'the agent is woken and told, as soon as no turn is running', run: null },
+        ],
+      }]),
     ];
   }
 
@@ -1260,6 +1285,8 @@ export class TalkScreen {
     const offered = this.offered();
     let list: Offered | null = null;
     const actions = this.actions();
+    // The last action is there only while a job runs; when it goes, so does a choice of it.
+    if (this.bar !== null && this.bar >= actions.length) { this.bar = null; this.menu = null; }
     const opened = this.bar === null ? undefined : actions[this.bar];
     if (this.menu === null && offered !== null) {
       const chosen = offered.matches[offered.chosen]!;

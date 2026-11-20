@@ -36,7 +36,7 @@ import { mail, mailKey } from './mail';
 import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
-import { stopCurrentJobs, stopPreviousJobs } from './jobs';
+import { endedJobs, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
 import { enter, meet, whoLines } from './participants';
@@ -363,6 +363,8 @@ const sensors: Sensor[] = [
     const events = journalNow();
     return needsTurn(events) || heldByInterrupt(events);
   }, undefined, undefined, journalNow),
+  // A job the agent left running wakes it when it ends, not at the time it guessed or the clock's next tick.
+  endedJobs(journal, gen, () => working || quitting || needsTurn(journalNow()), undefined, journalNow),
   // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
