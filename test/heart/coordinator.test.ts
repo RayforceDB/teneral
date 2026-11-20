@@ -75,7 +75,7 @@ test('an owner pulse is coalesced and does not call the model by itself', async 
   expect(remembered).toBe(1);
 });
 
-test('settling a turn makes up no tick: a step it queued is the work sensor\'s to wake for', async () => {
+test('settling a turn makes up no tick: a step it queued is told when its time comes', async () => {
   const journal = setup();
   appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'finish' });
   appendEvent(journal, 'g', { type: 'assistant', text: 'Half of it is done.', toolCalls: [] });
@@ -140,4 +140,63 @@ test('a fresh individual waits for its first dialogue instead of starting idle w
   appendEvent(journal, 'g', { type: 'assistant', text: 'Hello. What may I call you?', toolCalls: [] });
   expect(await heart.next()).toBe('wait');
   expect(reflected).toBe(0);
+});
+
+test('what the agent waits for is told when it has come: after the turn is settled, before rest, in conversation as at rest, and once', async () => {
+  const journal = setup();
+  // The owner has just spoken: not at rest.
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'run the tests' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'They are running.', toolCalls: [] });
+  const order: string[] = [];
+  let come: { source: string; text: string } | null = null;
+  const heart = new Heart(deps(journal, {
+    restMs: 600_000,
+    settle: async () => { order.push('settle'); },
+    remember: async () => { order.push('remember'); return false; },
+    arrived: () => { order.push('ask'); const s = come; come = null; return s; },
+  }));
+  heart.completed(readEvents(journal));
+  expect(await heart.next()).toBe('reflect');
+  // Nothing has come, and it is not rest: it waits, having asked.
+  expect(await heart.next()).toBe('wait');
+  expect(order).toEqual(['settle', 'ask']);
+  come = { source: 'work', text: 'The background job suite that you left running has ended.' };
+  expect(await heart.next()).toBe('wake');
+  expect(readEvents(journal).at(-1)).toMatchObject({ type: 'stimulus', source: 'work', text: 'The background job suite that you left running has ended.' });
+  // The turn it owes now comes first; nothing is asked or remembered over it.
+  expect(await heart.next()).toBe('turn');
+  expect(order).toEqual(['settle', 'ask', 'ask']);
+});
+
+test('nothing is looked for before birth, and a failure to look is reported and waits', async () => {
+  const journal = setup();
+  const unborn = new Heart(deps(journal, { born: () => false, arrived: () => { throw new Error('not before birth'); } }));
+  expect(await unborn.next()).toBe('wait');
+  const errors: unknown[] = [];
+  const heart = new Heart(deps(journal, { restMs: 600_000, arrived: () => { throw new Error('unreadable'); }, onError: (e) => errors.push(e) }));
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'hello' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Hello.', toolCalls: [] });
+  expect(await heart.next()).toBe('wait');
+  expect(errors).toHaveLength(1);
+});
+
+test('the body sleeps until rest or until what it waits for may have come, whichever is sooner, and never spins on a time already past', () => {
+  const journal = setup();
+  let now = Date.parse('2026-11-20T12:00:00Z');
+  let look: number | undefined;
+  const heart = new Heart(deps(journal, { restMs: 600_000, now: () => now, nextLook: () => look }));
+  // At rest with nothing awaited: until something arrives.
+  expect(heart.waitFor()).toBeUndefined();
+  look = 2000;
+  expect(heart.waitFor()).toBe(2000);
+  look = -5000;
+  expect(heart.waitFor()).toBe(1000);
+  // The owner spoke a minute ago: rest is nine minutes off, and a look in three is sooner.
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'hello' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Hello.', toolCalls: [] });
+  now = Date.parse(readEvents(journal).at(-2)!.ts) + 60_000;
+  look = 180_000;
+  expect(heart.waitFor()).toBe(180_000);
+  look = undefined;
+  expect(heart.waitFor()).toBe(540_000 + 1000);
 });

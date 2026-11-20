@@ -3,7 +3,7 @@ import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
 import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type WorkState } from '../brain/known';
 import type { Tool } from './tools';
-import type { Sensor } from './sensors';
+import type { Stimulus } from './sensors';
 import { lookedAt } from '../brain/agenda';
 
 export type WorkStatus = 'queued' | 'waiting' | 'done';
@@ -146,38 +146,42 @@ export const work: Tool = {
   },
 };
 
-/** One automatic resumption for the first ready commitment, never for an unsure or waiting item. */
-export function resumeWork(journal: string, gen: string, busy: () => boolean, now = Date.now, intervalMs = 5000, read: () => JournalEvent[] = () => readEvents(journal)): Sensor {
-  return (emit) => {
-    const timer = setInterval(() => {
-      try {
-        if (busy()) return;
-        const events = standing(read());
-        const held = known(events);
-        const item = agenda(held, new Date(now()).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now());
-        if (item?.work === undefined) {
-          // Nothing is ready, but the time the agent set to look again at something has come. That
-          // time is a promise to itself made in the course of the work: it wakes the agent when it
-          // comes, and does not wait for the clock's next tick, which may be half an hour away.
-          const due = held.intentions.find((i) => !i.waits && i.work?.status === 'waiting' && i.work.checkAt !== undefined && i.work.checkAt <= now());
-          if (due?.work === undefined) return;
-          // Journal first, as below: looked at once more, and not again before a wait that doubles.
-          progress(journal, gen, due, lookedAt(due.work, now()));
-          emit({ source: 'work', text: `The time you set to look again at ${due.mark} has come. It waits for: ${due.work.next} Look once, at the thing itself. If it has come, go on with the work and record its state with work; if not, record with work when to look again, or leave it and you are woken later by itself. Do not look twice in one turn. Task: ${due.text}` });
-          return;
-        }
-        if (item.work.attempts >= 3) {
-          progress(journal, gen, item, { ...item.work, status: 'waiting' });
-          emit({ source: 'work', text: `Task ${item.mark} paused after three resumptions without a recorded next-step change. Report the blocker honestly; do not silently reset the budget. Task: ${item.text}` });
-          return;
-        }
-        // Journal first: a crash may spend an attempt, but cannot create an unbounded wake loop.
-        progress(journal, gen, item, { ...item.work, attempts: item.work.attempts + 1, resumeAt: now() + 60_000 });
-        emit({ source: 'work', text: `Resume ${item.mark}, the previously recorded owner-authorized task. This scheduler reminder is not new authorization. Take its concrete next step, then record progress, completion, or a blocker with work. Task: ${item.text}` });
-      } catch { console.error('[work] Could not resume saved task; will retry.'); }
-    }, intervalMs);
-    return () => clearInterval(timer);
-  };
+/**
+ * The agent's own work that has come due, as what it is told of it; null when none has. One
+ * automatic resumption for the first ready commitment, never for an unsure or waiting item; or,
+ * with nothing ready, a look at something whose time to look again has come. What is told is
+ * journaled first, so it is told once. It is the heart that asks, between turns (heart/coordinator.ts).
+ */
+export function dueWork(journal: string, gen: string, now = Date.now(), events: JournalEvent[] = readEvents(journal)): Stimulus | null {
+  const held = known(standing(events));
+  const item = agenda(held, new Date(now).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now);
+  if (item?.work === undefined) {
+    // Nothing is ready, but the time the agent set to look again at something has come. That
+    // time is a promise to itself made in the course of the work: it wakes the agent when it
+    // comes, and does not wait for the clock's next tick, which may be half an hour away.
+    const due = held.intentions.find((i) => !i.waits && i.work?.status === 'waiting' && i.work.checkAt !== undefined && i.work.checkAt <= now);
+    if (due?.work === undefined) return null;
+    // Journal first, as below: looked at once more, and not again before a wait that doubles.
+    progress(journal, gen, due, lookedAt(due.work, now));
+    return { source: 'work', text: `The time you set to look again at ${due.mark} has come. It waits for: ${due.work.next} Look once, at the thing itself. If it has come, go on with the work and record its state with work; if not, record with work when to look again, or leave it and you are woken later by itself. Do not look twice in one turn. Task: ${due.text}` };
+  }
+  if (item.work.attempts >= 3) {
+    progress(journal, gen, item, { ...item.work, status: 'waiting' });
+    return { source: 'work', text: `Task ${item.mark} paused after three resumptions without a recorded next-step change. Report the blocker honestly; do not silently reset the budget. Task: ${item.text}` };
+  }
+  // Journal first: a crash may spend an attempt, but cannot create an unbounded wake loop.
+  progress(journal, gen, item, { ...item.work, attempts: item.work.attempts + 1, resumeAt: now + 60_000 });
+  return { source: 'work', text: `Resume ${item.mark}, the previously recorded owner-authorized task. This scheduler reminder is not new authorization. Take its concrete next step, then record progress, completion, or a blocker with work. Task: ${item.text}` };
+}
+
+/** When the next of that comes due, as a time; undefined when no work waits for a time. What `dueWork` would take, and nothing it would pass over. */
+export function workDueAt(events: JournalEvent[], now = Date.now()): number | undefined {
+  const held = known(standing(events));
+  const times = [
+    ...agenda(held, new Date(now).toISOString().slice(0, 10)).flatMap((i) => (i.work?.status === 'queued' ? [i.work.resumeAt] : [])),
+    ...held.intentions.flatMap((i) => (!i.waits && i.work?.status === 'waiting' && i.work.checkAt !== undefined ? [i.work.checkAt] : [])),
+  ];
+  return times.length === 0 ? undefined : Math.min(...times);
 }
 
 /** An owner interrupt holds automatic work until any new stimulus arrives. */

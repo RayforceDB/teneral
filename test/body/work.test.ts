@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { agenda, INTENTION_KIND, known, knownText } from '../../brain/known';
-import { heldByInterrupt, resumeWork, work } from '../../body/work';
+import { dueWork, heldByInterrupt, work, workDueAt } from '../../body/work';
+
+/** The heart asks `dueWork` between turns (heart/coordinator.ts); here a timer stands in for it, held off while `busy`. */
+const resumeWork = (journal: string, gen: string, busy: () => boolean, now: () => number, ms: number) => (emit: (s: { source: string; text: string }) => void): (() => void) => {
+  const timer = setInterval(() => { if (busy()) return; const s = dueWork(journal, gen, now()); if (s !== null) emit(s); }, ms);
+  return () => clearInterval(timer);
+};
 import type { ToolContext } from '../../body/tools';
 
 const setup = () => {
@@ -173,5 +179,25 @@ test('the time the agent set to look again wakes it when it comes, once, and the
       halt();
       expect(none).toEqual([]);
     } finally { rmSync(quiet.dir, { recursive: true }); }
+  } finally { rmSync(s.dir, { recursive: true }); }
+});
+
+test('the time of the next thing due is the earliest that the scheduler would take, and none when nothing waits for a time', async () => {
+  const s = setup();
+  try {
+    expect(workDueAt(readEvents(s.journal))).toBeUndefined();
+    await work.run({ status: 'waiting', task: 'no time', next: 'the owner answers' }, s.ctx);
+    expect(workDueAt(readEvents(s.journal))).toBeUndefined();
+    const before = Date.now();
+    await work.run({ status: 'waiting', task: 'the suite', next: 'the tests end', check: 3 }, s.ctx);
+    const at = workDueAt(readEvents(s.journal))!;
+    expect(at).toBeGreaterThanOrEqual(before + 3 * 60_000);
+    expect(at).toBeLessThanOrEqual(Date.now() + 3 * 60_000);
+    // Before its time nothing is told; at it, once.
+    expect(dueWork(s.journal, 'g1', at - 1)).toBeNull();
+    expect(dueWork(s.journal, 'g1', at)?.text).toContain('The time you set to look again');
+    expect(dueWork(s.journal, 'g1', at)).toBeNull();
+    await work.run({ status: 'queued', task: 'a step', next: 'take it' }, s.ctx);
+    expect(workDueAt(readEvents(s.journal))!).toBeLessThan(at);
   } finally { rmSync(s.dir, { recursive: true }); }
 });

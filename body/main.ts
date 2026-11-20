@@ -11,7 +11,7 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { subagent, subagents } from './subagent';
-import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
+import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -36,7 +36,7 @@ import { mail, mailKey } from './mail';
 import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
-import { stopCurrentJobs, stopPreviousJobs } from './jobs';
+import { endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
 import { enter, meet, whoLines } from './participants';
@@ -358,11 +358,6 @@ const sensors: Sensor[] = [
     const timer = setTimeout(() => { void worker.poll(); setInterval(() => { void worker.poll(); }, 60_000); }, 60_000);
     return () => { clearTimeout(timer); worker.stop(); };
   }] : []),
-  resumeWork(journal, gen, () => {
-    if (working || quitting) return true;
-    const events = journalNow();
-    return needsTurn(events) || heldByInterrupt(events);
-  }, undefined, undefined, journalNow),
   // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
@@ -494,6 +489,10 @@ async function rest(): Promise<boolean> {
 
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+/** The length of the journal when the store was last written out before a sleep. */
+let tidiedAt = -1;
+/** How often a job the agent left running is looked at, while there is one: its end sends no signal of its own. */
+const JOB_LOOK_MS = 2000;
 const heart = new Heart({
   events: () => journalNow(),
   born: () => clockMayTick(journalNow(), soulDir),
@@ -510,6 +509,19 @@ const heart = new Heart({
     } finally { wake = null; resting = false; }
   },
   remember: rest,
+  // What the agent waits for: a job it left running, then its own work that has come due. An owner's interruption holds both until something new arrives.
+  arrived: () => {
+    const events = journalNow();
+    if (quitting || heldByInterrupt(events)) return null;
+    return endedJob(journal, gen, events) ?? dueWork(journal, gen, Date.now(), events);
+  },
+  nextLook: () => {
+    const events = journalNow();
+    if (heldByInterrupt(events)) return undefined;
+    const due = workDueAt(events);
+    const times = [...(due === undefined ? [] : [due - Date.now()]), ...(jobsLeftRunning(events, gen) ? [JOB_LOOK_MS] : [])];
+    return times.length === 0 ? undefined : Math.min(...times);
+  },
   backlog: () => memoryHealth(standing(journalNow())).waiting,
   restMs,
   onError: error => {
@@ -621,26 +633,29 @@ for (;;) {
   const beat = await heart.next();
   if (quitting) break;
   if (beat !== 'wait') continue;
-  // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
-  // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
-  try {
-    const events = standing(journalNow());
-    if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
-  } catch (err) {
-    console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
+  // Once for each time the journal has grown: a wake only to look whether a job has ended, or a time has come, has nothing new to tidy.
+  if (journalNow().length !== tidiedAt) {
+    // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
+    // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
+    try {
+      const events = standing(journalNow());
+      if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
+    } catch (err) {
+      console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // And what the store gained is written out, so that the next start finds it on disk.
+    try {
+      past.sync();
+      past.persist();
+    } catch (err) {
+      console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // A prompt only where someone can type at it; a wake reuses the existing input place.
+    if (process.stdin.isTTY) terminalPrompt.ready();
+    tidiedAt = journalNow().length;
   }
-  // And what the store gained is written out, so that the next start finds it on disk.
-  try {
-    past.sync();
-    past.persist();
-  } catch (err) {
-    console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  // A prompt only where someone can type at it; a wake reuses the existing input place.
-  if (process.stdin.isTTY) terminalPrompt.ready();
-  // Until something arrives, or until rest begins and there may be something of its own to do.
-  const untilRest = heart.restIn();
-  await idle(untilRest > 0 ? untilRest + 1000 : undefined);
+  // Until something arrives, until rest begins and there may be something of its own to do, or until what the agent waits for may have come.
+  await idle(heart.waitFor());
 }
 
 stopBackground();
