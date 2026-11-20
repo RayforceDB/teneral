@@ -225,15 +225,18 @@ test('a turn that stops half-way is settled at once, and the step it names wakes
   tell(l.owner, 'do the whole job');
   await l.until('the turn is settled', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.settle.v1'));
   expect(l.asked[1]!.messages.at(-1)!.content).toContain('Your turn has just ended');
-  expect(known(standing(readEvents(l.journal))).intentions[0]).toMatchObject({ text: 'Finish the second half of the job', work: { status: 'queued', next: 'Run the second step and check its output' } });
-  // The work sensor wakes it for the queued step; nothing else does.
+  // Read from what was journaled, not from how things stand now: the heart takes the queued step up at once, and may have by the time this looks.
+  const journaled = (): string[] => l.events().flatMap(e => (e.type === 'note' ? [JSON.stringify(e.data)] : []));
+  await l.until('the step is queued', () => journaled().some(data => data.includes('"status":"queued"') && data.includes('Run the second step and check its output')));
+  expect(journaled().some(data => data.includes('Finish the second half of the job'))).toBe(true);
+  // The heart wakes it for the queued step; nothing else does.
   await l.until('the queued step is taken', () => l.events().some(e => e.type === 'assistant' && e.text === 'All of it is done now.'), 12_000);
   expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'work')).toHaveLength(1);
   expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(0);
   expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(0);
   expect(known(standing(readEvents(l.journal))).intentions).toEqual([]);
   await Bun.sleep(300);
-  // A turn the work sensor woke is not settled again: four requests, and then it rests.
+  // A turn woken for its own work is not settled again: four requests, and then it rests.
   expect(l.asked).toHaveLength(4);
   expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.settle.v1')).toHaveLength(1);
 }, 20_000);
