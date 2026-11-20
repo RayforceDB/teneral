@@ -52,6 +52,8 @@ export interface ChatMessage {
   again?: boolean;
   /** More to show with a message that wakes the agent at once, such as the owner's images; asked for only then. */
   more?: () => Promise<string[]>;
+  /** Adapter-local ownership check after async attachment/roster work; absent means always current. */
+  current?: () => boolean;
 }
 
 /** The words a service is spoken of with in what the agent is told. */
@@ -186,10 +188,12 @@ export function chat(o: ChatOptions): Chat {
 
   const channels = new Set<string>();
   async function take(m: ChatMessage): Promise<void> {
+    if (m.current?.() === false) return;
     if (m.channel !== undefined && !channels.has(m.channel.id)) {
       // Not for want of a roster is a message held up or lost.
       let said = '';
       try { said = (await o.entered?.(m.channel)) ?? ''; } catch { /* asked again when the process next starts */ }
+      if (m.current?.() === false) return;
       channels.add(m.channel.id);
       if (said !== '') notices.push(said);
     }
@@ -236,6 +240,9 @@ export function chat(o: ChatOptions): Chat {
     const context = [...held, ...waiting].sort((x, y) => x.id - y.id);
     const earlier = context.length === 0 ? '' : `\nEarlier subscribed-stream traffic; it did not wake the agent.${dropped > 0 ? ` ${dropped} older message${dropped === 1 ? '' : 's'} omitted.` : ''}\n${context.map(h => h.line).join('\n')}`;
     const more = m.more === undefined ? [] : await m.more();
+    // An adapter's watchdog may have yielded ownership while attachments were being fetched. The
+    // stale message must neither be emitted nor clear context that its recovery still owns.
+    if (m.current?.() === false) return;
     o.emit({
       // Authority comes from the service's own identification of the sender, not from message content.
       source: m.owner ? w.ownerSource : w.source,

@@ -116,6 +116,7 @@ async function attachments(c: Credentials, content: string, keep: Options['keepI
 export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   let identity: { key: string; id: number; name: string } | undefined;
   let cursor = 0, stopped = false, busy = false, failed = false, again = false;
+  let generation = 0;
   const now = (): number => o.now?.() ?? Date.now();
   let bots: Set<number> | undefined, botsAt = 0;
   /** Where listening began when nothing had ever been heard: kept in memory, since no stimulus holds it yet. */
@@ -145,6 +146,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         .map((id: number) => ({ id: String(id), name: everyone.get(id)?.name ?? `user ${id}`, ...(everyone.has(id) ? { bot: everyone.get(id)!.bot } : {}) }));
     } catch { return null; }
   }
+  // The poller sets this per pass; toChat captures it before any asynchronous delivery work.
+  let active = () => true;
   const attention = chat({
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
@@ -169,13 +172,14 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   function toChat(c: Credentials, m: any, again = false): ChatMessage {
     const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
     const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
+    const current = active;
     return {
       // A direct conversation is a place of its own, by who is in it besides the agent.
       id: m.id, place: m.type === 'private' ? `dm:${direct(m).join(',')}` : `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
       ...(Number.isSafeInteger(m.sender_id) ? { sender: { id: String(m.sender_id), name: text(m.sender_full_name, 200) || `user ${m.sender_id}` } } : {}),
       ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { where: `#${text(m.display_recipient, 100)}` } : m.type === 'private' ? { where: 'a direct message' } : {}),
       ...(m.type === 'stream' && Number.isSafeInteger(m.stream_id) ? { channel: { id: String(m.stream_id), name: `#${text(m.display_recipient, 100) || m.stream_id}` } } : {}),
-      own: m.sender_id === identity!.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000), ...(again ? { again } : {}),
+      own: m.sender_id === identity!.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000), ...(again ? { again } : {}), current,
       // Zulip's quote-and-reply names the quoted author by a silent mention with their id.
       answers: text(m.content, 6000).includes(`|${identity!.id}** [`),
       line: JSON.stringify({
@@ -198,32 +202,41 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     };
   }
   /** What the event queue told of since the last poll: messages changed by their senders, and messages taken back. */
-  async function changes(c: Credentials): Promise<void> {
+  async function changes(c: Credentials, current: () => boolean = () => true): Promise<boolean> {
     for (const id of [...gone]) {
+      if (!current()) return false;
       attention.forget(id);
       gone.delete(id);
       changed.delete(id);
     }
     for (const id of [...changed]) {
+      if (!current()) return false;
       // Only what was already fetched can have changed under the agent; a newer message comes as itself.
       if (id > cursor) { changed.delete(id); continue; }
       const r = await (o.send ?? fetch)(new URL(`/api/v1/messages/${id}?apply_markdown=false`, c.site), {
         headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') }, signal: AbortSignal.timeout(15_000), redirect: 'error',
       });
+      if (!current()) return false;
       // Gone, or no longer the agent's to read: nothing to tell.
       if (!r.ok) { changed.delete(id); attention.forget(id); continue; }
       const m = (await r.json() as any).message;
+      if (!current()) return false;
       if (!m || !Number.isSafeInteger(m.id) || m.sender_id === identity!.id) { changed.delete(id); continue; }
       const now = toChat(c, m);
-      if (addressed.has(id)) await attention.take({ ...now, again: true });
+      if (addressed.has(id)) {
+        await attention.take({ ...now, again: true });
+        if (!current()) return false;
+      }
       else if (now.kind === 'direct' || now.mentioned) {
         // A mention added by an edit addresses the agent now, though the message is not new.
         attention.forget(id);
         await attention.take(now);
+        if (!current()) return false;
         addressed.add(id);
       } else attention.revise(id, now.line);
       changed.delete(id);
     }
+    return true;
   }
   // The poll body can await an emit that wakes a long turn. Every HTTP call is bounded by an
   // AbortSignal, but the overall pass still gets a generous deadline so that if any await never
@@ -235,10 +248,15 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     // One pending bit coalesces any number of bells; without it a DM could wait for the 30 s fallback.
     if (busy) { again = true; return; }
     busy = true;
+    const pass = ++generation;
+    const current = (): boolean => !stopped && generation === pass;
+    active = current;
     let finished = false;
     const watchdog = setTimeout(() => {
       if (!finished && !stopped) {
         console.error('[zulip] DM poll exceeded its deadline; releasing the busy latch so the sensor retries.');
+        // Releasing the latch does not revive the old pass when its suspended await resumes.
+        generation++;
         busy = false;
       }
     }, POLL_DEADLINE_MS);
@@ -285,6 +303,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         if (!first.ok) throw new Error('Zulip request failed');
         const page = await first.json();
         if (!Array.isArray(page.messages)) throw new Error('Invalid message list');
+        if (!current()) return;
         began = page.messages.reduce((most: number, m: any) => (Number.isSafeInteger(m?.id) && m.id > most ? m.id : most), 0);
         cursor = began;
         // An empty organisation has no newest message: everything that comes is new.
@@ -306,22 +325,32 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const messages = d.messages.filter((m: any) => m && Number.isSafeInteger(m.id) && m.id > cursor)
         .sort((a: any, b: any) => a.id - b.id);
       for (const m of messages) {
-        if (stopped) return;
+        if (!current()) return;
         await attention.take(toChat(c, m));
+        if (!current()) return;
         if (m.type === 'private' || (Array.isArray(m.flags) && m.flags.includes('mentioned'))) addressed.add(m.id);
         // Advanced only when the message was taken: a stimulus that could not be journaled is fetched again,
         // and a page of the agent's own messages still moves on so later traffic is reachable.
         cursor = m.id;
       }
-      if (!stopped && changed.size + gone.size > 0) await changes(c);
-      while (!stopped && added.length > 0) await attention.joined(added.shift()!);
-      if (!stopped) attention.paused();
+      if (!current()) return;
+      if (changed.size + gone.size > 0 && !await changes(c, current)) return;
+      if (!current()) return;
+      while (added.length > 0) {
+        const stream = added[0]!;
+        await attention.joined(stream);
+        if (!current()) return; // leave a not-yet-delivered subscription queued for recovery
+        if (added[0]?.id === stream.id) added.shift();
+      }
+      attention.paused();
+      if (!current()) return;
       if (o.conversations && !stopped) {
         const presence = await (o.send ?? fetch)(new URL('/api/v1/users/me/presence', c.site), { method: 'POST',
           headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
           body: new URLSearchParams({ status: 'active', ping_only: 'true' }), redirect: 'error', signal: AbortSignal.timeout(10_000) });
         if (!presence.ok) throw new Error('Presence failed');
       }
+      if (!current()) return;
       failed = false;
       if (failures >= DOWN_AFTER) {
         // Nothing was lost: the cursor fetched what was said meanwhile. The agent is told why it comes late.
@@ -331,6 +360,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       }
       failures = 0;
     } catch {
+      // An expired pass cannot report a new outage over the recovery's connection state.
+      if (!current()) return;
       if (!failed && !stopped) console.error('[zulip] DM poll failed; will retry (credentials and response omitted).');
       failed = true;
       if (failures === 0) downSince = now();
@@ -338,11 +369,15 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     } finally {
       finished = true;
       clearTimeout(watchdog);
-      busy = false;
-      if (again) {
-        again = false;
-        // Schedule after the current turn, so an active queue callback is never re-entered inline.
-        queueMicrotask(() => { if (!stopped) void poll(); });
+      // Only the live pass owns the latch and its pending bell. The watchdog already released an
+      // expired pass; its late completion must not free the recovery's latch or start a third pass.
+      if (generation === pass) {
+        busy = false;
+        if (again) {
+          again = false;
+          // Schedule after the current turn, so an active queue callback is never re-entered inline.
+          queueMicrotask(() => { if (!stopped) void poll(); });
+        }
       }
     }
   }
