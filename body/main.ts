@@ -10,10 +10,11 @@ import { githubRemote, gitRemote } from '../species/github';
 import { install as speciesInstall, retireStale, retiredText } from '../species/offer';
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
-import { subagent, subagents } from './subagent';
+import { subagents } from './subagent';
+import { Children, childLimits, childTool, closeLostChildren, endedChild } from './children';
 import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
@@ -367,7 +368,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
+      journal, gen, provider, tools: [...TOOLS, childTool(children), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
@@ -467,6 +468,16 @@ async function rest(): Promise<boolean> {
 
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+// Subagents: workers with the agent's hands, each in a copy of the workspace (body/children.ts). A cheaper model may be named for them.
+const childProvider: Provider = process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider;
+for (const name of closeLostChildren(journal, gen)) console.error(`[subagent] ${name} was running when the body stopped; closed as cut off`);
+const children = new Children({
+  journal, gen, workspace, dir: join(dirname(workspace), 'children'), provider: childProvider, tools: TOOLS, ctx,
+  limits: childLimits(process.env), budgetChars: budgetChoice.budgetChars,
+  // The heart finds its note at the next beat; this only ends the sleep.
+  onEnded: () => idleWake?.(),
+});
+process.on('exit', () => children.stopAll());
 /** When this body started: the clock counts from here until it has given a tick of its own. */
 const startedAt = Date.now();
 const heartbeatMs = heartbeatMinutes * 60_000;
@@ -517,7 +528,7 @@ const heart = new Heart({
   arrived: () => {
     if (quitting) return null;
     const events = journalNow(), now = Date.now();
-    const own = heldByInterrupt(events) ? null : endedJob(journal, gen, events) ?? dueWork(journal, gen, now, events);
+    const own = heldByInterrupt(events) ? null : endedJob(journal, gen, events) ?? endedChild(journal, gen, events) ?? dueWork(journal, gen, now, events);
     // And the species, heard from now and then: an offer it has moved past is retired, and the agent told.
     return own ?? staleOffers(now);
   },

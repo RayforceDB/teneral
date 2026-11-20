@@ -369,6 +369,11 @@ Settings, in `.env`:
 | `TENERAL_REST_MINUTES` | Minutes of your silence after which the agent is at rest: it then forms its memories, looks ahead and gets its ticks. While you are talking with it none of that runs. Default 10; 0 means always at rest. |
 | `TENERAL_RAYBOARD_AMBIENT` | `0`: talk in a Rayboard channel that does not mention the agent never wakes it. Unset: as on Zulip, it is woken once such talk has paused. |
 | `TENERAL_BACKGROUND` | `serial`: a memory being formed is cancelled when something arrives, and formed again later. Unset: it goes on beside the turn that answers, and is journaled when that turn is over. Set it for a provider that refuses two requests at once. |
+| `TENERAL_SUBAGENTS` | How many subagents the agent may have running at a time. Unset: 3. See [Subagents](#subagents). |
+| `TENERAL_SUBAGENT_STEPS` | Steps one subagent may take: a request to the model and the calls it asked for. Unset: 30. At the limit it is asked once more, with no tools, for what it has. |
+| `TENERAL_SUBAGENT_MINUTES` | How long one subagent may run. Unset: 15. |
+| `TENERAL_SUBAGENT_TOKENS` | Tokens one subagent may be charged, in and out together. Unset: 2000000. |
+| `TENERAL_SUBAGENT_MODEL` | A model for subagents other than the agent's own, at the same provider. Unset: the agent's model. |
 | `TENERAL_ZULIP_AMBIENT` | `0`: talk in a Zulip channel that does not mention the agent never wakes it. Unset: it is woken once such talk has paused, and may join in or stay silent. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request at most. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
 | `TENERAL_TAIL_CHARS` | Characters of the conversation shown to the model word for word; what is older is shown as the agent's memories of it, which take a few lines an episode. Default 100000. Everything in a request is read again at each step of a turn, so this number is most of what a step costs and how long the first reply after a pause takes. |
@@ -384,6 +389,14 @@ Settings, in `.env`:
 `./one setup` writes the first four; `.env.example` shows the file for writing it by hand. Write values without quotes and without a comment after them: Docker passes the whole line on as written. The file is read when the container starts, so a change takes `./one down` and `./one up`; the exception is the first four, which a running agent takes up [by itself](#changing-the-model-while-it-runs).
 
 To start over as a new individual, run `./one down`, delete `soul/`, `memory/`, `inbox/` and `.teneral/`, then run `git worktree prune` and `git branch -D lineage/local`. A ChatGPT sign-in lives in `.teneral/auth/` and goes with it, and so do the individual's signing key and your GitHub token; keep that directory to stay signed in.
+
+### Subagents
+
+The agent can start workers of its own, with its `subagent` tool: each does one task beside the agent's own turns and outlives the turn that started it. A subagent has the agent's hands (`read`, `write`, `edit`, `look`, `bash`) and nothing else: it cannot mutate, speak in a chat, touch the agent's memory or agenda, or start a subagent of its own. It knows only the task the agent wrote for it.
+
+It never works in the agent's workspace. Each gets a copy of it as it stands, uncommitted work included, and what it changed comes back as a branch (`child/<name>-<id>`) holding one commit, which the agent looks at and takes with `git cherry-pick` or leaves. So two subagents, or a subagent and the agent, cannot write over each other.
+
+When one ends the agent is woken and told, with its report and the branch; the report is a worker's word, not yours, and the agent is told so. One that ran out of steps, time or tokens is asked once more for what it had, so it does not come back with nothing; one that was running when the body restarted is closed as cut off, with its last words. Its whole journal stays in `.teneral/children/<name>-<id>/journal.jsonl`. While any runs, the `jobs` action under the footer of `./one talk` names them. The limits are settings: `TENERAL_SUBAGENTS`, `TENERAL_SUBAGENT_STEPS`, `TENERAL_SUBAGENT_MINUTES`, `TENERAL_SUBAGENT_TOKENS`, and `TENERAL_SUBAGENT_MODEL` for a cheaper model.
 
 ### Changing the model while it runs
 
