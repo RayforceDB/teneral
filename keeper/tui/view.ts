@@ -579,7 +579,8 @@ export function liveRows(v: Live): Line[] {
     while (parts.length > 1 && width(parts.join(sep)) + 1 > max) parts = parts.slice(0, -1);
     return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
   };
-  // An open menu belongs to the row of actions, so it needs one; while commands are offered there is neither.
+  // An open menu uses the box and footer's room instead of adding a panel below them. Its height
+  // then stays that of the live region, and the terminal does not scroll the conversation away.
   const menu = list === null && v.bar ? v.menu ?? null : null;
   let shown = menu === null ? 0 : Math.min(menu.items.length, LIST_ROWS);
   let menuFramed = true;
@@ -587,11 +588,11 @@ export function liveRows(v: Live): Line[] {
   // The actions stand under the footer, and give way before it does: the status line matters more.
   let bar: Line[] = list === null && v.bar ? [barRow(v.bar, max, g, menu !== null)] : [];
   // What a small screen gives up, in this order, until the region fits.
-  let pending = v.pending;
-  let blank = true;
+  let pending = menu !== null ? [] : v.pending;
+  let blank = menu === null;
   let first = true;
-  let activity = v.activity;
-  let workers = v.workers.map(w => clip([
+  let activity = menu !== null ? null : v.activity;
+  let workers = menu !== null ? [] : v.workers.map(w => clip([
     { text: `  ${g.quiet} `, style: FAINT }, { text: `${w.label}: `, style: DIM }, { text: w.task, style: FAINT },
   ], max, { text: g.ellipsis, style: FAINT }));
   let framed = true;
@@ -602,7 +603,7 @@ export function liveRows(v: Live): Line[] {
     ...(pending.length > 0 && blank ? [[]] : []),
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
     ...workers,
-    ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
+    ...(menu !== null ? [] : framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
     ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : menu !== null ? menuRows(menu, max, shown, g, menuFramed) : first ? footer : []),
     ...bar,
   ];

@@ -70,7 +70,7 @@ const HELP = [
   '',
   'A line that begins with a slash and a word is a command. Type / and the commands are listed under the box, fewer with each letter: Up and Down (or Ctrl-P and Ctrl-N) choose one, Tab completes it, Enter runs it, or completes it when something has to follow, and Esc closes the list. The name is coloured once it is whole; one that is no command is coloured as a mistake, and Enter neither runs nor sends it. To send the agent a line that begins with a slash, begin it with two: //like this arrives as /like this. A path, such as /home/you/notes.txt, is no command and needs none of that.',
   '',
-  'The conversation is ordinary output of your terminal: its scrollbar, PageUp and PageDown, selection, copy and search all work on it. Only the box you type in and the lines around it are redrawn.',
+  'PageUp and PageDown, or the mouse wheel, page through the conversation above the input box and bottom actions. Those bottom rows stay fixed. Scrolling back to the newest output returns to the ordinary transcript, where selection, copy and search remain the terminal\'s own.',
   '',
   'Images: Ctrl+V attaches the image in your clipboard; dragging an image file into the terminal, or pasting its path, attaches that file; so does /image <path>. An attached image is a chip in the input box, and Backspace at the start of the line removes the last one. A message carries at most 4 images of at most 10 MB each (PNG, JPEG, GIF, WebP). They are kept in memory/images/. The agent sees them once its own body knows how; until then it sees one line of text naming each file.',
   '',
@@ -739,7 +739,16 @@ export class TalkScreen {
     if (key.kind === 'alive') return this.lifeline.heard();
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
+    if (key.kind === 'wheel') {
+      this.inline.page(key.delta, true);
+      return;
+    }
+    if (key.kind === 'key' && !key.ctrl && !key.alt && (key.name === 'pageup' || key.name === 'pagedown')) {
+      this.inline.page(key.name === 'pageup' ? -1 : 1);
+      return;
+    }
     if (ctrl('c')) return this.close(0);
+    if (key.kind === 'text' || key.kind === 'paste') this.inline.follow();
     const plain = key.kind === 'key' && !key.ctrl && !key.alt && !key.shift;
     if (this.menu !== null && key.kind === 'key') {
       // An open menu has the keys: up and down move, Enter does what is chosen, Esc or Left goes back to the row.
@@ -812,6 +821,7 @@ export class TalkScreen {
   }
 
   private submit(): void {
+    this.inline.follow();
     const text = this.edit.text.trim();
     // A second Enter while a file is being prepared must not discard the pending line and chips.
     if (this.held !== null) return;

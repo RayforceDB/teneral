@@ -261,7 +261,7 @@ test('stopping prints what is still queued, takes the live region away and gives
   inline.paint(box(30));
   inline.stop();
   expect(term.written.length).toBe(count);
-  // Only the sequences it needs: relative moves, erasing, colours and its three modes. It never names a row of the screen.
-  const own = /^\x1b\[(\d*[ABKJ]|[\d;]*m|\?(25|2004|2026)[hl])$/;
+  // Relative painting is used normally; the anchored pager may name rows and owns wheel mode.
+  const own = /^\x1b\[(\d*[ABKJ]|\d+;\d+H|[\d;]*m|\?(25|1002|1006|2004|2026)[hl])$/;
   expect(sequences(term.written).filter((sequence) => !own.test(sequence))).toEqual([]);
 });

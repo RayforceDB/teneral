@@ -88,8 +88,8 @@ test('a bracketed paste comes whole, line breaks and all, even when it arrives i
   expect(keys('\x1b[200~\r\x03\x1b[A\x1b[201~')).toEqual([{ kind: 'paste', text: '\n\x03\x1b[A' }]);
 });
 
-test('the mouse is the terminal\'s own: a report from a terminal left in a mouse mode is swallowed whole, in both formats, and nothing is made of it', () => {
-  expect(keys('\x1b[<64;10;5M\x1b[<65;10;5M')).toEqual([]);
+test('wheel reports page the conversation; clicks and drags are still ignored', () => {
+  expect(keys('\x1b[<64;10;5M\x1b[<65;10;5M')).toEqual([{ kind: 'wheel', delta: -1 }, { kind: 'wheel', delta: 1 }]);
   expect(keys('\x1b[<0;10;5M\x1b[<0;10;5m')).toEqual([]);
   expect(keys('\x1b[M`!!\x1b[Ma!!')).toEqual([]);
   expect(keys('\x1b[M !!x')).toEqual([{ kind: 'text', text: 'x' }]);

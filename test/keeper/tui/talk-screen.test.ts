@@ -105,7 +105,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
   expect(s.term.vt.cursorVisible).toBe(false);
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 4 });
   expect(s.term.vt.alt).toBe(false);
-  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1006)).toBe(false);
+  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([2004, 1002, 1006]);
 });
 
 test('only the last few exchanges are shown on attaching; the status says so, and /history prints the rest that was read', () => {
@@ -518,16 +518,14 @@ test('Ctrl-U, Ctrl-K and Ctrl-W, word jumps, Delete and Backspace work on the li
   expect(sentFiles(s)).toEqual([]);
 });
 
-test('PageUp, PageDown and the mouse are the terminal\'s own: nothing is drawn for them and nothing is typed', () => {
+test('PageUp, PageDown and wheel reports never become text or commands', () => {
   const s = stage(80, 24);
   settled(s);
   s.frame();
-  const count = s.term.written.length;
   s.type('\x1b[5~\x1b[6~\x1b[1;2A\x1b[1;2B\x1b[<64;5;5M\x1b[<0;5;5M\x1b[<0;5;5m');
   s.frame();
   expect(typed(s)).toEqual(['›']);
-  expect(s.term.written.slice(count).join('')).not.toMatch(/[A-Za-z]{3}/);
-  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([2004]);
+  expect(sentFiles(s)).toEqual([]);
   // /mouse is gone with the mode it switched.
   s.type('/mouse\r');
   expect(s.all()).toContain('/mouse is not a command here, and was not sent. /help lists them.');
@@ -816,7 +814,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(all.match(/^◆ The agent is awake$/m)).toBeNull();
 
   // Every escape sequence that reached the terminal is one this client writes itself: no title, no jump, no clearing of the screen.
-  const own = /^\x1b\[(\d*[ABKJ]|[\d;]*m|\?(25|2004|2026)[hl])$/;
+  const own = /^\x1b\[(\d*[ABKJ]|\d+;\d+H|[\d;]*m|\?(25|1002|1006|2004|2026)[hl])$/;
   const sent = sequences(s.term.written);
   expect(sent.length).toBeGreaterThan(10);
   expect(sent.filter((sequence) => !own.test(sequence))).toEqual([]);
@@ -1620,6 +1618,84 @@ test('under the footer stands a row of actions: Down goes onto it, Left and Righ
   s.type('x');
   expect(last()).toContain('↓  actions');
   expect(s.live()).toContain('x');
+});
+
+test('opening an action menu leaves the conversation and the bottom row where they were', () => {
+  for (const height of [6, 8, 10, 12, 24, 40]) {
+    const s = stage(100, height, { open: false });
+    settled(s);
+    for (let i = 0; i < 20; i++) {
+      s.journal({ type: 'stimulus', source: 'terminal', text: `question ${i}` }, -40_000 + i * 1000);
+      s.journal({ type: 'assistant', text: `answer ${i}`, toolCalls: [] }, -39_500 + i * 1000);
+    }
+    s.app.open();
+    s.frame();
+    const scrollback = s.term.vt.scrollback.length;
+    const cursor = s.term.vt.cursor;
+    const bottom = s.term.vt.text().split('\n').at(-1)!;
+
+    s.type('\x1b[B\x1b[C\r');
+    expect(s.term.vt.scrollback.length).toBe(scrollback);
+    expect(s.term.vt.cursor).toEqual(cursor);
+    expect(s.live()).toContain('publish');
+    expect(s.live().split('\n').at(-1)).toContain('↑↓  choose');
+
+    const live = s.live();
+    const bottomRows = live.split('\n');
+    const before = s.term.vt.text();
+    s.type('\x1b[5~');
+    s.frame();
+    const paged = s.term.vt.text();
+    expect(paged).not.toBe(before);
+    expect(paged.split('\n').slice(-bottomRows.length)).toEqual(bottomRows);
+    expect(s.term.vt.cursor).toEqual({ row: height - bottomRows.length, col: 0 });
+
+    s.type('\x1b[<65;5;5M\x1b[<64;5;5M\x1b[<0;5;5M\x1b[<0;5;5m');
+    s.frame();
+    const afterWheel = s.term.vt.text();
+    expect(afterWheel.split('\n').slice(-bottomRows.length)).toEqual(bottomRows);
+    expect(s.term.vt.cursor).toEqual({ row: height - bottomRows.length, col: 0 });
+
+    s.type('\x1b\x1b');
+    s.app.settleKeys();
+    expect(s.term.vt.scrollback.length).toBe(scrollback);
+    expect(s.term.vt.cursor).toEqual(cursor);
+    expect(s.term.vt.text().split('\n').at(-1)).toBe(bottom);
+    s.app.close();
+  }
+});
+
+test('paging holds an old conversation still while output waits, then returns to the newest and restores the terminal', () => {
+  const s = stage(100, 24, { open: false });
+  settled(s);
+  for (let i = 0; i < 30; i++) {
+    s.journal({ type: 'stimulus', source: 'terminal', text: `question ${i}` }, -60_000 + i * 1000);
+    s.journal({ type: 'assistant', text: `answer ${i}`, toolCalls: [] }, -59_500 + i * 1000);
+  }
+  s.app.open();
+  s.frame();
+  s.type('\x1b[B\x1b[C\r\x1b[5~');
+  s.frame();
+  const old = s.term.vt.text();
+  const scrollback = s.term.vt.scrollback.length;
+
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'new question' }, 1000);
+  s.journal({ type: 'assistant', text: 'new answer', toolCalls: [] }, 1100);
+  s.frame();
+  expect(s.term.vt.text()).toBe(old);
+  expect(s.term.vt.scrollback.length).toBe(scrollback);
+
+  for (let i = 0; i < 20; i++) s.type('\x1b[6~');
+  s.frame();
+  expect(s.term.vt.text()).toContain('new answer');
+  expect(s.term.vt.text().split('\n').slice(-6)).toEqual(old.split('\n').slice(-6));
+
+  s.type('\x1b[5~');
+  s.frame();
+  s.app.close();
+  expect(s.term.vt.all()).toContain('new answer');
+  expect(s.term.vt.all().split('\n').at(-1)).toContain('You left.');
+  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([]);
 });
 
 test('an action that holds something for the owner says so, and Down goes onto it first', () => {
