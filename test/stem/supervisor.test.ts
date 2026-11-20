@@ -323,6 +323,27 @@ test('init puts back a worktree that was deleted after a complete init', () => {
   expectInstalled(dir, seed);
 });
 
+test('a prune run where the individual\'s worktrees cannot be seen, as on the host of a container, does not forget them: they are locked', () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  init(dir);
+  const p = paths(dir);
+  const listed = git(dir, 'worktree', 'list', '--porcelain');
+  expect(listed.match(/^locked /gm)).toHaveLength(2);
+  // From the host the paths are not there. Stood in for by moving both aside while the prune runs.
+  const aside = `${dir}-aside`;
+  mkdirSync(aside);
+  renameSync(p.live, join(aside, 'live'));
+  renameSync(p.candidate, join(aside, 'candidate'));
+  git(dir, 'worktree', 'prune');
+  renameSync(join(aside, 'live'), p.live);
+  renameSync(join(aside, 'candidate'), p.candidate);
+  expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
+  expect(git(p.candidate, 'status', '--porcelain')).toBe('');
+  // And starting again finds nothing to mend, and leaves them locked.
+  expect(init(dir)).toEqual({ current: seed, previous: null });
+  expect(git(dir, 'worktree', 'list', '--porcelain').match(/^locked /gm)).toHaveLength(2);
+});
+
 // --- signals, stopping and the lock ---
 
 /**
@@ -836,12 +857,13 @@ if (mine === 0) {
   appendEvent(journal, gen, { type: 'assistant', text: 'here', toolCalls: [] });
   process.exit(1);
 }
-setTimeout(() => process.exit(0), 500);
+setTimeout(() => process.exit(0), 1600);
 ` });
   const next = commitAll(p.candidate, 'v2');
   process.env.TEST_NEXT = next;
 
-  expect(await supervise({ root: dir, ...QUIET, probationMs: 150 })).toBe('stopped');
+  // The probation is long enough for a body to start and say its one word on a slow machine, and the silence after it longer still.
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 800 })).toBe('stopped');
   expect(readEvents(p.journal).map((e) => e.type)).not.toContain('generation.rolledback');
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
 });

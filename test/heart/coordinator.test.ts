@@ -237,3 +237,25 @@ test('the sleep reaches to the next tick, and a tick that is overdue and not giv
   tick = undefined;
   expect(heart.waitFor()).toBe(300_000);
 });
+
+test('while the heart does its own work it goes on looking: what the agent waits for and comes meanwhile is told then, not after', async () => {
+  const journal = setup();
+  const order: string[] = [];
+  let asks = 0;
+  const heart = new Heart(deps(journal, {
+    restMs: 0, lookFloorMs: 5, nextLook: () => 10,
+    arrived: () => { asks += 1; return asks === 3 ? { source: 'work', text: 'The background job suite that you left running has ended.' } : null; },
+    emit: (s) => { order.push('told'); appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }); },
+    // A memory being formed: a request that takes a while.
+    remember: async () => { order.push('remembering'); await Bun.sleep(120); order.push('remembered'); return true; },
+  }));
+  // The first ask is the beat's own, before the work begins; the others come while it runs.
+  expect(await heart.next()).toBe('remember');
+  expect(order).toEqual(['remembering', 'told', 'remembered']);
+  // Once one has come nothing more is looked for in that piece of work, and none after it is over.
+  const asked = asks;
+  expect(asked).toBe(3);
+  await Bun.sleep(40);
+  expect(asks).toBe(asked);
+  expect(await heart.next()).toBe('turn');
+});

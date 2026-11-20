@@ -147,6 +147,9 @@ export function saveState(p: Paths, state: State): void {
 
 const isWorktree = (dir: string): boolean => existsSync(join(dir, '.git'));
 
+/** Why an individual's two worktrees are locked, as `git worktree list` shows it. */
+export const WORKTREE_LOCK = 'a teneral individual lives here; its path may exist only inside its container';
+
 /**
  * Create whatever is missing of: the live worktree, the candidate worktree on the
  * lineage branch, the state file. Safe to run again after an init that died partway,
@@ -165,6 +168,8 @@ export function init(root: string): State {
   // they used to be. Mend both directions before pruning, which would otherwise forget them as gone.
   const present = [p.live, p.candidate].filter(isWorktree);
   if (present.length > 0) sh(['git', 'worktree', 'repair', ...present], root);
+  // Both are locked below, and a locked worktree is never forgotten: one whose directory is really gone, as seen from here, is unlocked first.
+  for (const dir of [p.live, p.candidate]) if (!existsSync(dir)) sh(['git', 'worktree', 'unlock', dir], root);
   // Forget worktrees whose directories are gone; git refuses to add those again otherwise.
   git(root, 'worktree', 'prune');
   const works = (dir: string): boolean => sh(['git', 'rev-parse', '--git-dir'], dir).code === 0;
@@ -180,6 +185,11 @@ export function init(root: string): State {
     if (hasBranch) git(root, 'worktree', 'add', p.candidate, LINEAGE_BRANCH);
     else git(root, 'worktree', 'add', '-b', LINEAGE_BRANCH, p.candidate, head);
   }
+  // An individual raised in a container has these two at paths that exist only in there. A `git worktree prune`
+  // run on the host, by a person, by a tool that makes a worktree of its own here, or by a gate run there,
+  // counts them as gone and forgets them, and the running agent loses its checkouts. Git never prunes a
+  // locked worktree. Locking one that is locked already fails, which is as good.
+  for (const dir of [p.live, p.candidate]) sh(['git', 'worktree', 'lock', '--reason', WORKTREE_LOCK, dir], root);
   linkModules(root, p.live);
   linkModules(root, p.candidate);
   restoreKept(root, p.candidate);
