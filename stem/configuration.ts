@@ -25,6 +25,11 @@ export function configured(root: string): Managed | null {
   } catch {
     return null;
   }
+  return parseConfigured(text);
+}
+
+/** The managed provider values from one snapshot of .env. */
+export function parseConfigured(text: string): Managed {
   const found: Managed = {};
   for (const line of text.split('\n')) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);

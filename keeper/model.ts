@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { connect } from '../brain/provider';
 import { authDir, missingConfig, providerFor } from '../brain/providers';
 import { accessToken, apiBase } from '../brain/signin';
-import { MANAGED, configured, withProvider, type Managed } from '../stem/configuration';
+import { MANAGED, configured, parseConfigured, withProvider, type Managed } from '../stem/configuration';
 import { envText, listModels, plainValue, testProvider, writeEnv, type ModelChoice } from './setup';
 
 // `/model` in the talk clients: which model the agent thinks with, and the owner's word for
@@ -96,8 +96,12 @@ export async function switchModel(root: string, raw: string, o: ModelOptions = {
     const result = await testProvider(provider, model, o.now);
     if (!result.ok) return still(`${model} did not pass the test at ${entry.name}:`, ...result.lines, `${unchanged} To change it untested, edit TENERAL_MODEL in .env.`);
     const file = join(root, '.env');
-    // Read again: the test took a while, and the rest of the file is the owner's.
-    const existing = existsSync(file) ? readFileSync(file, 'utf8') : null;
+    // Keep unrelated edits, but do not undo a provider or model change made during the test.
+    const existing = readFileSync(file, 'utf8');
+    const latest = parseConfigured(existing);
+    if (MANAGED.some((name) => latest[name] !== now[name])) {
+      return still('The provider settings in .env changed while the model was being tested. This command did not write anything; check /model and try again.');
+    }
     writeEnv(file, envText(existing, Object.fromEntries(MANAGED.map((name) => [name, next[name] ?? null]))), true);
     return {
       changed: true,

@@ -90,3 +90,18 @@ test('a key that is refused, or a name that cannot stand in .env, changes nothin
   expect(dotEnv()).toBe('TENERAL_PROVIDER=chatgpt\nTENERAL_MODEL=a\n');
   expect(before).toContain('sk-wrong-key');
 });
+
+test('changing the provider configuration during testing leaves the newer file intact', async () => {
+  const before = configure('fake-key-large');
+  const rotated = before.replace('sk-fake-key', 'sk-rotated-dummy');
+  let requested = 0;
+  const send = (async (...args: Parameters<typeof fetch>) => {
+    if (++requested === 1) writeFileSync(join(root, '.env'), rotated);
+    return fetch(...args);
+  }) as typeof fetch;
+  const result = await switchModel(root, 'fake-key-small', { fetch: send });
+  expect(asked()).toEqual(['fake-key-small', 'fake-key-small']);
+  expect(result.changed).toBe(false);
+  expect(result.lines.join(' ')).toContain('changed while the model was being tested');
+  expect(dotEnv()).toBe(rotated);
+});
