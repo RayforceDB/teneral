@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { identity } from '../body/envelope';
-import { DEFAULT_CHECKS, repoRoot, runGates, type Check, type GateResult } from '../immune/gates';
+import { DEFAULT_CHECKS, dropLeftoverGateTrees, repoRoot, runGates, type Check, type GateResult } from '../immune/gates';
 import { DEFAULT_API, GitHubError, TOKEN_FILE, TOKEN_NEEDS, api, gitRemote, githubRemote, hasToken, remoteFailure, saveToken, type Hub } from './github';
 import { appendEvent } from '../brain/journal';
 import { GIT_NAMESPACE, KEY_FILE, WITNESS_NAMESPACE, commitSigner, ensureKey, run, signCommits, signText, signerOf, type Key } from './offerkey';
@@ -351,7 +351,8 @@ async function seedGates(root: string, commit: string, o: { provider?: string; s
   const drop = () => {
     if (existsSync(tree)) run(['git', 'worktree', 'remove', '--force', tree], { cwd: root });
     rmSync(tree, { recursive: true, force: true });
-    run(['git', 'worktree', 'prune'], { cwd: root });
+    // Remove only this offer's registration; never prune the repository's other worktrees.
+    dropLeftoverGateTrees(root);
   };
   mkdirSync(join(root, '.teneral'), { recursive: true });
   drop();

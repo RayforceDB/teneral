@@ -382,9 +382,21 @@ t('the gates run on the branch as on a fresh seed: a stem change is no obstacle,
   offer(w.root, 'types', { 'stem/k.ts': "export const k: number = 'one';\n" });
   expect((await checkBranch(i, 'offer/types')).report.steps.find((s) => s.ok === false)!.name).toBe('types');
 
+  for (const name of ['candidate', 'live']) {
+    const tree = join(w.root, '.teneral', name);
+    git(w.root, 'worktree', 'add', '-q', '--detach', tree, 'origin/main');
+    // An interrupted repair can leave the directory and registration, but no back-pointer.
+    rmSync(join(tree, '.git'), { force: true });
+  }
+  expect((await checkBranch(i, 'offer/good')).report.ok).toBe(true);
+  expect((await checkBranch(i, 'offer/types')).report.ok).toBe(false);
+  for (const name of ['candidate', 'live']) {
+    expect(existsSync(join(w.root, '.git', 'worktrees', name))).toBe(true);
+    expect(existsSync(join(w.root, '.teneral', name))).toBe(true);
+  }
   // Nothing of a gate run is left behind.
   expect(readdirSync(join(w.root, '.teneral')).filter((name) => name.startsWith('gate-'))).toEqual([]);
-  expect(git(w.root, 'worktree', 'list').split('\n')).toHaveLength(1);
+  expect(git(w.root, 'worktree', 'list').split('\n')).toHaveLength(3);
 }, SLOW);
 
 // --- consent ---
