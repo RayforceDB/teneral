@@ -122,6 +122,9 @@ function fillSlots(slots: Slot[], sight: Sight): void {
 const TOO_LARGE =
   '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
 const NOTHING = '[context] There is nothing in your journal to show yet.';
+/** Stands between the newest stimulus and the latest steps taken for it, when the first ones did not fit. See `latestSteps`. */
+const EARLIER_STEPS = (steps: number): string =>
+  `[context] You have taken more steps on this than fit here: the first ${steps} are not shown. What follows are your latest steps, as they happened. The earlier ones are in your journal; do not take them again to find out what they gave.`;
 
 /** Below this much room, a message is not worth cutting to fit. */
 const CLIP_MIN = 200;
@@ -167,7 +170,39 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   // A whole step may reach past the newest stimulus when that one is most of the request; the cut stops at it.
   while (start < messages.length && dropped < toDrop && start !== newest) drop();
   while (start < messages.length && messages[start]!.role !== 'user') drop();
-  return start < messages.length && total - dropped <= budgetChars ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
+  if (start < messages.length && total - dropped <= budgetChars) return messages.slice(start);
+  return newest === -1 ? [{ role: 'user', content: TOO_LARGE }] : latestSteps(messages[newest]!, messages.slice(newest + 1), budgetChars);
+}
+
+/**
+ * What is sent when the steps taken since the newest stimulus are by themselves more than the
+ * room: the stimulus, a line that says how many of the first steps are not shown, and the latest
+ * steps, as many as fit. Never the note alone while a step fits: an agent that is not shown its
+ * own last step takes it again, the journal grows by it, and the next request is the same one.
+ * A step is a reply with the results of its calls, and is kept or dropped whole. The steps leave
+ * from the first in whole steps of the room, as the front of a request does in `fit`.
+ */
+function latestSteps(asked: ChatMessage, after: ChatMessage[], budgetChars: number): ChatMessage[] {
+  const tooLarge: ChatMessage[] = [{ role: 'user', content: TOO_LARGE }];
+  // The stimulus may be large too: it gets half the room at most, and the steps the rest.
+  const half = Math.floor(budgetChars / 2);
+  const images = (asked.images ?? []).reduce((sum, image) => sum + imageChars(image), 0);
+  const said = size(asked) > half && half - images >= CLIP_MIN ? { ...asked, content: clip(asked.content ?? '', half - images - CLIP_NOTE) } : asked;
+  const room = budgetChars - size(said) - EARLIER_STEPS(0).length - 8;
+  const whole = after.reduce((sum, m) => sum + size(m), 0);
+  if (room <= 0 || after.length === 0) return tooLarge;
+  const step = Math.max(1, Math.floor(budgetChars * STEP));
+  const toDrop = Math.ceil(Math.max(1, whole - room) / step) * step;
+  let at = 0;
+  let gone = 0;
+  let steps = 0;
+  while (at < after.length && (gone < toDrop || after[at]!.role !== 'assistant')) {
+    if (after[at]!.role === 'assistant') steps += 1;
+    gone += size(after[at]!);
+    at += 1;
+  }
+  if (at >= after.length || whole - gone > room) return tooLarge;
+  return [said, { role: 'user', content: EARLIER_STEPS(steps) }, ...after.slice(at)];
 }
 
 /**

@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { appendEvent, readEvents } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
-import { needsTurn } from '../brain/memory';
+import { DEFAULT_BUDGET, needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
 import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
@@ -85,7 +85,7 @@ const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
 const tailChars = tailSet > 0 ? Math.floor(tailSet) : undefined;
 // The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
-const budgetChoice = decideBudget(journalNow(), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? 0);
+const budgetChoice = decideBudget(journalNow(), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? DEFAULT_BUDGET);
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.

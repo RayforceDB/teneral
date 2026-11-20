@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTurn, journalSuffixReads, noOpCall, NO_OP_RESULT } from '../../brain/loop';
-import { NO_OP_REPLY, QUIET_REPLY } from '../../brain/quiet';
+import { NO_OP_REPLY, QUIET_REPLY, SAME_REQUEST_REPLY } from '../../brain/quiet';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
@@ -856,3 +856,18 @@ test('a turn says it is being written for from its first moment to its last, als
 });
 
 
+
+test('a request that stops changing ends the turn at the third, with a reply that says so', async () => {
+  // One step alone is more than the room, so nothing of it can be shown and every request is the same.
+  let ran = 0;
+  const flood: Tool = { spec: { name: 'flood', description: '', parameters: {} }, async run() { ran++; return 'x'.repeat(5000); } };
+  const look = (id: string) => ({ text: '', toolCalls: [{ id, name: 'flood', args: {} }] });
+  const s = setup([look('a'), look('b'), look('c'), look('d')], [flood]);
+  const shown: string[] = [];
+  expect(await runTurn({ ...s.deps, budgetChars: 1000, onText: (t) => shown.push(t) })).toBe('done');
+  expect(JSON.stringify(s.seen[1])).toBe(JSON.stringify(s.seen[2]));
+  expect(s.seen.length).toBe(3);
+  expect(ran).toBe(3);
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: SAME_REQUEST_REPLY, toolCalls: [] });
+  expect(shown).toEqual([SAME_REQUEST_REPLY]);
+});

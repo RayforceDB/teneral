@@ -731,3 +731,30 @@ test('whether a turn is owed is decided by the last thing that bears on it, the 
   expect(owed(long)).toBe(false);
   expect(performance.now() - began).toBeLessThan(500);
 });
+
+test('steps since the newest stimulus that outgrow the room leave from the first: the stimulus and the latest steps are always shown', () => {
+  const round = (i: number) => [
+    ev({ type: 'assistant', text: '', toolCalls: [{ id: `s${i}`, name: 'bash', args: { command: `step ${i}` } }] }),
+    result(`s${i}`, `result of step ${i} ${'.'.repeat(300)}`),
+  ];
+  const events = [said('do the long thing')];
+  const requests: string[] = [];
+  for (let i = 1; i <= 12; i++) {
+    events.push(...round(i));
+    const messages = buildMessages(events, 'S', 2500);
+    requests.push(JSON.stringify(messages));
+    // Never the note alone, and the step just taken is the last thing in the request.
+    expect(messages.at(-1)).toMatchObject({ role: 'tool', content: expect.stringContaining(`result of step ${i} `) });
+    expect(messages[1]).toMatchObject({ role: 'user', content: 'do the long thing' });
+  }
+  // A request is never the one before it: the agent sees what its last step gave.
+  expect(new Set(requests).size).toBe(requests.length);
+  const last = buildMessages(events, 'S', 2500);
+  expect(last[2]!.content).toMatch(/^\[context\] You have taken more steps on this than fit here: the first \d+ are not shown\./);
+  expect(last[3]!.role).toBe('assistant');
+  expect(JSON.stringify(last)).not.toContain('result of step 1 ');
+  expect(JSON.stringify(last)).not.toContain('too large');
+  // Every result shown has its call before it.
+  const calls = new Set(last.flatMap((m) => m.tool_calls?.map((c) => c.id) ?? []));
+  for (const m of last) if (m.role === 'tool') expect(calls.has(m.tool_call_id!)).toBe(true);
+});
