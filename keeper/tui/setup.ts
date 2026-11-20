@@ -559,7 +559,7 @@ export class SetupScreens implements Dialogue {
     const where = (file: string, what: string): Line[] => [[{ text: `    ${file}`, style: BOLD }], ...this.para(what, DIM, 6)];
     const next = this.o.thenStart
       ? ['The agent starts now. ./one talk attaches to it.']
-      : ['./one up starts the agent with it.', 'One that is already running keeps its old configuration until ./one down and ./one up.'];
+      : ['./one up starts the agent with it.', 'One that is already running takes it up within a few seconds: its body is started again.'];
     // What was settled on the way is said once more, briefly; the page has to fit a small screen.
     this.facts = [];
     // Laid out anew for every frame: the window may change size while the page is up.

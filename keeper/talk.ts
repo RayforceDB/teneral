@@ -4,6 +4,8 @@ import { helpRows } from './commands';
 import { eventName, journalSize, readEventsFrom, type JournalEvent } from '../brain/journal';
 import { interrupt, tell } from './owner';
 import { ownerCommand } from '../species/offer';
+import { modelCommand } from './model';
+import { current } from '../stem/configuration';
 import { planNotice } from '../brain/providers';
 import { cageNotice } from '../immune/approval';
 import { installRoot, paths } from '../stem/supervisor';
@@ -284,6 +286,8 @@ export interface TalkOptions {
   waitMs?: number;
   /** A person typing only: lines that are the owner's commands to the stem (`/offers`, `/approve`), with what to say; null for any other line. */
   command?: (line: string) => string[] | null;
+  /** A person typing only: `/model` and what followed it, carried out (keeper/model.ts). */
+  model?: (arg: string) => Promise<string[]>;
 }
 
 /**
@@ -397,6 +401,16 @@ export async function talk(o: TalkOptions): Promise<number> {
         // The owner's word to the stem: never a line for the agent, also in a client that cannot take it.
         else if (text === '/approve' || text.startsWith('/approve ')) approveCommit(text);
         else if (text === '/stop') stop();
+        else if (text === '/model' || text.startsWith('/model ')) {
+          // The owner's word about the model: answered here, never a line for the agent. A name is tested first, which
+          // takes a moment, and what is typed meanwhile waits for it.
+          const arg = text.slice('/model'.length).trim();
+          if (o.model === undefined) o.note('(this client was not told where its install is, so it cannot say or change the model)');
+          else {
+            if (arg !== '') o.note(arg === 'list' ? '(asking the provider ...)' : `(testing ${arg} ...)`);
+            for (const line of await o.model(arg)) o.note(line);
+          }
+        }
         else if (text === '/heart') { if (send(text)) o.note('(one agenda pulse requested)'); }
         // The commands this client has, from the table both clients read (keeper/commands.ts).
         else if (text === '/help') for (const row of ['The commands here; every other line goes to the agent as your words:', ...helpRows('plain')]) o.note(row);
@@ -497,10 +511,12 @@ if (import.meta.main) {
   const p = paths(installRoot(import.meta.dir));
   // This client is the generation's own, like the rest of its stem; the cage it runs in is the install's.
   const cage = cageNotice(p.root, dirname(import.meta.dir));
+  // The container's environment is from when it started; the owner may have changed the model since (stem/configuration.ts).
+  const env = current(p.root, process.env);
   // A person at a terminal gets the client with its panel and input box (keeper/tui/). Everything else is as it always was.
   if (!plainText && process.stdin.isTTY === true && process.stdout.isTTY === true && process.env.TERM !== 'dumb') {
     const { runTalkScreen } = await import('./tui/talk');
-    process.exit(await runTalkScreen(p, process.env, planNotice(process.env), cage));
+    process.exit(await runTalkScreen(p, env, planNotice(env), cage));
   }
   // Ctrl-C ends this program, quietly. It is not passed on to anything.
   process.on('SIGINT', () => process.exit(0));
@@ -512,10 +528,11 @@ if (import.meta.main) {
     // Not console.error, which colours what it prints on a terminal.
     note: (text) => { process.stderr.write(`${text}\n`); },
     interactive: process.stdin.isTTY === true,
-    banner: planNotice(process.env),
+    banner: planNotice(env),
     cage,
     waitMs,
     command: (line) => ownerCommand(p.root, line),
+    model: (arg) => modelCommand(p.root, arg),
   });
   process.exit(status);
 }

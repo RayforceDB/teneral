@@ -66,6 +66,8 @@
     /plain             how to get the plain text client
     /usage             what the requests to the model cost, and how much came from the
   cache
+    /model [name]      the model the agent thinks with; with a name, test that one and
+  change to it
     /heart             give the agenda one pulse now
     /memory [what]     the agent's memory, and your hand on it: pin, unpin, withdraw,
   back

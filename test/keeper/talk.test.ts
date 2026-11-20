@@ -641,3 +641,18 @@ test('when the generation has other cage files than the install, a person attach
   expect(piped.notes.join('\n')).not.toContain('cage');
   expect(piped.notes.join('\n')).not.toContain('generation has other');
 });
+
+test('/model is answered by the client and never sent to the agent: what it says is noted before the next line is read', async () => {
+  const s = setup();
+  const asked: string[] = [];
+  const model = async (arg: string): Promise<string[]> => { asked.push(arg); await Bun.sleep(5); return [`answer to "${arg}"`]; };
+  const files = () => (existsSync(s.base.owner) ? readdirSync(s.base.owner).filter((name) => !name.startsWith('.')) : []);
+  expect(await talk({ ...s.base, model, lines: from('/model', ' /model  some-model ', '/model list', '/quit'), interactive: true })).toBe(0);
+  expect(asked).toEqual(['', 'some-model', 'list']);
+  expect(s.notes.filter((note) => /^answer to|^\((testing|asking)/.test(note))).toEqual(['answer to ""', '(testing some-model ...)', 'answer to "some-model"', '(asking the provider ...)', 'answer to "list"']);
+  expect(files()).toEqual([]);
+  // A client that was not told where its install is says so, and still sends nothing.
+  expect(await talk({ ...s.base, lines: from('/model x', '/quit'), interactive: true })).toBe(0);
+  expect(s.notes.at(-1)).toContain('cannot say or change the model');
+  expect(files()).toEqual([]);
+});

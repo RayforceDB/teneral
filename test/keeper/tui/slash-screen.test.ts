@@ -62,14 +62,14 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
     '    /approve [commit]  approve the mutation the agent asked about, or the comm…',
     '    /tools             show or hide what each tool call returned',
     '    /generations       the generations this individual has lived in',
-    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 16`,
+    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 17`,
   ]);
   // The cursor the owner sees is still in the box, after the slash.
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 5 });
   // Down past the sixth: the list moves with the choice. Up from the first goes to the last.
   s.type(DOWN.repeat(7));
   expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/plain', '/usage']);
-  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 16$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 17$/);
   s.type(UP.repeat(8));
   expect(listed(s)).toEqual(['/heart', '/memory', '/reasoning', '/publish', '/update', '[/quit]']);
   s.type(DOWN);
@@ -416,7 +416,7 @@ test('at 40, 80 and 120 columns the list fits the width, its rows cut with a mar
     const live = rows(s.live());
     expect(listed(s)).toEqual(['[/help]', '/image', '/stop', '/approve', '/tools', '/generations']);
     for (const row of live) expect([...row].length).toBeLessThanOrEqual(cols - 1);
-    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 16$/);
+    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 17$/);
     expect(live[7]).toBe(cols === 40 ? '    /approve [commit]  approve the mut…' : cols === 80 ? '    /approve [commit]  approve the mutation the agent asked about, or the comm…' : '    /approve [commit]  approve the mutation the agent asked about, or the commit or offer named');
     s.type(`a${TAB}`);
     expect(typed(s)).toEqual(['› /approve']);
@@ -513,4 +513,23 @@ test('a locale that is not UTF-8 gets the list in ASCII', () => {
     '    /heart    give the agenda one pulse now',
     ' Tab completes | Enter runs | Esc closes | Up/Down choose',
   ]);
+});
+
+test('/model prints what .env says of the model and goes to nobody; the footer follows .env when the owner changes the model while the client is up', async () => {
+  const s = stage(100, 40, { env: { TENERAL_PROVIDER: 'openai' } });
+  writeFileSync(join(s.p.root, '.env'), 'TENERAL_PROVIDER=openai\nTENERAL_BASE_URL=https://api.test/v1\nTENERAL_API_KEY=sk-secret\nTENERAL_MODEL=gpt-6.1-sol\n');
+  settled(s);
+  expect(s.live()).toContain('gpt-6.1-sol');
+  s.type(`/model${ENTER}`);
+  await Bun.sleep(0);
+  const said = flowed(s);
+  expect(said).toContain('Model: gpt-6.1-sol');
+  expect(said).toContain('Provider: OpenAI API key');
+  expect(said).not.toContain('sk-secret');
+  expect(channel(s)).toEqual([]);
+  // Changed from elsewhere, as ./one setup does: read again within a few ticks.
+  writeFileSync(join(s.p.root, '.env'), 'TENERAL_PROVIDER=openai\nTENERAL_BASE_URL=https://api.test/v1\nTENERAL_API_KEY=sk-secret\nTENERAL_MODEL=gpt-6.1-terra\n');
+  for (let i = 0; i < 8; i++) s.app.tick();
+  expect(s.live()).toContain('gpt-6.1-terra');
+  expect(s.live()).not.toContain('gpt-6.1-sol');
 });
