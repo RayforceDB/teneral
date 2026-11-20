@@ -201,10 +201,10 @@ const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal,
 
 test('intend takes something on, done closes it by its mark', async () => {
   const ctx = context(journalOf([said('remind me')]));
-  const out = await tool('intend').run({ text: 'Send the weekly report to the owner', due: '2026-11-20' }, ctx);
+  const out = await tool('intend').run({ text: 'Send the weekly report to the owner', due: '2099-11-20' }, ctx);
   const [open] = known(readEvents(ctx.journal)).intentions;
-  expect(out).toBe(`Taken on as ${open!.mark}, due 2026-11-20. It stays in front of you until you call done for it.`);
-  expect(buildMessages(readEvents(ctx.journal), 'S')[1]!.content).toContain(`${open!.mark} [due 2026-11-20] Send the weekly report to the owner`);
+  expect(out).toBe(`Taken on as ${open!.mark}, due 2099-11-20. It stays in front of you until you call done for it.`);
+  expect(buildMessages(readEvents(ctx.journal), 'S')[1]!.content).toContain(`${open!.mark} [due 2099-11-20] Send the weekly report to the owner`);
 
   await expect(tool('done').run({ intention: 'I00000000', how: 'x' }, ctx)).rejects.toThrow(`Open: ${open!.mark}`);
   expect(await tool('done').run({ intention: open!.mark, how: 'sent it' }, ctx)).toBe(`Closed ${open!.mark}: Send the weekly report to the owner`);
