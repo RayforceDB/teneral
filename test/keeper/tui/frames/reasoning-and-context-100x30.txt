@@ -43,5 +43,5 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                               │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol  effort high  resting  …/work/teneral  gen 1 a1b2c3d         context 9% (90.3k/1.05M)
+ gpt-6.1-sol  effort high  resting  memory well · exam pending            context 9% (90.3k/1.05M)
   ↻ mutate   ↑ publish   ◉ memory   ≡ more                                              ↓  actions

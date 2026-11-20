@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rayboardCa, rayboardOwnerId, rayboardPoller, rayboardToken, rayboardUrl, RAYBOARD_OWNER_SOURCE, RAYBOARD_SOURCE } from '../../body/rayboard';
+import type { ToolContext } from '../../body/tools';
 import type { Stimulus } from '../../body/sensors';
 const event = (s: Stimulus): JournalEvent => ({ v: 1, id: String(s.text), ts: '2026-01-01T00:00:00.000Z', gen: 'test', type: 'stimulus', ...s });
 const note = (seq: number) => ({ seq, ts: '2026-01-01T00:00:00.000Z', type: 'task.assigned', subject: 'T-1', sender: 'operator', text: 'untrusted work' });
@@ -71,6 +72,21 @@ test('certificate authorities are read from a separate file and must be PEM', ()
     expect(rayboardCa(undefined)).toBeUndefined();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test('a channel stimulus carries its reply target', async () => {
+  const f = fixture([{ seq: 41, ts: '2026-01-01T00:00:00.000Z', type: 'mention', subject: 'c_6ayj5jkn', sender: 'person', text: 'person in #general: why?' }]);
+  const notices: Stimulus[] = [];
+  const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send, chat: true }, s => notices.push(s));
+  await p.poll();
+  expect(notices[0]!.text).toContain('Use chat_reply');
+});
+test('rayboard reply targets are validated before the adapter is exercised', () => {
+  expect(rayboardTarget({ type: 'mention', subject: 'c_6ayj5jkn', text: 'person in #general: why?' })).toBe('#general');
+  expect(rayboardTarget({ type: 'mention', subject: 'T-12', text: 'person in T-12: update' })).toBe('T-12');
+  expect(rayboardTarget({ type: 'task.assigned', subject: 'T-12', text: 'assigned' })).toBe('T-12');
+  expect(rayboardTarget({ type: 'message', subject: 'dm:a_12345678:u_87654321', text: 'x' })).toBe('dm:a_12345678:u_87654321');
+  expect(rayboardTarget({ type: 'dm', subject: 'dm:a_12345678:u_87654321', text: 'x' })).toBe('dm:a_12345678:u_87654321');
+  expect(rayboardTarget({ type: 'dm', subject: 'dm:attacker:person', text: 'x' })).toBeUndefined();
+});
 test('bad input and stopped workers cannot emit or acknowledge', async () => {
   const f = fixture([{}]); const notices: Stimulus[] = [];
   const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send }, s => notices.push(s));
@@ -86,7 +102,6 @@ import { mkdtempSync as tmp } from 'node:fs';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { chatHistory, chatPlaces, chatReply, chatSend, typingFor, register } from '../../body/chat-tools';
 import { notification, rayboardReply, rayboardServiceWith, rayboardTarget } from '../../body/rayboard-tools';
-import type { ToolContext } from '../../body/tools';
 
 const said = (seq: number, type: string, subject: string, sender: string, text: string) => ({ seq, ts: '2026-01-01T00:00:00.000Z', type, subject, sender, text });
 const DM = 'dm:a_aaaaaaaa:u_k2wxzyex';
@@ -181,6 +196,27 @@ test('chat_reply on the board answers where the notification came from, and a re
   expect(await rayboardReply.run({ notification: 2, content: 'Again.' }, b.ctx)).toBe('Reply sent as rayboard:900.');
   expect(notification(readEvents(b.ctx.journal), 4)).toMatchObject({ type: 'dm' });
   expect(rayboardTarget(said(9, 'mention', 'c_abcdefgh', 'u_x', 'no place named'))).toBeUndefined();
+});
+
+test('Rayboard sends honor interruption, current stimulus delivery, and uncertain receipts', async () => {
+  const b = board();
+  const aborted = new AbortController(); aborted.abort();
+  await expect(chatReply.run({ message: 'rayboard:2', content: 'Do not send.' }, b.ctx, aborted.signal)).rejects.toThrow();
+  expect(b.asked).toHaveLength(0);
+
+  const receipt = await chatReply.run({ message: 'rayboard:4', content: 'Here.' }, b.ctx);
+  expect(receipt).toBe('Reply sent as rayboard:900.');
+  const target = said(4, 'dm', DM, 'u_k2wxzyex', 'anton in @mica: are you there?');
+  const fresh = { ...b.ctx, events: () => [{ type: 'stimulus', source: 'owner:rayboard', text: `Rayboard dm 4\nverified\n${JSON.stringify(target)}` } as JournalEvent] };
+  await chatReply.run({ message: 'rayboard:4', content: 'Here.' }, fresh);
+  expect(b.asked.at(-1)?.args.to).toBe(DM);
+
+  register(rayboardServiceWith({ send: (async () => new Response(JSON.stringify({ ok: false, error: 'no' }))) as unknown as typeof fetch,
+    url: () => 'https://board.example', token: () => 'token', ca: () => undefined }));
+  await expect(chatReply.run({ message: 'rayboard:2', content: 'Perhaps.' }, b.ctx)).rejects.toThrow('was not sent: Rayboard refused post_message');
+  register(rayboardServiceWith({ send: (async () => new Response(JSON.stringify({ ok: true, result: {} }))) as unknown as typeof fetch,
+    url: () => 'https://board.example', token: () => 'token', ca: () => undefined }));
+  await expect(chatReply.run({ message: 'rayboard:2', content: 'Missing receipt.' }, b.ctx)).rejects.toThrow('may or may not have been sent');
 });
 
 test('the board\'s other hands: opening a conversation, reading back, listing channels, and showing that an answer is being written', async () => {

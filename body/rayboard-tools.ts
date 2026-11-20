@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readEvents, type JournalEvent } from '../brain/journal';
-import { register, type ChatService } from './chat-tools';
+import { MaybeSent, chatReply, register, type ChatService } from './chat-tools';
 import { RAYBOARD_LINE, rayboardCa, rayboardToken, rayboardUrl } from './rayboard';
 import type { Tool, ToolContext } from './tools';
-import { chatReply } from './chat-tools';
 
 // Rayboard behind the generic chat tools (body/chat-tools.ts). The board is a place of work as
 // well as of talk: its channels, direct conversations and task threads are where the agent
@@ -16,20 +15,24 @@ const MAX_BYTES = 1_000_000;
 
 interface Reach { send?: typeof fetch; url?: () => string; token?: () => string | undefined; ca?: () => string | undefined }
 
-async function call(o: Reach, action: string, args: Row, ms = 20_000): Promise<unknown> {
+const freshEvents = (ctx: ToolContext): JournalEvent[] => ctx.events?.() ?? readEvents(ctx.journal);
+
+async function call(o: Reach, action: string, args: Row, ms = 20_000, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted();
   const url = rayboardUrl(o.url ? o.url() : process.env.TENERAL_RAYBOARD_URL ?? '');
   const token = o.token ? o.token() : rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE);
   if (!token) throw new Error('Rayboard is not configured');
   const ca = o.ca ? o.ca() : rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE);
   const r = await (o.send ?? fetch)(`${url}/api/call/${action}`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(args),
-    credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(ms), tls: ca ? { ca } : undefined,
+    credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms), tls: ca ? { ca } : undefined,
   } as RequestInit);
   const text = await r.text();
-  if (text.length > MAX_BYTES) throw new Error('Rayboard response too large');
-  if (!r.ok) throw new Error(`Rayboard HTTP ${r.status}; response omitted`);
+  if (text.length > MAX_BYTES) throw new MaybeSent(`Rayboard ${action}: response too large; read the conversation before retrying`);
+  if (!r.ok) throw new MaybeSent(`Rayboard ${action}: HTTP ${r.status}; response omitted`);
   const d = JSON.parse(text) as Row;
   if (d.ok !== true) throw new Error(`Rayboard refused ${action}`);
+  if (d.result === undefined || d.result === null) throw new MaybeSent(`Rayboard ${action}: receipt missing; read the conversation before retrying`);
   return d.result;
 }
 
@@ -68,17 +71,19 @@ export function rayboardServiceWith(o: Reach = {}): ChatService {
   return {
     name: 'rayboard',
     limit: 20_000,
-    async reply(ctx, id, content) {
-      const n = notification(readEvents(ctx.journal), seqOf(id));
+    async reply(ctx, id, content, _everyone, signal) {
+      const n = notification(freshEvents(ctx), seqOf(id));
       if (n === undefined) throw new Error(`rayboard:${id} is no notification you were shown`);
       const to = rayboardTarget(n);
       if (to === undefined) throw new Error(`rayboard:${id} is not talk that can be answered where it was said; work in its task instead`);
-      const posted = await call(o, 'post_message', { to, body: content, request_id: once(ctx, 'reply', id, content) }) as Row;
+      const posted = await call(o, 'post_message', { to, body: content, request_id: once(ctx, 'reply', id, content) }, 20_000, signal) as Row;
+      if (!Number.isSafeInteger(posted.seq)) throw new MaybeSent('Rayboard reply: invalid receipt; read the conversation before retrying');
       return String(posted.seq);
     },
-    async send(ctx, to, content) {
+    async send(ctx, to, content, signal) {
       const where = 'user' in to ? `@${to.user.replace(/^@/, '')}` : /^(#|T-)/.test(to.channel) ? to.channel : `#${to.channel}`;
-      const posted = await call(o, 'post_message', { to: where, body: content, request_id: once(ctx, 'send', where, content) }) as Row;
+      const posted = await call(o, 'post_message', { to: where, body: content, request_id: once(ctx, 'send', where, content) }, 20_000, signal) as Row;
+      if (!Number.isSafeInteger(posted.seq)) throw new MaybeSent('Rayboard send: invalid receipt; read the conversation before retrying');
       return String(posted.seq);
     },
     async history(_ctx, where) {

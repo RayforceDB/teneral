@@ -178,3 +178,25 @@ test('being added to a channel wakes the agent at once with who is there, once, 
   await known.c.joined({ id: '8', name: '#old' });
   expect(known.got).toHaveLength(0);
 });
+
+test('an expired message does not emit or clear context after its attachment wait', async () => {
+  const r = room();
+  await r.c.take(r.said('pending context'));
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let current = true;
+  const stale = r.c.take(r.said('with an attachment', {
+    kind: 'direct', place: 'dm/7', current: () => current,
+    more: async () => { await waiting; return ['[image: x.png]']; },
+  }));
+  await Bun.sleep(0);
+  current = false;
+  release();
+  await stale;
+  expect(r.got).toHaveLength(0);
+  // Recovery refetches the DM: earlier context remains, without the stale attachment.
+  await r.c.take(r.said('with an attachment', { kind: 'direct', place: 'dm/7' }));
+  expect(r.got).toHaveLength(1);
+  expect(r.got[0]!.text).toContain('pending context');
+  expect(r.got[0]!.text).not.toContain('[image: x.png]');
+});

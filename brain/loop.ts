@@ -4,7 +4,7 @@ import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
-import { QUIET_REPLY, ROUND_LIMIT_REPLY, quietReply } from './quiet';
+import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, quietReply } from './quiet';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
@@ -106,6 +106,19 @@ function arrivedSince(events: JournalEvent[], shown: number): boolean {
  * is owed. Two things an interruption does not undo: a reply with no tool calls that had already
  * arrived ends the turn as 'done', and a mutation already requested stays requested.
  */
+/**
+ * A tool call that cannot do anything: a shell asked to run nothing, `true`, `:` or `exit 0`. A model
+ * that has decided to stop but keeps emitting such calls never ends its turn (it did, for hours, on a
+ * clock tick, each call costing a full request). Such a call is not run; its result says how a turn ends.
+ */
+export function noOpCall(call: { name: string; args: unknown }): boolean {
+  if (call.name !== 'bash' || typeof call.args !== 'object' || call.args === null) return false;
+  const command = (call.args as Record<string, unknown>).command;
+  return (command === undefined || typeof command === 'string') && /^\s*(true|:|exit(\s+0)?)?\s*;?\s*$/.test(command ?? '');
+}
+
+export const NO_OP_RESULT = 'Not run: this call does nothing. A turn ends with a reply that has no tool call in it; on a clock turn with nothing to do, that reply is exactly ' + QUIET_REPLY + '. A second round of calls like this ends the turn for you.';
+
 export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
   const stimulus = d.signal?.aborted ? undefined : readEvents(d.journal).findLast((e): e is Extract<JournalEvent, { type: 'stimulus' }> => e.type === 'stimulus');
   const typing = d.onTyping?.(stimulus);
@@ -138,6 +151,8 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
   const quietTick = mayStayQuiet(journal.read().findLast(e => e.type === 'stimulus')?.source);
   const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
+  // Rounds in a row made of nothing but calls that do nothing (noOpCall). The second ends the turn.
+  let idleRounds = 0;
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
     // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
@@ -210,7 +225,22 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       return 'done';
     }
 
+    idleRounds = reply.toolCalls.every(noOpCall) ? idleRounds + 1 : 0;
+    if (idleRounds >= 2) {
+      for (const call of reply.toolCalls) appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok: false, output: NO_OP_RESULT });
+      // As at the round limit: over something the model never saw, no finished reply is written, so that stays owed.
+      journal.refresh();
+      if (arrivedSince(journal.read(), shown)) return 'done';
+      appendEvent(d.journal, d.gen, { type: 'assistant', text: quietTick ? QUIET_REPLY : NO_OP_REPLY, toolCalls: [] });
+      return 'done';
+    }
+
     for (const call of reply.toolCalls) {
+      if (noOpCall(call)) {
+        // No intent: nothing starts. It still gets a result, so every call has an answer.
+        appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok: false, output: NO_OP_RESULT });
+        continue;
+      }
       if (d.ctx.mutationCommit !== null) {
         // The mutation committed the workspace; anything run after it would change what the gates judge.
         // No intent: the call never started. It still gets a result, so every call has an answer.

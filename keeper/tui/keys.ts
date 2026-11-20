@@ -13,6 +13,8 @@ export type Key =
   | { kind: 'paste'; text: string }
   /** A named key, or a letter held with Ctrl or Alt (`name` is then that letter). */
   | { kind: 'key'; name: KeyName | string; ctrl?: boolean; alt?: boolean; shift?: boolean }
+  /** A wheel turn: up is -1, down is 1. Other mouse events are not reported. */
+  | { kind: 'wheel'; delta: -1 | 1 }
   /** No key: the terminal's answer to a status request. It is still there. */
   | { kind: 'alive' };
 
@@ -146,8 +148,13 @@ export class KeyParser {
   }
 
   private csi(params: string, final: string, keys: Key[]): void {
-    // A mouse report: the mouse is the terminal's own, and nothing is made of it.
-    if (params.startsWith('<')) return;
+    if (params.startsWith('<')) {
+      if (final === 'M') {
+        const button = Number(params.slice(1).split(';')[0]);
+        if (button === 64 || button === 65) keys.push({ kind: 'wheel', delta: button === 64 ? -1 : 1 });
+      }
+      return;
+    }
     const p = params.split(';');
     if (final === '~') {
       if (p[0] === '200') this.paste = '';

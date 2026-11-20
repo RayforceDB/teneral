@@ -97,7 +97,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `╭${'─'.repeat(97)}╮`,
     `│ ›${' '.repeat(95)}│`,
     `╰${'─'.repeat(97)}╯`,
-    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
+    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
     // Under the footer, the actions: links to move onto and open.
     expect.stringMatching(/^  ↻ mutate +↑ publish +◉ memory +≡ more +↓  actions$/),
   ]);
@@ -105,7 +105,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
   expect(s.term.vt.cursorVisible).toBe(false);
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 4 });
   expect(s.term.vt.alt).toBe(false);
-  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1006)).toBe(false);
+  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([2004, 1002, 1006]);
 });
 
 test('only the last few exchanges are shown on attaching; the status says so, and /history prints the rest that was read', () => {
@@ -311,13 +311,13 @@ test('reasoning and context use are shown when the body journals them, and nothi
   expect(s.all()).toContain('what it thought, in 2 stretches');
   expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
-  expect(rows(s.live()).at(-2)).toMatch(/ gen 1 a1b2c3d {3,}context 9% \(90\.3k\/1\.05M\)$/);
+  expect(rows(s.live()).at(-2)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
   expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
   // A model whose window is not known: the count alone.
   const other = stage(100, 30, { env: { TENERAL_MODEL: 'some-local-model' } });
   settled(other);
   other.journal(more({ type: 'assistant', text: 'Hm.', toolCalls: [], usage: { input: 12_345, output: 55 } }), 0);
-  expect(rows(other.live()).at(-2)).toMatch(/ gen 1 a1b2c3d {3,}context 12\.4k$/);
+  expect(rows(other.live()).at(-2)).toMatch(/memory well · exam pending.*context 12\.4k$/);
 });
 
 // --- resizing ---
@@ -403,7 +403,9 @@ test('a mutation accepted: mutating while the stem checks, then a notice with bo
   const all = s.all();
   expectFrame('mutation-accepted-80x30', all);
   expect(all).toContain('┃ mutation accepted  a1b2c3d → e5f6a7b\n\n● I am in the new body. Names stay with me now.');
-  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  …\/work\/teneral  gen 2 e5f6a7b/);
+  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  memory well · exam pending  …\/work\/teneral/);
+  s.term.resize(110, 30);
+  expect(s.live()).toContain('gen 2 e5f6a7b');
 });
 
 test('a mutation rejected: the gate by name, and the end of its output as several readable rows behind the notice\'s edge', () => {
@@ -516,16 +518,14 @@ test('Ctrl-U, Ctrl-K and Ctrl-W, word jumps, Delete and Backspace work on the li
   expect(sentFiles(s)).toEqual([]);
 });
 
-test('PageUp, PageDown and the mouse are the terminal\'s own: nothing is drawn for them and nothing is typed', () => {
+test('PageUp, PageDown and wheel reports never become text or commands', () => {
   const s = stage(80, 24);
   settled(s);
   s.frame();
-  const count = s.term.written.length;
   s.type('\x1b[5~\x1b[6~\x1b[1;2A\x1b[1;2B\x1b[<64;5;5M\x1b[<0;5;5M\x1b[<0;5;5m');
   s.frame();
   expect(typed(s)).toEqual(['›']);
-  expect(s.term.written.slice(count).join('')).not.toMatch(/[A-Za-z]{3}/);
-  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([2004]);
+  expect(sentFiles(s)).toEqual([]);
   // /mouse is gone with the mode it switched.
   s.type('/mouse\r');
   expect(s.all()).toContain('/mouse is not a command here, and was not sent. /help lists them.');
@@ -814,7 +814,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(all.match(/^◆ The agent is awake$/m)).toBeNull();
 
   // Every escape sequence that reached the terminal is one this client writes itself: no title, no jump, no clearing of the screen.
-  const own = /^\x1b\[(\d*[ABKJ]|[\d;]*m|\?(25|2004|2026)[hl])$/;
+  const own = /^\x1b\[(\d*[ABKJ]|\d+;\d+H|[\d;]*m|\?(25|1002|1006|2004|2026)[hl])$/;
   const sent = sequences(s.term.written);
   expect(sent.length).toBeGreaterThan(10);
   expect(sent.filter((sequence) => !own.test(sequence))).toEqual([]);
@@ -1048,7 +1048,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
 });
 
 test('the footer turns through tips, each naming a real key or command, and gives up what does not fit, the least needed first', () => {
-  const s = stage(130, 30, { helper: 'xclip' });
+  const s = stage(160, 30, { helper: 'xclip' });
   settled(s);
   const seen = new Set<string>();
   for (let i = 0; i < 13; i++) {
@@ -1062,9 +1062,9 @@ test('the footer turns through tips, each naming a real key or command, and give
   ]);
   s.clock.at = 0;
   s.term.resize(70, 30);
-  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d');
+  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
   s.term.resize(50, 30);
-  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting  …/work/teneral');
+  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
   s.term.resize(30, 30);
   expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
 });
@@ -1543,7 +1543,7 @@ test('the status line says how the memory stands and what the last exam came to,
   const s = stage(120, 30, { name: 'Mica' });
   settled(s);
   const footer = (): string => rows(s.live()).at(-2) ?? '';
-  expect(footer()).not.toContain('memory');
+  expect(footer()).toContain('memory well · exam pending');
   const at = new Date(T0 - 58_000).toISOString();
   const end = new Date(T0 - 50_000).toISOString();
   const journaled = readFileSync(s.p.journal, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { id: string; type: string });
@@ -1618,6 +1618,84 @@ test('under the footer stands a row of actions: Down goes onto it, Left and Righ
   s.type('x');
   expect(last()).toContain('↓  actions');
   expect(s.live()).toContain('x');
+});
+
+test('opening an action menu leaves the conversation and the bottom row where they were', () => {
+  for (const height of [6, 8, 10, 12, 24, 40]) {
+    const s = stage(100, height, { open: false });
+    settled(s);
+    for (let i = 0; i < 20; i++) {
+      s.journal({ type: 'stimulus', source: 'terminal', text: `question ${i}` }, -40_000 + i * 1000);
+      s.journal({ type: 'assistant', text: `answer ${i}`, toolCalls: [] }, -39_500 + i * 1000);
+    }
+    s.app.open();
+    s.frame();
+    const scrollback = s.term.vt.scrollback.length;
+    const cursor = s.term.vt.cursor;
+    const bottom = s.term.vt.text().split('\n').at(-1)!;
+
+    s.type('\x1b[B\x1b[C\r');
+    expect(s.term.vt.scrollback.length).toBe(scrollback);
+    expect(s.term.vt.cursor).toEqual(cursor);
+    expect(s.live()).toContain('publish');
+    expect(s.live().split('\n').at(-1)).toContain('↑↓  choose');
+
+    const live = s.live();
+    const bottomRows = live.split('\n');
+    const before = s.term.vt.text();
+    s.type('\x1b[5~');
+    s.frame();
+    const paged = s.term.vt.text();
+    expect(paged).not.toBe(before);
+    expect(paged.split('\n').slice(-bottomRows.length)).toEqual(bottomRows);
+    expect(s.term.vt.cursor).toEqual({ row: height - bottomRows.length, col: 0 });
+
+    s.type('\x1b[<65;5;5M\x1b[<64;5;5M\x1b[<0;5;5M\x1b[<0;5;5m');
+    s.frame();
+    const afterWheel = s.term.vt.text();
+    expect(afterWheel.split('\n').slice(-bottomRows.length)).toEqual(bottomRows);
+    expect(s.term.vt.cursor).toEqual({ row: height - bottomRows.length, col: 0 });
+
+    s.type('\x1b\x1b');
+    s.app.settleKeys();
+    expect(s.term.vt.scrollback.length).toBe(scrollback);
+    expect(s.term.vt.cursor).toEqual(cursor);
+    expect(s.term.vt.text().split('\n').at(-1)).toBe(bottom);
+    s.app.close();
+  }
+});
+
+test('paging holds an old conversation still while output waits, then returns to the newest and restores the terminal', () => {
+  const s = stage(100, 24, { open: false });
+  settled(s);
+  for (let i = 0; i < 30; i++) {
+    s.journal({ type: 'stimulus', source: 'terminal', text: `question ${i}` }, -60_000 + i * 1000);
+    s.journal({ type: 'assistant', text: `answer ${i}`, toolCalls: [] }, -59_500 + i * 1000);
+  }
+  s.app.open();
+  s.frame();
+  s.type('\x1b[B\x1b[C\r\x1b[5~');
+  s.frame();
+  const old = s.term.vt.text();
+  const scrollback = s.term.vt.scrollback.length;
+
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'new question' }, 1000);
+  s.journal({ type: 'assistant', text: 'new answer', toolCalls: [] }, 1100);
+  s.frame();
+  expect(s.term.vt.text()).toBe(old);
+  expect(s.term.vt.scrollback.length).toBe(scrollback);
+
+  s.type('\x1b[6~');
+  s.frame();
+  expect(s.term.vt.text()).toContain('new answer');
+  expect(s.term.vt.text().split('\n').slice(-6)).toEqual(old.split('\n').slice(-6));
+
+  s.type('\x1b[5~');
+  s.frame();
+  s.app.close();
+  expect(s.term.vt.all()).toContain('new answer');
+  expect(s.term.vt.all().split('\n').at(-1)).toContain('You left.');
+  expect([...s.term.vt.modes].filter((mode) => mode !== 2026)).toEqual([]);
 });
 
 test('an action that holds something for the owner says so, and Down goes onto it first', () => {

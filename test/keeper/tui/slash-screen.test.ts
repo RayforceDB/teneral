@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { approve } from '../../../keeper/owner';
+import type { Report } from '../../../species/offer';
 import { COMMANDS, takes } from '../../../keeper/commands';
 import { png } from './pictures';
-import { A, expectFrame, stage, type Stage } from './stage';
+import { A, B, T0, expectFrame, stage, type Stage } from './stage';
 
 // The owner's commands at the screen client: typed, offered under the input box, chosen, completed
 // and run; keys go in as the bytes a terminal sends, and what is asserted is what the owner sees.
@@ -23,6 +25,8 @@ const taken = (s: Stage): void => {
   for (const name of readdirSync(s.p.owner)) if (!name.startsWith('.')) unlinkSync(join(s.p.owner, name));
 };
 const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
+/** Only what has scrolled into the conversation, excluding the redrawn bottom menu. */
+const transcript = (s: Stage): string => rows(s.all()).filter((row) => row.includes('── publishing')).join('\n');
 
 /** A life already under way, at rest. */
 function settled(s: Stage): void {
@@ -43,7 +47,86 @@ function working(s: Stage): void {
   s.clock.at = 4100;
 }
 
+/** A local report only; no approval, publication, or network operation is performed. */
+function waitingOffer(s: Stage, commit = A, unsent = false): void {
+  const report: Report = {
+    what: 'publish', ok: true, commit, species: B, branch: 'offer/status-footer', title: 'Status footer fixture', body: '',
+    commits: [], files: [], outside: [], binary: [], steps: [], at: new Date(T0).toISOString(),
+  };
+  mkdirSync(join(s.p.root, '.teneral', 'offers'), { recursive: true });
+  writeFileSync(join(s.p.root, '.teneral', 'offers', `${commit}.json`), JSON.stringify(report));
+  if (unsent) approve(s.p.owner, commit);
+}
+
 // --- the list ---
+
+test('the publish action is marked for a waiting offer, and its menu opens the shared publication page', () => {
+  const s = stage(100, 35);
+  settled(s);
+  expect(s.live()).toContain('publish');
+  expect(s.live()).toContain('actions');
+  s.type(DOWN);
+  expect(s.live()).toContain('open');
+  expect(s.term.vt.block).toBeNull();
+  s.type(ESC);
+  expect(transcript(s)).toBe('');
+  waitingOffer(s);
+  s.clock.at = 31_000;
+  s.frame();
+  expect(rows(s.live()).at(-1)).toContain('publish');
+  expect(rows(s.live()).at(-1)).toContain('1 waiting');
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(s.live()).toContain('let go');
+  expect(s.live()).toContain('what each holds');
+  s.type(DOWN);
+  s.type(DOWN);
+  expect(s.live()).toContain('▸ how it works');
+  s.type(ENTER);
+  expect(flowed(s)).toContain('publishing');
+  expect(flowed(s)).toContain('Nothing your agent makes goes out by itself');
+  expect(flowed(s)).toContain('One offer waits for you.');
+  expect(flowed(s)).toContain('Status footer fixture');
+  expect(channel(s)).toEqual([]);
+  expect(typed(s)).toEqual(['›']);
+  expect(transcript(s).split('\n')).toHaveLength(1);
+  s.type(DOWN);
+  s.type(UP);
+  s.type('not sent');
+  s.type(ENTER);
+  expect(channel(s)).toEqual([['.txt', 'not sent']]);
+  taken(s);
+  s.type(DOWN);
+  s.type(ENTER);
+  s.type(DOWN);
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(transcript(s).split('\n')).toHaveLength(2);
+  // Once back in the editor, Down is history again rather than a hidden command shortcut.
+  s.say('older', 1500);
+  s.type(UP);
+  expect(typed(s)).toEqual(['› older']);
+  s.type(DOWN);
+  expect(typed(s)).toEqual(['›']);
+});
+
+test('an approved but unsent offer is marked on the publish action', () => {
+  const s = stage(100, 35);
+  waitingOffer(s, A, true);
+  settled(s);
+  expect(rows(s.live()).at(-1)).toContain('publish');
+  expect(rows(s.live()).at(-1)).toContain('1 unsent');
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(s.live()).toContain('send again');
+  s.type(DOWN);
+  s.type(DOWN);
+  expect(s.live()).toContain('▸ how it works');
+  s.type(ENTER);
+  expect(flowed(s)).toContain('One offer has your yes and was never sent.');
+  expect(flowed(s)).toContain('Status footer fixture');
+  expect(channel(s)).toEqual([]);
+});
 
 test('a slash lists the commands under the box, and each letter leaves fewer; Up and Down, or Ctrl-P and Ctrl-N, move through them and round the ends; nothing of the list stays in the conversation', () => {
   const s = stage(80, 24);
@@ -103,7 +186,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   expect(s.term.vt.all()).not.toMatch(/▸|Tab completes|\/generations/);
   expect(channel(s)).toEqual([]);
   expect(s.term.vt.alt).toBe(false);
-  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1006)).toBe(false);
+  expect(s.term.vt.modes.has(1000) || s.term.vt.modes.has(1002) || s.term.vt.modes.has(1006)).toBe(true);
 });
 
 test('Tab completes the chosen command, with a blank after it when something may follow; without a list Tab is what it was', () => {

@@ -10,7 +10,7 @@ import { readPeers } from './peers';
 import { dirname, join, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
-import { appendEvent, readEvents } from '../brain/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
 import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
@@ -38,6 +38,8 @@ export interface ToolContext {
   soul: string;
   /** The agent's past, for the tools that ask it. body/main.ts opens it over the database when there is one; a context without it reads the journal through. */
   past?: Past;
+  /** A fresh journal view for tools that route against durable stimulus receipts. */
+  events?: () => JournalEvent[];
   /** Who said what where, laid out for asking (body/community.ts). A context without it goes through the journal's notes. */
   community?: Community;
 }

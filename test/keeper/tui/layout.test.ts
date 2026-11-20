@@ -38,6 +38,43 @@ test('the live region: a blank row, the input in its box across the width, and t
   expect(bare.at(-1)).toHaveLength(99);
 });
 
+const bar = { actions: [
+  { label: 'mutate', icon: 'mutate', tone: 'amber', note: '', hot: false },
+  { label: 'publish', icon: 'publish', tone: 'brand', note: '1 waiting', hot: true },
+  { label: 'memory', icon: 'memory', tone: 'accent', note: '', hot: false },
+  { label: 'more', icon: 'more', tone: 'deep', note: '', hot: false },
+] as const };
+
+test('the action bar stands under the footer; selecting an action moves the cursor off the input without changing it', () => {
+  const rows = liveRows(live(100, 24, { bar: { actions: [...bar.actions], chosen: 1 }, inputFocused: false }));
+  expect(text(rows).at(-2)).toContain('gpt-6.1-sol');
+  expect(text(rows).at(-1)).toContain('publish');
+  expect(text(rows).at(-1)).toContain('1 waiting');
+  expect(text(rows).at(-1)).toContain('move');
+  expect(text(rows).at(-1)).toContain('open');
+  expect(text(rows).at(-1)).toContain('back');
+  expect(rows.at(-1)!.some((span) => span.text.includes('publish') && span.style?.bg === 'brand')).toBe(true);
+  expect(rows.some((row) => row.some((span) => span.style?.inverse && span.text === ' '))).toBe(false);
+});
+
+test('a tall pending list at 100x40 keeps both bottom rows; a short screen gives up the action bar before the footer', () => {
+  const pending = Array.from({ length: 33 }, (_, i): Line => [{ text: `  ▪ tool ${i}` }]);
+  const idleBar = { actions: [...bar.actions], chosen: null };
+  const shown = text(liveRows(live(100, 40, { pending, bar: idleBar })));
+  expect(shown).toHaveLength(20);
+  expect(shown.at(-2)).toContain('gpt-6.1-sol');
+  expect(shown.at(-1)).toContain('publish');
+  expect(shown.filter((row) => row.includes('▪ tool')).length).toBeLessThan(pending.length);
+  // After background work has been trimmed, a screen too short for both keeps the status line.
+  const short = text(liveRows(live(100, 8, { bar: idleBar })));
+  expect(short.at(-1)).toContain('gpt-6.1-sol');
+  expect(short.some((row) => row.includes('publish'))).toBe(false);
+  // Once the work fits, the actionable bar returns without displacing the footer.
+  const roomy = text(liveRows(live(100, 40, { pending: pending.slice(0, 10), workers: [], bar: idleBar })));
+  expect(roomy.at(-1)).toContain('publish');
+  expect(roomy.at(-2)).toContain('gpt-6.1-sol');
+});
+
 test('while something is under way it stands over the box: what has not finished, then what the agent is doing', () => {
   const rows = text(liveRows(live(80, 24, {
     pending: [[{ text: '  ▪ bash  command: sleep 5' }]],

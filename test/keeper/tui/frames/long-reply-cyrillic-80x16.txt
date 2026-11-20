@@ -85,5 +85,5 @@
 ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d
+ gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral
   ↻ mutate   ↑ publish   ◉ memory   ≡ more                          ↓  actions

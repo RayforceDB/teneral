@@ -185,7 +185,7 @@ test('a message whose stimulus could not be journaled is fetched and told again'
   expect(notices[1]!.text).toStartWith('Zulip private 2\n');
 });
 
-import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
+import { zulipLive, zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
 
 test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
   const notices: Stimulus[] = [];
@@ -711,6 +711,87 @@ test('a queue registered for reactions alone is not taken up as the bell: after 
   expect(registered).toEqual(['new']);
 });
 
+test('a queue bell while a fetch is busy is run after it, without overlapping requests', async () => {
+  const got: Stimulus[] = [];
+  let release!: () => void;
+  const first = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0, concurrent = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (url.pathname === '/api/v1/messages') {
+      reads++;
+      concurrent++;
+      expect(concurrent).toBe(1);
+      if (reads === 1) await first;
+      concurrent--;
+      return new Response(JSON.stringify({ messages: reads === 1 ? [] : [{ id: reads - 1, sender_id: 7, sender_full_name: 'Ann', type: 'private', content: 'hello', flags: [] }] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send }, s => got.push(s));
+  const running = p.poll();
+  await Bun.sleep(0);
+  expect(reads).toBe(1);
+  // Any number of bells while busy coalesce into exactly one follow-up fetch.
+  await Promise.all([p.poll(), p.poll(), p.poll()]);
+  expect(reads).toBe(1);
+  release();
+  await running;
+  for (let n = 0; n < 100 && got.length === 0; n++) await Bun.sleep(1);
+  expect(reads).toBe(2);
+  expect(got.map(s => s.text.split('\n', 1)[0])).toEqual(['Zulip private 1']);
+  p.stop();
+});
+
+test('stopping the queue aborts its in-flight long poll and does not log a connection failure', async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(' ')); };
+  try {
+    let signal: AbortSignal | undefined;
+    const send = (async (url: URL, init: RequestInit = {}) => {
+      if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+      if (url.pathname === '/api/v1/register') return new Response(JSON.stringify({ queue_id: 'q', last_event_id: 0 }));
+      if (url.searchParams.get('dont_block') === 'true') return new Response(JSON.stringify({ events: [] }));
+      signal = init.signal ?? undefined;
+      return await new Promise<Response>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    }) as unknown as typeof fetch;
+    const q = zulipReactionPoller({ credentials, events: () => [], send, wide: true, block: true }, () => {});
+    await q.poll();
+    const waiting = q.poll();
+    for (let n = 0; n < 100 && signal === undefined; n++) await Bun.sleep(1);
+    q.stop();
+    expect(await waiting).toBe(false);
+    expect(signal?.aborted).toBe(true);
+    expect(errors).toEqual([]);
+  } finally { console.error = original; }
+});
+
+test('queue failures back off and recovery is observable without ids, credentials or message contents', async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(' ')); };
+  try {
+    let calls = 0;
+    const send = (async (url: URL) => {
+      if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+      calls++;
+      if (calls === 1) return new Response(JSON.stringify({ queue_id: 'q', last_event_id: 0 }));
+      if (calls === 2) return new Response(JSON.stringify({ events: [] }));
+      if (calls === 3) return new Response('{}', { status: 502 });
+      return new Response(JSON.stringify({ events: [] }));
+    }) as unknown as typeof fetch;
+    const q = zulipReactionPoller({ credentials, events: () => [], send, wide: true, block: true }, () => {});
+    expect(await q.poll()).toBe(true); // registered
+    expect(await q.poll()).toBe(false); // one failure: caller backs off
+    expect(await q.poll()).toBe(true); // recovery
+    expect(errors.some(line => line.includes('reaction queue failed'))).toBe(true);
+    expect(errors.some(line => line.includes('event queue connected again'))).toBe(true);
+    expect(errors.join('\n')).not.toContain('fake');
+    q.stop();
+  } finally { console.error = original; }
+});
+
 test('each direct conversation is a place of its own, by who is in it besides the agent, and every message taken is reported for the record', async () => {
   const heard: string[] = [];
   const pages: unknown[][] = [[
@@ -783,4 +864,74 @@ test('a hung poll pass releases the busy latch so the sensor retries instead of 
   expect(notices[0].text).toStartWith('Zulip private 7\n');
   await Promise.race([hung, new Promise(r => setTimeout(r, 50))]); // let the hung pass settle
   p.stop();
+});
+
+async function stalledOwnerPass(recoveryHasMessage: boolean) {
+  const got: Stimulus[] = [];
+  const anchors: string[] = [];
+  let release!: () => void;
+  const firstRendered = new Promise<void>(resolve => { release = resolve; });
+  let page = 0, rendered = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/messages/7') {
+      if (++rendered === 1) await firstRendered;
+      return new Response(JSON.stringify({ message: { id: 7, content: 'owner DM' } }));
+    }
+    if (url.pathname === '/api/v1/messages') {
+      anchors.push(url.searchParams.get('anchor')!);
+      page++;
+      const owner = { id: 7, sender_id: 100, sender_full_name: 'Owner', type: 'private', content: 'owner DM' };
+      return new Response(JSON.stringify({ messages: page === 1 || (page === 2 && recoveryHasMessage) ? [owner] : [] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, ownerId: 100, keepImage: () => '', pollDeadlineMs: 5 }, s => got.push(s));
+  const stalled = p.poll();
+  for (let n = 0; n < 200 && rendered === 0; n++) await Bun.sleep(1);
+  expect(rendered).toBe(1); // the first pass is suspended before emit and cursor advancement
+  await Bun.sleep(20); // the watchdog releases busy and invalidates that pass
+  await p.poll();
+  release(); // the stale pass resumes only after recovery has finished
+  await stalled;
+  await Bun.sleep(10);
+  const delivered = got.map(s => s.text.split('\n', 1)[0]);
+  p.stop();
+  return { anchors, delivered };
+}
+
+test('a watchdog-expired pass cannot deliver an owner DM a second time after its recovery', async () => {
+  const r = await stalledOwnerPass(true);
+  expect(r.anchors).toEqual(['newest', 'newest']);
+  expect(r.delivered).toEqual(['Zulip private 7']);
+});
+
+test('a stale pass finishing does not release the latch under the running recovery', async () => {
+  const got: Stimulus[] = [];
+  let page = 0;
+  let releaseFirst!: () => void, releaseSecond!: () => void;
+  const first = new Promise<void>(r => { releaseFirst = r; });
+  const second = new Promise<void>(r => { releaseSecond = r; });
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/messages') {
+      page++;
+      if (page === 1) await first; else if (page === 2) await second;
+      return new Response(JSON.stringify({ messages: [] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, ownerId: 100, keepImage: () => '', pollDeadlineMs: 60 }, s => got.push(s));
+  const pass1 = p.poll();
+  for (let n = 0; n < 200 && page < 1; n++) await Bun.sleep(1);
+  await Bun.sleep(90);              // the watchdog expires pass 1
+  const pass2 = p.poll();           // the recovery starts and stalls
+  for (let n = 0; n < 200 && page < 2; n++) await Bun.sleep(1);
+  releaseFirst(); await pass1;      // the stale pass finishes while the recovery runs
+  const pass3 = p.poll();           // must coalesce into the recovery
+  await Bun.sleep(5);
+  const pages = page;
+  releaseSecond(); await pass2; await pass3; await Bun.sleep(10);
+  p.stop();
+  expect(pages).toBe(2);
 });

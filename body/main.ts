@@ -19,7 +19,7 @@ import { appendEvent, readEvents } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
 import { needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
-import { runTurn } from '../brain/loop';
+import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
@@ -130,7 +130,7 @@ const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
 const community = openCommunity(past.ray ?? null, journalNow());
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, community };
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: journalNow, community };
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -387,8 +387,9 @@ const sensors: Sensor[] = [
 
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
-  // A quiet clock reply is settled by brain/loop.ts without ever streaming its internal marker.
-  const quietTick = journalNow().findLast(e => e.type === 'stimulus')?.source === 'clock';
+  // Any wake except the owner's terminal/birth may settle quietly. Keep streamed markers out of the terminal.
+  const quietTick = mayStayQuiet(journalNow().findLast(e => e.type === 'stimulus')?.source);
+  const genericTyping = typingFor(workspace);
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -400,8 +401,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
-      // In the chat the turn was woken from, and nowhere else: a turn of its own shows nothing.
-      onTyping: typingFor(workspace),
+      // The chat adapter shows composition only for the exact stimulus that warrants it.
+      onTyping: genericTyping,
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;

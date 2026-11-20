@@ -43,9 +43,10 @@
   that begins with a slash, begin it with two: //like this arrives as /like this. A path,
   such as /home/you/notes.txt, is no command and needs none of that.
 
-  The conversation is ordinary output of your terminal: its scrollbar, PageUp and
-  PageDown, selection, copy and search all work on it. Only the box you type in and the
-  lines around it are redrawn.
+  PageUp and PageDown, or the mouse wheel, page through the conversation above the input
+  box and bottom actions. Those bottom rows stay fixed. Scrolling back to the newest
+  output returns to the ordinary transcript, where selection, copy and search remain the
+  terminal's own.
 
   Images: Ctrl+V attaches the image in your clipboard; dragging an image file into the
   terminal, or pasting its path, attaches that file; so does /image <path>. An attached
@@ -121,5 +122,5 @@
 ╭───────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                     │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol  resting  …/work/teneral  gen 2 e5f6a7b    /help lists the keys and commands
+ gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral  gen 2 e5f6a7b
   ↻ mutate   ↑ publish   ◉ memory   ≡ more                                    ↓  actions
