@@ -471,8 +471,8 @@ const subagents = new Subagents({
   journal, gen, workspace, dir: join(dirname(workspace), 'subagents'), tools: TOOLS, id: ctx.id,
   provider: process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider,
   limits: limitsFrom(process.env), budgetChars: budgetChoice.budgetChars,
-  // The heart finds its note at the next beat; this only ends the sleep.
-  onEnded: () => idleWake?.(),
+  // The heart finds its note at the next beat. This ends the sleep, or the work of rest, exactly as something arriving does.
+  onEnded: () => wake?.(),
 });
 process.on('exit', () => subagents.stopAll());
 // Those that were running when the body last stopped go on, when they are this generation's and their copies are still there.
