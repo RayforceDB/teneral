@@ -2,7 +2,24 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, clockMayTick, inbox, owner, ownerStimulus, routineClock, terminal, type Stimulus } from '../../body/sensors';
+import { clockMayTick, clockTick, inbox, owner, ownerStimulus, routineClock, terminal, tickAt, type Stimulus } from '../../body/sensors';
+
+/**
+ * The heart asks `clockTick` at rest (heart/coordinator.ts); here a short timer stands in for it,
+ * counting each interval from this start or from the tick before, as body/main.ts does.
+ */
+const clock = (intervalMs: number, mayTick?: () => boolean) => (emit: (s: Stimulus) => void): (() => void) => {
+  let last: number | undefined;
+  const started = Date.now();
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const s = clockTick(now, tickAt(started, last, intervalMs), mayTick);
+    if (s === null) return;
+    last = now;
+    emit(s);
+  }, 2);
+  return () => clearInterval(timer);
+};
 import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
@@ -438,4 +455,17 @@ test('a clock tick whose turn the owner interrupted counts as dealt with: the cl
   expect(clockMayTick(readEvents(journal), soul)).toBe(false);
   appendEvent(journal, 'g', { type: 'turn.interrupted' });
   expect(clockMayTick(readEvents(journal), soul)).toBe(true);
+});
+
+test('a tick is due one interval after the last, or after the start when there was none; with no positive interval there is no clock', () => {
+  expect(tickAt(1000, undefined, 500)).toBe(1500);
+  expect(tickAt(1000, 4000, 500)).toBe(4500);
+  // A tick journaled by an earlier process does not make one due at once after a restart.
+  expect(tickAt(9000, 4000, 500)).toBe(9500);
+  for (const off of [0, -5, Number.NaN]) expect(tickAt(1000, 4000, off)).toBeUndefined();
+  expect(clockTick(1499, 1500)).toBeNull();
+  expect(clockTick(1500, 1500)).toMatchObject({ source: 'clock' });
+  expect(clockTick(1500, undefined)).toBeNull();
+  expect(clockTick(1500, 1500, () => false)).toBeNull();
+  expect(clockTick(1500, 1500, () => true, () => 'Your agenda: one thing.')?.text).toEndWith(' Your agenda: one thing.');
 });

@@ -200,3 +200,40 @@ test('the body sleeps until rest or until what it waits for may have come, which
   look = undefined;
   expect(heart.waitFor()).toBe(540_000 + 1000);
 });
+
+test('a tick of the clock is the heart\'s to give: at rest, when one is due, before the work of memory; never in conversation', async () => {
+  const journal = setup();
+  let now = Date.parse(readEvents(journal).at(-1)!.ts) + 1000;
+  const order: string[] = [];
+  let due = false;
+  const heart = new Heart(deps(journal, {
+    restMs: 600_000, now: () => now,
+    remember: async () => { order.push('remember'); return false; },
+    tick: () => { order.push('tick?'); return due ? { source: 'clock', text: 'Clock tick. Your agenda: one thing.' } : null; },
+  }));
+  // At rest (the owner never spoke after birth), none due: memory's turn.
+  expect(await heart.next()).toBe('wait');
+  expect(order).toEqual(['tick?', 'remember']);
+  due = true;
+  expect(await heart.next()).toBe('pulse');
+  expect(readEvents(journal).at(-1)).toMatchObject({ type: 'stimulus', source: 'clock' });
+  expect(order).toEqual(['tick?', 'remember', 'tick?']);
+  // The owner is in conversation: nothing of the agent's own is asked for.
+  appendEvent(journal, 'g', { type: 'assistant', text: '[teneral: no reply]', toolCalls: [] });
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'hello' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Hello.', toolCalls: [] });
+  now = Date.parse(readEvents(journal).at(-1)!.ts) + 1000;
+  expect(await heart.next()).toBe('wait');
+  expect(order).toEqual(['tick?', 'remember', 'tick?']);
+});
+
+test('the sleep reaches to the next tick, and a tick that is overdue and not given is asked for again in a while, not at once', () => {
+  const journal = setup();
+  let tick: number | undefined = 90_000;
+  const heart = new Heart(deps(journal, { nextTick: () => tick, nextLook: () => 300_000 }));
+  expect(heart.waitFor()).toBe(90_000);
+  tick = -4000;
+  expect(heart.waitFor()).toBe(60_000);
+  tick = undefined;
+  expect(heart.waitFor()).toBe(300_000);
+});
