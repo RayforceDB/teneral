@@ -12,12 +12,17 @@ import { clockText, type Stimulus } from '../body/sensors';
 // what remains of the work, queues the step that can be taken now and records what waits
 // (`settle` in brain/agenda.ts). That is the end of the turn's own work, not housekeeping.
 //
+// What the agent waits for is looked for here too, and nowhere else: a job it left running that
+// has ended, a time it set itself to look again, a step that is ready to be taken up. The heart
+// asks whether one has come (`arrived`) after every turn and at every wake, and says how long the
+// body may sleep before one can (`waitFor`). No sensor keeps a timer of its own for any of it.
+//
 // Everything else the agent does for itself waits for rest: forming memories, making them into
 // wider ones, looking ahead, and the clock's ticks that offer time of its own. Rest begins when
 // the owner has said nothing for a while. Until then nothing of the agent's own stands between
 // the owner and an answer, and nothing of it is paid for in the middle of a conversation.
 
-export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wait';
+export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wake' | 'wait';
 export interface HeartState { look: boolean; pulse: boolean }
 export const heartCommand = (line: string): boolean => line.trim() === '/heart';
 
@@ -25,6 +30,8 @@ export const heartCommand = (line: string): boolean => line.trim() === '/heart';
 export const REST_MINUTES = 10;
 /** This many episodes waiting to be remembered are remembered without waiting for rest: memory must not fall behind a long conversation. */
 const BACKLOG = 4;
+/** Never asked again sooner than this: a time already past that nothing takes up must not spin the body. */
+const LOOK_FLOOR_MS = 1000;
 /** The agent's own tools for its agenda: a turn that used one has kept its own account. */
 const AGENDA_TOOLS = new Set(['work', 'intend', 'done', 'allowed']);
 
@@ -86,6 +93,14 @@ export interface HeartDeps {
   /** How many episodes wait to be remembered. */
   backlog?: () => number;
   onError: (error: unknown) => void;
+  /**
+   * Something the agent waits for that has come: an ended job, a time it set to look again, a step
+   * ready to resume. The caller journals what it must before answering, so that it is told once;
+   * null when nothing has come, or when the owner's interruption holds the agent's own work.
+   */
+  arrived?: () => Stimulus | null;
+  /** Milliseconds until something it waits for may have come; undefined when it waits for nothing with a time. */
+  nextLook?: () => number | undefined;
   now?: () => number;
   /** Milliseconds of the owner's silence after which rest begins. */
   restMs?: number;
@@ -100,6 +115,17 @@ export class Heart {
   completed(events: JournalEvent[], enabled = true, from?: number): void { afterTurn(this.state, events, enabled, from); }
   /** Milliseconds until rest begins, 0 at rest: how long the body may sleep before asking again. */
   restIn(): number { return restIn(standing(this.d.events()), this.now(), this.d.restMs ?? REST_MINUTES * 60_000); }
+  /**
+   * How long the body may sleep when there is nothing to do, unless something arrives: until rest
+   * begins, or until what the agent waits for may have come, whichever is sooner. Undefined: until something arrives.
+   */
+  waitFor(): number | undefined {
+    const rest = this.restIn();
+    let look: number | undefined;
+    try { look = this.d.nextLook?.(); } catch { look = undefined; }
+    const times = [...(rest > 0 ? [rest + 1000] : []), ...(look === undefined ? [] : [Math.max(LOOK_FLOOR_MS, look)])];
+    return times.length === 0 ? undefined : Math.min(...times);
+  }
   async next(): Promise<Beat> {
     if (needsTurn(standing(this.d.events()))) return 'turn';
     // An empty soul means the birth dialogue is still under way. Do not replace it with
@@ -114,9 +140,14 @@ export class Heart {
     if (this.state.look) {
       this.state.look = false;
       try { await this.d.settle(); } catch (error) { this.d.onError(error); }
-      // A step it named is queued, and the work sensor wakes it for that: no tick is made up here.
+      // A step it named is queued, and is told below when its time comes (`arrived`): no tick is made up here.
       return 'reflect';
     }
+    // What it waits for has come: it is told now, in conversation or at rest, and the turn that follows is the next beat.
+    try {
+      const come = this.d.arrived?.() ?? null;
+      if (come !== null) { this.d.emit(come); return 'wake'; }
+    } catch (error) { this.d.onError(error); }
     if (this.restIn() > 0 && (this.d.backlog?.() ?? 0) < BACKLOG) return 'wait';
     const before = standing(this.d.events());
     const had = pulseNeeded(known(before), this.now()) || followUps(known(before), this.now()).length > 0;
