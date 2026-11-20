@@ -9,7 +9,7 @@ import { githubRemote, gitRemote } from '../species/github';
 import { install as speciesInstall, retireStale, retiredText } from '../species/offer';
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
-import { Subagents, closeCutOff, endedSubagent, limitsFrom, subagentTool } from './subagents';
+import { Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
 import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -467,7 +467,6 @@ async function rest(): Promise<boolean> {
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 // Subagents: workers with the agent's hands, each in a copy of the workspace (body/subagents.ts). A cheaper model may be named for them.
-for (const name of closeCutOff(journal, gen)) console.error(`[subagent] ${name} was running when the body stopped; closed as cut off`);
 const subagents = new Subagents({
   journal, gen, workspace, dir: join(dirname(workspace), 'subagents'), tools: TOOLS, id: ctx.id,
   provider: process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider,
@@ -476,6 +475,12 @@ const subagents = new Subagents({
   onEnded: () => idleWake?.(),
 });
 process.on('exit', () => subagents.stopAll());
+// Those that were running when the body last stopped go on, when they are this generation's and their copies are still there.
+{
+  const { resumed, closed } = subagents.recover();
+  if (resumed.length > 0) console.error(`[subagent] going on after the restart: ${resumed.join(', ')}`);
+  if (closed.length > 0) console.error(`[subagent] closed as cut off: ${closed.join(', ')}`);
+}
 /** When this body started: the clock counts from here until it has given a tick of its own. */
 const startedAt = Date.now();
 const heartbeatMs = heartbeatMinutes * 60_000;
