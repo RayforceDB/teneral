@@ -209,7 +209,10 @@ test('intend takes something on, done closes it by its mark', async () => {
   expect(buildMessages(readEvents(ctx.journal), 'S')[1]!.content).toContain(`${open!.mark} [due ${due}] Send the weekly report to the owner`);
 
   await expect(tool('done').run({ intention: 'I00000000', how: 'x' }, ctx)).rejects.toThrow(`Open: ${open!.mark}`);
-  expect(await tool('done').run({ intention: open!.mark, how: 'sent it' }, ctx)).toBe(`Closed ${open!.mark}: Send the weekly report to the owner`);
+  // Closing a step is where what it belonged to is most easily lost: the reply asks for what follows.
+  const closed = String(await tool('done').run({ intention: open!.mark, how: 'sent it' }, ctx));
+  expect(closed).toStartWith(`Closed ${open!.mark}: Send the weekly report to the owner`);
+  expect(closed).toContain('If it was one step of something larger, or whoever asked named something to go on to after it, that is not closed with it');
   expect(known(readEvents(ctx.journal)).intentions).toEqual([]);
   await expect(tool('intend').run({ text: 'soon' }, ctx)).rejects.toThrow('understood on its own');
   await expect(tool('intend').run({ text: 'Send the weekly report', due: 'friday' }, ctx)).rejects.toThrow('YYYY-MM-DD');

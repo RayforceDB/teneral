@@ -599,7 +599,9 @@ const done: Tool = {
     const words = optional(args, 'words')?.trim() ?? '';
     const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaid(events, found as Intention, words));
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how'), ...(ended === 'dropped' ? { ended } : {}) } });
-    return `Closed ${found.mark}: ${found.text}${kept}`;
+    // A step that is done is where the larger thing it belonged to is most easily lost: nothing else asks what follows.
+    const after = ended === 'dropped' ? '' : ' If it was one step of something larger, or whoever asked named something to go on to after it, that is not closed with it: unless it already stands on your agenda, set it down now with `work`, or nothing will take it up.';
+    return `Closed ${found.mark}: ${found.text}${kept}${after}`;
   },
 };
 

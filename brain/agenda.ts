@@ -545,6 +545,7 @@ export function settleQuestion(cut = false): string {
     `${MEMORY_MARK} Your turn has just ended${cut ? ', stopped by the limit of rounds in one turn and not by you' : ''}. Before you rest, settle what it leaves behind, so that nothing you began or promised is held only by this conversation. `
     + 'Look at what was asked in it, at what you did and said, and at what you mean to do, listed above.',
     'Is what was asked finished, as the one who asked would judge it? If a step remains that you can take now, without anyone\'s word, name it under Next: you are woken at once to take it. '
+    + 'When what was asked held more than one thing, or something to go on to afterwards ("finish this, then go back to that"), each is a commitment of its own: the later one is set down as well, under Next when it can begin now and otherwise under Waiting on what comes before it, so that it is taken up when that is done and not forgotten with it. '
     + 'If it waits for something, name that under Waiting. If something in your list above was settled in this turn, close it under Done.'
     + (cut ? ' If you were still getting somewhere when you were stopped, the step you were on goes under Next; if you were going round in circles, say under Waiting what stops you, for your owner.' : ''),
     'Only what this turn began, promised or settled. To change something already in your list above, begin the line with its mark and do not set it down again in other words. '
