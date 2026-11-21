@@ -150,6 +150,9 @@ export class Screen {
  * No row is ever written into the last column: a full row would leave the cursor waiting to
  * wrap, and terminals differ on what happens next.
  */
+/** The most blank rows a held live region is given to keep its last row in place (`Inline.paint`). */
+const HOLD_ROWS = 2;
+
 export class Inline {
   /** The live rows as they were last written; null when the region has to be written whole. */
   private shown: string[] | null = null;
@@ -242,8 +245,8 @@ export class Inline {
    * The region begins under the last finished row, so one that lost a row would end a row higher,
    * and what stands at its end, the input and the footer, would jump up and then down again with
    * every line that comes and goes above them. With `hold`, a region that became shorter is given
-   * blank rows at its top instead, as many as keep its last row where it was; rows printed since
-   * take their place first, so the gap closes with the next thing said. Without `hold` the region
+   * blank rows at its top instead, as many as keep its last row where it was, up to two; rows printed since
+   * take their place first, so the gap closes with the next thing said. One that lost more rows than that moves up. Without `hold` the region
    * is drawn as given and its height is not remembered: that is for what the owner opened
    * themselves, a list or a tall input, which gives its rows back when it closes.
    */
@@ -260,7 +263,8 @@ export class Inline {
     if (live.length > 0) {
       // While the owner pages, what is queued is not printed and takes no row's place yet.
       const printed = this.anchor === null ? this.queue.length : 0;
-      const kept = Math.min(most, this.height - printed);
+      // Only a row or two is held: that is what comes and goes while the agent works. A region that lost more than that has changed its shape, and a wide gap would stand over the input for nothing.
+      const kept = Math.min(most, this.height - printed, next.length + HOLD_ROWS);
       if (kept > next.length) next = [...Array.from({ length: kept - next.length }, () => ''), ...next];
       if (this.anchor === null) this.height = hold ? next.length : Math.max(0, this.height - printed);
     }

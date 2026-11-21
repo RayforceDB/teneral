@@ -221,11 +221,18 @@ test('a held region that loses a row keeps its last row where it was; what is pr
   inline.paint(lines('', 'input', ' footer'), true);
   expect(term.vt.text().split('\n').slice(0, 5)).toEqual(['one', 'two', '', 'input', ' footer']);
   expect(footerAt()).toBe(at);
+  // A region that lost many rows at once is not held by a wide gap: two blank rows at most, and it moves up.
+  inline.paint(lines('', 'a', 'b', 'c', 'd', 'e', 'input', ' footer'), true);
+  inline.paint(lines('', 'input', ' footer'), true);
+  expect(term.vt.text().split('\n').slice(0, 7)).toEqual(['one', 'two', '', '', '', 'input', ' footer']);
+  inline.paint(lines('', 'working', 'input', ' footer'), true);
+  inline.paint(lines('', 'input', ' footer'), true);
+  const at2 = footerAt();
   // What the owner opened is not held: it gives its rows back when it closes, and the footer is where it was.
   inline.paint(lines('', 'input', 'a', 'b', 'c'));
   inline.paint(lines('', 'input', ' footer'), true);
-  expect(footerAt()).toBe(at);
-  expect(term.vt.text().split('\n').slice(5).every(row => row === '')).toBe(true);
+  expect(footerAt()).toBe(at2);
+  expect(term.vt.text().split('\n').slice(at2 + 1).every(row => row === '')).toBe(true);
 });
 
 test('no row is written into the last column, and a live region taller than the screen keeps its last rows', () => {
