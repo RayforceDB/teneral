@@ -216,7 +216,7 @@ export const ARRIVED = '[arrived while you were working]';
 /**
  * A stimulus journaled while the model was replying lies before that reply in the journal, and the
  * loop then asks again. Where the request boundaries say so, it is shown after that reply (see
- * ARRIVED). This is for what they do not cover, a journal from before them or a note of the stem's:
+ * ARRIVED). This is for what they do not cover, a journal from before them:
  * the list would end with the agent's own finished reply, and this says why it is asked.
  */
 const LATE =
@@ -294,7 +294,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
     return wire;
   };
 
-  const { after, during } = arrivals(events);
+  const { after, during } = arrivals(events, e => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id));
   const show = (e: JournalEvent & { type: 'stimulus' }, i: number, at: number): void => {
     const text = stimulusText(e.source, e.text);
     const message: ChatMessage = { role: 'user', content: during.has(i) ? `${ARRIVED}\n${text}` : text };
@@ -306,7 +306,14 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   let held: number[] = [];
   for (let i = 0; i <= events.length; i++) {
     if (held.length > 0 && (i === events.length || after.get(held[0]!)! < i)) {
-      for (const s of held) show(events[s] as JournalEvent & { type: 'stimulus' }, s, after.get(s)!);
+      for (const s of held) {
+        const late = events[s]!;
+        if (late.type === 'stimulus') show(late, s, after.get(s)!);
+        else {
+          out.push({ role: 'user', content: `${ARRIVED}\n${stemNote(late) ?? accepted.get(late.id)}` });
+          origin.push(after.get(s)!);
+        }
+      }
       held = [];
     }
     if (i === events.length) break;
@@ -362,7 +369,9 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
       origin.push(i);
     } else {
       const note = stemNote(e) ?? accepted.get(e.id) ?? backNote(e, MEMORY_MARK);
-      if (note !== null) {
+      if (after.has(i)) held.push(i);
+      else if (note !== null) {
+        // A note of the stem's that follows a tool, as every answer to `mutate` does, is no interruption of the work: only one a reply was written without is moved and marked.
         out.push({ role: 'user', content: note });
         origin.push(i);
       }

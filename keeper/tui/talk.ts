@@ -1345,7 +1345,9 @@ export class TalkScreen {
       bar: { actions: actions.map(({ label, note, hot, icon, tone }) => ({ label, note, hot, icon, tone })), chosen: this.bar },
       menu: this.menu === null || opened === undefined ? null
         : { title: this.menu.title, icon: opened.icon, tone: opened.tone, items: this.menu.items.map((item) => ({ name: item.name, about: item.about, ...(item.run === null ? { says: true } : {}) })), chosen: this.menu.chosen },
-    }));
+    }),
+      // What the owner opened or typed tall gives its rows back when it closes; everything else holds the input and footer where they are.
+      list === null && this.menu === null && !this.edit.text.includes('\n') && this.edit.text.length < max - 8);
   }
 
   /** Things worth knowing, one at a time in the footer. Every one names a real key or command. */
