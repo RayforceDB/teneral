@@ -7,6 +7,7 @@ import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../.
 import { install, ownerCommand, publishing, speciesUpdate } from '../../species/offer';
 import { readApproval } from '../../immune/approval';
 import { interrupt, leaveWord, tell } from '../owner';
+import { pairingCommand } from '../pairing';
 import { memoryCommand } from '../memory';
 import { modelCommand } from '../model';
 import { configured } from '../../stem/configuration';
@@ -1038,6 +1039,13 @@ export class TalkScreen {
           this.paint();
         });
         return;
+      }
+      case '/owner': {
+        // Which chat accounts are the owner's (keeper/pairing.ts). A code goes to the body, not into the conversation.
+        let lines: string[];
+        try { lines = pairingCommand(this.o.paths.root, arg, () => this.now()); } catch (err) { lines = [`It could not be done: ${err instanceof Error ? err.message : String(err)}`]; }
+        const shown = clean(lines.join('\n')).split('\n');
+        return shown.length === 1 ? this.say(shown[0]!) : this.page('your accounts', shown);
       }
       case '/heart':
         // The body turns this owner line into one bounded pulse; it is not a second running turn.

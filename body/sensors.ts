@@ -5,6 +5,9 @@ import { peerName, readPeers } from './peers';
 import type { JournalEvent } from '../brain/journal';
 import { fromOwner } from '../brain/owned';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
+
+/** What the name of a pairing code ends with (keeper/owner.ts). Said here as well, so that a body can run under a keeper from before pairing. */
+const PAIRING_SUFFIX = '.pairing';
 import { QUIET_REPLY } from '../brain/quiet';
 
 export interface Stimulus {
@@ -178,9 +181,10 @@ export function inbox(dir: string, id: string, intervalMs = 2000, peersFile?: st
  * this starts was meant for a process that is gone, and is dropped.
  *
  * A file whose name starts with a dot and ends in `.memory` is the owner's word about the agent's
- * memory, and `onWord` gets what it holds (brain/owned.ts decides what it means).
+ * memory, and `onWord` gets what it holds (brain/owned.ts decides what it means). One that ends in
+ * `.pairing` is a pairing code, and `onPairing` gets what it holds (body/pairing.ts); it is not journaled.
  */
-export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = () => {}, onWord: (text: string) => void = () => {}): Sensor {
+export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = () => {}, onWord: (text: string) => void = () => {}, onPairing: (text: string) => void = () => {}): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, a line that was journaled but cannot be removed would be said on every poll.
@@ -194,11 +198,11 @@ export function owner(dir: string, intervalMs = 250, onInterrupt: () => void = (
       try {
         if (!existsSync(dir)) return;
         // The owner's words about memory (keeper/owner.ts): named with a dot in front, so that no reader takes one for a line, and handed over as they are.
-        for (const file of readdirSync(dir).filter((name) => name.startsWith('.') && name.endsWith(MEMORY_SUFFIX)).sort()) {
+        for (const file of readdirSync(dir).filter((name) => name.startsWith('.') && (name.endsWith(MEMORY_SUFFIX) || name.endsWith(PAIRING_SUFFIX))).sort()) {
           if (failed.has(file)) continue;
           try {
             // Acted on first, removed second: a crash in between repeats the word, and a word said twice changes nothing.
-            onWord(readFileSync(join(dir, file), 'utf8'));
+            (file.endsWith(PAIRING_SUFFIX) ? onPairing : onWord)(readFileSync(join(dir, file), 'utf8'));
             rmSync(join(dir, file));
           } catch (err) {
             failed.add(file);

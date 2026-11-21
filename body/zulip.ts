@@ -25,6 +25,8 @@ interface Options {
   conversations?: boolean;
   /** API-verified Zulip user id of the owner. Absent, no Zulip sender gets owner authority. */
   ownerId?: number;
+  /** The owner's accounts beyond that one, and the pairing that makes one (body/pairing.ts). */
+  owners?: { is: (id: string) => boolean; claim: (m: ChatMessage) => boolean; any: () => boolean };
   /** Copies fetched bytes into the content-addressed image store; absent, attachments stay text. */
   keepImage?: (bytes: Buffer) => string | Promise<string>;
   /**
@@ -153,6 +155,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
     ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}), ...(o.peer ? { peer: o.peer } : {}),
+    ...(o.owners ? { owners: o.owners } : {}),
   });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
@@ -172,7 +175,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   /** A Zulip message as the chat layer takes it. Identity is the API's, never a display name or message content. */
   function toChat(c: Credentials, m: any, again = false): ChatMessage {
     const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
-    const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
+    const owner = (o.ownerId !== undefined && m.sender_id === o.ownerId) || (m.sender_id !== identity!.id && o.owners?.is(String(m.sender_id)) === true);
     const current = active;
     return {
       // A direct conversation is a place of its own, by who is in it besides the agent.

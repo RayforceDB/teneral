@@ -5,6 +5,7 @@ import { eventName, journalSize, readEventsFrom, type JournalEvent } from '../br
 import { interrupt, tell } from './owner';
 import { ownerCommand } from '../species/offer';
 import { modelCommand } from './model';
+import { pairingLine } from './pairing';
 import { current } from '../stem/configuration';
 import { planNotice } from '../brain/providers';
 import { cageNotice } from '../immune/approval';
@@ -531,7 +532,7 @@ if (import.meta.main) {
     banner: planNotice(env),
     cage,
     waitMs,
-    command: (line) => ownerCommand(p.root, line),
+    command: (line) => ownerCommand(p.root, line) ?? pairingLine(p.root, line),
     model: (arg) => modelCommand(p.root, arg),
   });
   process.exit(status);
