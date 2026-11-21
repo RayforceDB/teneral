@@ -111,7 +111,7 @@ export class Owners {
    */
   claim(service: string, m: ChatMessage): boolean {
     if (m.own || m.kind !== 'direct' || m.sender === undefined) return false;
-    const said = bare(m.text).replace(/^PAIR(?=.{8,}$)/, '');
+    const said = bare(m.body ?? m.text).replace(/^PAIR(?=.{8,}$)/, '');
     // A code already used, handed over once more: still not talk, and it pairs nobody.
     if (said.length >= 8 && said.length <= 64 && this.spent.has(hashOf(service, said))) return true;
     const p = this.waiting.get(service);
