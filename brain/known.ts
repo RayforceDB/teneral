@@ -112,6 +112,12 @@ export interface WorkState {
    * something that arrives by itself (the owner's word, a notification) and is not looked at on a schedule.
    */
   checkAt?: number;
+  /**
+   * Of what waits: the id of another intention that this one comes after. When that one is no longer
+   * open, this one is ready, and the agent is woken to take it (body/work.ts). It is how "finish this,
+   * then go on to that" is held: the second is on the agenda from the start, and is not lost when the first is closed.
+   */
+  after?: string;
   /** When this state was recorded: the time of the note that holds it. Worked out, never stored. */
   at?: string;
   outcome?: string;
@@ -150,6 +156,7 @@ function workState(d: Record<string, unknown>): WorkState | undefined {
   if ((w.status !== 'queued' && w.status !== 'waiting') || !short(w.next, 4000) || !Number.isSafeInteger(w.attempts) || (w.attempts as number) < 0) return undefined;
   const state: WorkState = { status: w.status, next: w.next as string, attempts: w.attempts as number, resumeAt: Number.isFinite(w.resumeAt) ? w.resumeAt as number : 0 };
   if (w.status === 'waiting' && Number.isFinite(w.checkAt) && (w.checkAt as number) > 0) state.checkAt = w.checkAt as number;
+  if (w.status === 'waiting' && typeof w.after === 'string' && w.after !== '' && w.after.length <= 80) state.after = w.after;
   for (const key of ['outcome', 'recovery', 'evidence'] as const) if (w[key] !== undefined) {
     if (!short(w[key])) return undefined;
     state[key] = w[key] as string;
@@ -270,7 +277,8 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
     for (const i of todo) {
       if (own.includes(i) && !shown.has(i.id)) continue;
       const due = i.due === undefined ? '' : i.due <= today ? ` [due ${i.due}, which has come]` : ` [due ${i.due}]`;
-      const again = i.work?.status !== 'waiting' ? '' : i.work.checkAt === undefined ? ', until what it waits for arrives' : `, to look again ${new Date(i.work.checkAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+      const before = i.work?.after === undefined ? undefined : todo.find((o) => o.id === i.work!.after)?.mark;
+      const again = i.work?.status !== 'waiting' ? '' : i.work.after !== undefined ? `, to be taken up when ${before ?? 'what it comes after'} is closed` : i.work.checkAt === undefined ? ', until what it waits for arrives' : `, to look again ${new Date(i.work.checkAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
       const progress = i.work === undefined ? '' : ` [${i.work.status}${again}; ${i.work.status === 'waiting' ? 'for' : 'next'}: ${i.work.next.replace(/\s+/g, ' ').slice(0, 300)}]`;
       lines.push(`${i.mark}${i.origin === 'own' ? (i.allowed === undefined ? ' [your own idea]' : ' [your own idea, your owner said yes]') : ''}${due}${progress} ${i.text}`);
       if (i.work !== undefined) for (const key of ['outcome', 'recovery', 'evidence'] as const) {
