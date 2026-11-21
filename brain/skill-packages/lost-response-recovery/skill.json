@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "lost-response-recovery",
+  "version": "1.0.0",
+  "capability": "external-operation.recovery",
+  "precedence": 100,
+  "runner": "lost-response-recovery.v1",
+  "summary": "Reconcile an external operation after a timeout, reset or missing response before deciding whether any retry is safe.",
+  "triggers": [
+    "external operation lost response",
+    "request timeout connection reset uncertain receipt",
+    "push send publish may have completed",
+    "avoid duplicate retry after interruption"
+  ],
+  "exclusions": [
+    "The service returned a definitive validation error before attempting the operation.",
+    "A verified receipt already shows the exact requested outcome."
+  ],
+  "dependencies": { "api": "skill-runtime.v1", "tools": ["bash"] },
+  "assumptions": [
+    "The operation has a service-side receipt, state or history that can be inspected with an existing tool.",
+    "A timeout, connection reset or interrupted tool result does not distinguish failure from a lost success response.",
+    "No credential is read merely to answer a recovery question."
+  ]
+}

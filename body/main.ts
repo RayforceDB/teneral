@@ -36,6 +36,7 @@ import { mail, mailKey } from './mail';
 import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
+import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
 import { endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
@@ -134,7 +135,19 @@ const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
 const community = openCommunity(past.ray ?? null, journalNow());
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: journalNow, community };
+const id = env('TENERAL_ID');
+// Workers use only the base tools; the parent advertises its complete tool set to the skill registry.
+const subagents = new Subagents({
+  journal, gen, workspace, dir: join(dirname(workspace), 'subagents'), tools: TOOLS, id,
+  provider: process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider,
+  limits: limitsFrom(process.env), budgetChars: budgetChoice.budgetChars,
+  // The heart finds its note at the next beat. End sleep or work at rest as an arrival would.
+  onEnded: () => wake?.(),
+});
+const allTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: journalNow, community, toolNames: allTools.map(t => t.spec.name) };
+ctx.skills = openSkills(ctx);
+try { seedRecoverySkill(ctx); } catch (err) { console.error(`[skills] recovery skill was not seeded: ${err instanceof Error ? err.message : String(err)}`); }
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -422,7 +435,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, subagentTool(subagents)], ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
+      journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
@@ -523,14 +536,6 @@ async function rest(): Promise<boolean> {
 
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
-// Subagents: workers with the agent's hands, each in a copy of the workspace (body/subagents.ts). A cheaper model may be named for them.
-const subagents = new Subagents({
-  journal, gen, workspace, dir: join(dirname(workspace), 'subagents'), tools: TOOLS, id: ctx.id,
-  provider: process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider,
-  limits: limitsFrom(process.env), budgetChars: budgetChoice.budgetChars,
-  // The heart finds its note at the next beat. This ends the sleep, or the work of rest, exactly as something arriving does.
-  onEnded: () => wake?.(),
-});
 process.on('exit', () => subagents.stopAll());
 // Those that were running when the body last stopped go on, when they are this generation's and their copies are still there.
 {

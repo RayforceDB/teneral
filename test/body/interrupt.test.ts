@@ -16,6 +16,8 @@ import { interrupt, tell } from '../../keeper/owner';
 // and what happened is read from the journal: these are the paths the owner's Esc takes.
 
 const ROOT = join(import.meta.dir, '..', '..');
+// A fresh journal seeds the built-in skill (register, verify, enable) before ready.
+const READY = ['note', 'note', 'note', 'generation.ready'];
 
 interface Asked { messages: { role: string; content: unknown }[]; aborted: boolean }
 type Answer = (n: number, asked: Asked) => Response | Promise<Response>;
@@ -358,12 +360,12 @@ test('interrupted while it waits for the model: the request is dropped at the pr
   await l.until('the request', () => l.asked.length === 1);
   interrupt(l.owner);
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'turn.interrupted']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'turn.interrupted']);
   await l.until('the provider seeing the request dropped', () => l.asked[0]!.aborted);
   // No turn of its own after that: nothing is asked and nothing is journaled, and the process is there.
   await Bun.sleep(700);
   expect(l.asked).toHaveLength(1);
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'turn.interrupted']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'turn.interrupted']);
   expect(needsTurn(l.events())).toBe(false);
   expect(l.body.exitCode).toBeNull();
   expect(existsSync(l.owner) ? readdirSync(l.owner) : []).toEqual([]);
@@ -399,7 +401,7 @@ test('interrupted while bash runs: the command, its child and its grandchild are
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
   expect(Date.now() - pressed).toBeLessThan(3000);
   await l.until('the processes gone', () => pids.every((p) => !alive(p)), 3000);
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.result', 'turn.interrupted']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.result', 'turn.interrupted']);
   const results = l.events().flatMap((e) => (e.type === 'tool.result' ? [e] : []));
   expect(results[0]).toMatchObject({ callId: 'c1', ok: false });
   expect(results[0]!.output).toMatch(/^\[interrupted\] Your owner interrupted this turn while this tool was running\..*\ninterrupted by your owner and killed, with everything it started\nbegun\n$/s);
@@ -422,14 +424,14 @@ test('an interrupt while nothing is owed is dropped, also one left from before t
     tell(owner, 'are you there?');
   });
   await l.until('the reply to the line that waited', () => l.types().at(-1) === 'assistant');
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'assistant']);
   // At rest now.
   interrupt(l.owner);
   await l.until('the interrupt taken', () => readdirSync(l.owner).length === 0);
   await Bun.sleep(400);
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'assistant']);
   tell(l.owner, 'and now?');
-  await l.until('the second reply', () => l.types().length === 9 && l.types().at(-1) === 'assistant');
+  await l.until('the second reply', () => l.types().length === READY.length + 8 && l.types().at(-1) === 'assistant');
   expect(l.types()).not.toContain('turn.interrupted');
   expect(l.asked).toHaveLength(2);
   expect(l.asked.some((a) => a.aborted)).toBe(false);
@@ -476,7 +478,7 @@ test('interrupted while it waits to try a failed turn again: the turn is given u
   expect(needsTurn(l.events())).toBe(true);
   interrupt(l.owner);
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'turn.interrupted']);
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'turn.interrupted']);
   expect(needsTurn(l.events())).toBe(false);
   await Bun.sleep(500);
   expect(l.asked).toHaveLength(1);

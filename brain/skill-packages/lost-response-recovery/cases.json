@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "held-out-reset-without-receipt",
+      "attempt": "started",
+      "receipt": "unknown",
+      "state": "unknown",
+      "expected": "inconclusive"
+    },
+    {
+      "id": "completed-publish-after-timeout",
+      "attempt": "started",
+      "receipt": "matches",
+      "state": "matches",
+      "expected": "no-op"
+    },
+    {
+      "id": "different-remote-content",
+      "attempt": "started",
+      "receipt": "different",
+      "state": "different",
+      "expected": "inconclusive"
+    },
+    {
+      "id": "not-started-tool-receipt",
+      "attempt": "not-started",
+      "receipt": "missing",
+      "state": "unchanged",
+      "expected": "retry-safe"
+    },
+    {
+      "id": "uncertain-interrupted-push",
+      "attempt": "interrupted",
+      "receipt": "unknown",
+      "state": "unknown",
+      "expected": "inconclusive"
+    },
+    {
+      "id": "verified-send-duplicate-guard",
+      "attempt": "started",
+      "receipt": "matches",
+      "state": "unchanged",
+      "expected": "no-op"
+    }
+  ]
+}
