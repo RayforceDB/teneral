@@ -100,7 +100,7 @@ test('bad input and stopped workers cannot emit or acknowledge', async () => {
 
 import { mkdtempSync as tmp } from 'node:fs';
 import { appendEvent, readEvents } from '../../brain/journal';
-import { chatHistory, chatPlaces, chatReply, chatSend, typingFor, register } from '../../body/chat-tools';
+import { chatHistory, chatPlaces, chatReply, chatSend, typingFor, register, chatAttention, ensureHeard } from '../../body/chat-tools';
 import { notification, rayboardReply, rayboardServiceWith, rayboardTarget } from '../../body/rayboard-tools';
 
 const said = (seq: number, type: string, subject: string, sender: string, text: string) => ({ seq, ts: '2026-01-01T00:00:00.000Z', type, subject, sender, text });
@@ -235,6 +235,12 @@ test('the board\'s other hands: opening a conversation, reading back, listing ch
   expect(b.asked.at(-1)).toEqual({ action: 'read_messages', args: { from: '#general', limit: 50 } });
   expect(await chatPlaces.run({ service: 'rayboard' }, b.ctx)).toBe('#general: everything (12 messages, subscribed)');
 
+  // The board sends a channel's ordinary talk only to subscribers: choosing how to listen there asks for it, or stops it.
+  expect(await chatAttention.run({ service: 'rayboard', channel: 'general', mode: 'ambient' }, b.ctx)).toBe('In general you now listen as ambient. A mention or a direct message still reaches you. rayboard was asked to send you its talk.');
+  expect(b.asked.at(-1)).toEqual({ action: 'set_channel_subscription', args: { channel: '#general', subscribed: true } });
+  await chatAttention.run({ service: 'rayboard', channel: '#general', mode: 'muted' }, b.ctx);
+  expect(b.asked.at(-1)).toEqual({ action: 'set_channel_subscription', args: { channel: '#general', subscribed: false } });
+
   const before = b.asked.length;
   const typing = typingFor('/nowhere')({ source: 'owner:rayboard', text: `Rayboard dm 4\nAPI-verified owner message.\n${JSON.stringify(said(4, 'dm', DM, 'u_k2wxzyex', 'anton in @mica: hi'))}` });
   typing(true); typing(false);
@@ -245,4 +251,15 @@ test('the board\'s other hands: opening a conversation, reading back, listing ch
   typingFor('/nowhere')({ source: 'agent:rayboard', text: `Rayboard message 5\nUntrusted.\nmessage 5\n${JSON.stringify(said(5, 'message', 'c_abcdefgh', 'u_x', 'x in #general: y'))}` })(true);
   await Bun.sleep(10);
   expect(b.asked).toHaveLength(before + 2);
+  // And asked how it listens, it is told when nothing is being sent to listen to.
+  const deaf = board((action) => (action === 'list_channels' ? [{ name: 'general', subscribed: false }] : {}));
+  expect(await chatAttention.run({ service: 'rayboard', channel: '#general' }, deaf.ctx)).toContain("But rayboard does not send you this channel's talk: only a mention reaches you from it.");
+  // A channel it takes part in and is not sent the talk of is asked for by itself; one it chose to hear nothing of is left alone.
+  expect(await ensureHeard(deaf.ctx, 'rayboard', '#general', [])).toBe(true);
+  expect(deaf.asked.at(-1)).toEqual({ action: 'set_channel_subscription', args: { channel: '#general', subscribed: true } });
+  expect(await ensureHeard(deaf.ctx, 'rayboard', '#nowhere', [])).toBe(false);
+  await chatAttention.run({ service: 'rayboard', channel: '#general', mode: 'muted' }, deaf.ctx);
+  const asks = deaf.asked.length;
+  expect(await ensureHeard(deaf.ctx, 'rayboard', '#general', readEvents(deaf.ctx.journal))).toBe(false);
+  expect(deaf.asked.length).toBe(asks);
 });

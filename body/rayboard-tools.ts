@@ -86,6 +86,16 @@ export function rayboardServiceWith(o: Reach = {}): ChatService {
       if (!Number.isSafeInteger(posted.seq)) throw new MaybeSent('Rayboard send: invalid receipt; read the conversation before retrying');
       return String(posted.seq);
     },
+    // The board sends a channel's ordinary messages to its subscribers only, and a new member is not one.
+    async listen(_ctx, channel, hear) {
+      await call(o, 'set_channel_subscription', { channel: channel.startsWith('#') ? channel : `#${channel}`, subscribed: hear }, 20_000);
+    },
+    async hears(_ctx, channel) {
+      const channels = await call(o, 'list_channels', {}) as Row[];
+      if (!Array.isArray(channels)) return undefined;
+      const found = channels.find((c) => `#${String(c.name)}` === (channel.startsWith('#') ? channel : `#${channel}`));
+      return found === undefined ? undefined : found.subscribed === true;
+    },
     async history(_ctx, where) {
       const from = where.user !== undefined ? `@${where.user.replace(/^@/, '')}` : where.channel !== undefined ? (/^(#|T-)/.test(where.channel) ? where.channel : `#${where.channel}`) : undefined;
       if (from === undefined) throw new Error('give channel (a #channel or a task id) or user');

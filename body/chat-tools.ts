@@ -40,6 +40,13 @@ export interface ChatService {
   /** The channels the agent is in; with `channel`, the threads or topics of that one, newest first. */
   places?: (ctx: ToolContext, channel?: string) => Promise<string>;
   /**
+   * For a service that sends a channel's ordinary talk only to those who asked for it: ask for it, or stop.
+   * A mention reaches the agent either way. A service that sends every member everything has no need of this.
+   */
+  listen?: (ctx: ToolContext, channel: string, hear: boolean) => Promise<void>;
+  /** Whether the service sends the agent this channel's ordinary talk now; undefined when it cannot say. */
+  hears?: (ctx: ToolContext, channel: string) => Promise<boolean | undefined>;
+  /**
    * How to show, where the stimulus came from, that the agent is writing: one call that says so and
    * one that takes it back, and how often the first must be repeated to stay shown. Undefined when
    * the stimulus is not one to show it for.
@@ -474,11 +481,26 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
   return run >= QUIET_RUN ? { mode: 'mentions', why: 'quiet' } : { mode: 'ambient', why: 'default' };
 }
 
+/**
+ * Sees to it that a channel the agent takes part in is one it hears: where the service sends a
+ * channel's ordinary talk only on request and is not sending it, it is asked to, unless the agent
+ * chose to hear nothing there. True when it asked. For a service with no such notion, nothing.
+ */
+export async function ensureHeard(ctx: ToolContext, serviceName: string, channel: string, events: JournalEvent[]): Promise<boolean> {
+  const service = services.get(serviceName);
+  if (service?.listen === undefined || service.hears === undefined) return false;
+  if (modeOf(events, serviceName, { id: channel, name: channel }).mode === 'muted') return false;
+  if (await service.hears(ctx, channel) !== false) return false;
+  await service.listen(ctx, channel, true);
+  return true;
+}
+
 export const chatAttention: Tool = {
   spec: {
     name: 'chat_attention',
     description: 'Choose how you listen in a channel. ambient: its talk wakes you once it has paused, and you may join in. mentions: its talk only comes along as context when someone addresses you. '
-      + 'muted: you hear nothing of it but a message that names you. A mention or a direct message always reaches you. With no mode, says how you listen there now and why. '
+      + 'muted: you hear nothing of it but a message that names you. A mention or a direct message always reaches you. With no mode, says how you listen there now and why, and whether the service sends you its talk at all. '
+      + 'Some services send a channel\'s ordinary talk only to those who asked for it: setting a mode asks, so set one for a channel you are to take part in and hear nothing from. '
       + `A channel you were woken for ${QUIET_RUN} times running without saying anything goes to mentions by itself; set it back to ambient here when that is wrong.`,
     parameters: {
       type: 'object',
@@ -493,11 +515,21 @@ export const chatAttention: Tool = {
     const mode = text(args, 'mode');
     if (mode === undefined) {
       const now = modeOf(readEvents(ctx.journal), service.name, { id: channel, name: channel });
-      return `In ${channel} you listen as ${now.mode}: ${now.why === 'chosen' ? 'you chose that' : now.why === 'quiet' ? `you were woken for its talk ${QUIET_RUN} times running and said nothing` : 'nothing was chosen, and that is how you listen anywhere'}.`;
+      // How it listens is its own choice; whether anything is sent to listen to is the service's, and the two must not be confused.
+      let sent: boolean | undefined;
+      try { sent = await service.hears?.(ctx, channel); } catch { sent = undefined; }
+      const deaf = sent === false && now.mode !== 'muted' ? ` But ${service.name} does not send you this channel's talk: only a mention reaches you from it. Set the mode here, to ${now.mode} or another, and it is asked to.` : '';
+      return `In ${channel} you listen as ${now.mode}: ${now.why === 'chosen' ? 'you chose that' : now.why === 'quiet' ? `you were woken for its talk ${QUIET_RUN} times running and said nothing` : 'nothing was chosen, and that is how you listen anywhere'}.${deaf}`;
     }
     if (mode !== 'ambient' && mode !== 'mentions' && mode !== 'muted') throw new Error('mode is one of ambient, mentions, muted');
+    // Where the service sends a channel's talk only on request, the request is part of choosing to listen: without it the choice would hear nothing.
+    let asked = '';
+    if (service.listen !== undefined) {
+      try { await service.listen(ctx, channel, mode !== 'muted'); asked = mode === 'muted' ? ` ${service.name} was asked to stop sending you its talk.` : ` ${service.name} was asked to send you its talk.`; }
+      catch (err) { asked = ` But ${service.name} could not be asked to ${mode === 'muted' ? 'stop sending' : 'send'} you its talk: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`; }
+    }
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ATTENTION_KIND, data: { service: service.name, channel, mode } });
-    return `In ${channel} you now listen as ${mode}. A mention or a direct message still reaches you.`;
+    return `In ${channel} you now listen as ${mode}. A mention or a direct message still reaches you.${asked}`;
   },
 };
 
