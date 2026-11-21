@@ -32,6 +32,8 @@ export const COMMANDS: readonly Command[] = [
   { name: '/model', hint: '[name]', about: 'the model the agent thinks with; with a name, test that one and change to it', plain: true },
   // Answered by keeper/pairing.ts; the code it gives is carried to the body (body/pairing.ts).
   { name: '/owner', hint: '[service]', about: 'which chat accounts are yours; with a service, pair one', plain: true },
+  // Answered by keeper/login.ts: the sign-in the setup ends with, from inside the conversation.
+  { name: '/login', hint: '[where]', about: 'the agent\'s own accounts; with github, sign it in', plain: false },
   { name: '/heart', hint: '', about: 'give the agenda one pulse now', plain: true },
   // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
   { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },

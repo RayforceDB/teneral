@@ -55,7 +55,7 @@ test('what is said names the account, does not claim it is the agent\'s, and say
   stop();
   expect(said).toEqual([{ source: 'github-account', text: accountText('the-owner') }]);
   expect(said[0]!.text).toContain('you are signed in as `the-owner`');
-  expect(said[0]!.text).toContain('If `the-owner` is not your own account but your owner\'s, do nothing on GitHub and tell your owner: `./one setup github`');
+  expect(said[0]!.text).toContain('If `the-owner` is not your own account but your owner\'s, do nothing on GitHub and tell your owner: `./one setup github`, or `/login github` in the talk client, signs you in to your own.');
 });
 
 test('GitHub is asked with the token in a header; a refusal or no answer is no login', async () => {

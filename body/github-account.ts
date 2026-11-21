@@ -24,7 +24,7 @@ export function knownAccount(events: readonly Noted[]): string | null {
 
 /** What the agent is told. It names the account and does not say whose it is: only the owner knows that. */
 export const accountText = (login: string): string =>
-  `On GitHub you are signed in as \`${login}\`: your \`git\` and \`gh\` act as that account, and what you push, open or write there appears under its name. If \`${login}\` is not your own account but your owner's, do nothing on GitHub and tell your owner: \`./one setup github\` signs you in to your own.`;
+  `On GitHub you are signed in as \`${login}\`: your \`git\` and \`gh\` act as that account, and what you push, open or write there appears under its name. If \`${login}\` is not your own account but your owner's, do nothing on GitHub and tell your owner: \`./one setup github\`, or \`/login github\` in the talk client, signs you in to your own.`;
 
 /** The login a token belongs to, or null when GitHub does not say (refused, unreachable). */
 export async function loginOf(token: string, send: typeof fetch = fetch): Promise<string | null> {
