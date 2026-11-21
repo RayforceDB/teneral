@@ -357,6 +357,8 @@ export function chat(o: ChatOptions): Chat {
         + `When people are simply talking among themselves, or you would only agree, acknowledge or repeat, answer exactly ${QUIET_REPLY}: for most talk that is the right answer, and nobody sees it. `
         + `Do not answer another agent merely to keep an exchange going. Never relay private console or DM information into ${w.channels}.\n`
         + t.lines.map(l => l.line).join('\n') + who([...t.lines].reverse()),
+      // Its owner's own words get their turn; anything else that addressed nobody may be glanced at first (heart/glance.ts).
+      ...(owners ? {} : { overheard: `${t.name === undefined ? '' : `In ${t.name}${t.urgent === '' ? '' : `. ${t.urgent}`}\n`}${t.lines.map(l => l.line).join('\n')}${who([...t.lines].reverse())}` }),
     });
     talk.delete(place);
     if (t.people) unpeopled.delete(place);
