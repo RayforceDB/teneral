@@ -42,7 +42,7 @@ import { journalView } from './journal-view';
 import { enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
-import { QUIET_RUN, modeOf, typingFor } from './chat-tools';
+import { QUIET_RUN, ensureHeard, modeOf, typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
 function env(name: string): string {
@@ -179,11 +179,28 @@ const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
  * kept for a minute rather than worked out from the whole journal each time.
  */
 const listened = new Map<string, { at: number; mode: Mode }>();
+/**
+ * A channel the agent takes part in is one it hears. Some services send a channel's ordinary talk
+ * only to those who asked, and an agent that was only ever mentioned there would hear nothing else
+ * and never know: so it asks by itself, once for each channel while this body lives, unless it
+ * chose to hear nothing there (body/chat-tools.ts). Failing is not fatal; it is tried at the next start.
+ */
+const askedToHear = new Set<string>();
+function hearIn(service: string, channel: string): void {
+  const key = `${service}:${channel}`;
+  if (askedToHear.has(key)) return;
+  askedToHear.add(key);
+  void ensureHeard(ctx, service, channel, journalNow())
+    .then((asked) => { if (asked) console.error(`[chat] ${service} was not sending the talk of ${channel}; asked it to`); })
+    .catch((err) => console.error(`[chat] ${service} could not be asked for the talk of ${channel}: ${err instanceof Error ? err.message : String(err)}`));
+}
 function listening(service: string, channel: { id: string; name: string }): Mode {
   const key = `${service}:${channel.id}`;
   const kept = listened.get(key);
   if (kept !== undefined && Date.now() - kept.at < 60_000) return kept.mode;
   const now = modeOf(journalNow(), service, channel);
+  // The first message from a channel in this life of the body: it is one the agent takes part in, so it is to hear it.
+  if (kept === undefined) hearIn(service, channel.name);
   if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
   listened.set(key, { at: Date.now(), mode: now.mode });
   return now.mode;
@@ -608,6 +625,16 @@ const heart = new Heart({
 const firstWords = birth(journalNow(), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
+// The channels it has heard from before are ones it takes part in: each is seen to once at the start.
+{
+  const known = new Set<string>();
+  for (const e of journalNow()) {
+    if (e.type !== 'note' || e.kind !== HEARD_KIND || typeof e.data !== 'object' || e.data === null || Array.isArray(e.data)) continue;
+    const d = e.data as Partial<Heard>;
+    if (typeof d.service === 'string' && typeof d.where === 'string' && d.how !== 'dm' && known.size < 50) known.add(`${d.service}\n${d.where}`);
+  }
+  for (const key of known) { const [service, channel] = key.split('\n'); hearIn(service!, channel!); }
+}
 // The journal grew: by a stimulus, which wakes by itself in `emit`, by the stem, or by a record
 // nobody needs to answer. A request of the agent's own goes on unless a turn is now owed.
 stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || needsTurn(journalNow())) wake?.(); }));
