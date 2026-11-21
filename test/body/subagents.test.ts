@@ -194,8 +194,12 @@ test('a subagent whose model fails is reported as failed, with why; one that was
   expect(l.body().recover()).toEqual({ resumed: [], closed: ['ghost'] });
   expect(l.record('ghost')).toMatchObject({ state: 'ended', outcome: 'cut_off', report: 'I had found the first clue.' });
   expect(l.body().recover()).toEqual({ resumed: [], closed: [] });
-  const text = [endedSubagent(l.journal, 'g1', readEvents(l.journal))?.text, endedSubagent(l.journal, 'g1', readEvents(l.journal))?.text].join('\n');
-  expect(text).toContain('Your subagent ghost was cut off when your body was restarted');
+  // Two have ended and were not told: the agent hears of both in one message, once.
+  const text = endedSubagent(l.journal, 'g1', readEvents(l.journal))!.text;
+  expect(text).toStartWith('2 of your subagents have ended: ');
+  expect(text).toContain('=== ghost ===\nYour subagent ghost was cut off when your body was restarted');
+  expect(text).toContain('=== unlucky ===\nYour subagent unlucky failed');
+  expect(endedSubagent(l.journal, 'g1', readEvents(l.journal))).toBeNull();
 }, 30_000);
 
 test('the tool is the agent\'s hand on all of it, and the limits come from the settings', async () => {
