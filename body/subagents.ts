@@ -512,16 +512,23 @@ export function endedText(s: Subagent): string {
 }
 
 /**
- * One that has ended and that the agent has not been told of, as what it is told; null when there
- * is none. Marked as told in the journal first, so once. The heart asks (heart/coordinator.ts).
+ * Those that have ended and that the agent has not been told of, as what it is told; null when
+ * there is none. All of them in one message: each one told by itself costs a turn of its own, and
+ * what several were started for is usually one question. Marked as told in the journal first, so
+ * once. The heart asks (heart/coordinator.ts).
  */
 export function endedSubagent(journal: string, gen: string, events: JournalEvent[]): Stimulus | null {
-  for (const s of subagents(events).values()) {
-    if (s.state !== 'ended') continue;
-    appendEvent(journal, gen, { type: 'note', kind: SUBAGENT_KIND, data: { ...s, state: 'told' } });
-    return { source: 'work', text: endedText(s) };
-  }
-  return null;
+  const ended = [...subagents(events).values()].filter((s) => s.state === 'ended');
+  if (ended.length === 0) return null;
+  for (const s of ended) appendEvent(journal, gen, { type: 'note', kind: SUBAGENT_KIND, data: { ...s, state: 'told' } });
+  if (ended.length === 1) return { source: 'work', text: endedText(ended[0]!) };
+  return {
+    source: 'work',
+    text: [
+      `${ended.length} of your subagents have ended: ${ended.map((s) => s.name).join(', ')}. Each is told below, one after another, with its own report.`,
+      ...ended.map((s) => `=== ${s.name} ===\n${endedText(s)}`),
+    ].join('\n\n'),
+  };
 }
 
 /** The agent's hand on its subagents. */
