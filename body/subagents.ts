@@ -96,6 +96,7 @@ export const SYSTEM = [
   'You are a subagent: a worker started by an agent for one task. The task is the first message. You know nothing else of the agent\'s conversation, and it sees nothing of your work but your last reply.',
   'You work in a copy of the agent\'s workspace, made when you were started. Change what the task needs there; what you change is handed back as a branch for the agent to look at. Nothing outside that copy is yours to change.',
   'You cannot ask anyone anything. Where the task leaves a choice open, make the sensible one and say which you made.',
+  'Nothing wakes you: a command you leave running in the background is stopped when you report, so wait for whatever you need from it before you do.',
   'When you are done, reply without a tool call. That reply is your report and the only thing the agent reads: say what you did, what you found, what you changed and where, what you checked and how, and what you did not finish. Say plainly what you are not sure of. Do not address the owner; you have none.',
 ].join('\n');
 
@@ -461,6 +462,8 @@ export class Subagents {
       if (!whole) {
         let said = '';
         try { said = lastWords(journal); } catch { /* no journal left */ }
+        // What it left running in the background has nobody to report to any more.
+        try { if (existsSync(journal)) stopCurrentJobs(journal, s.gen); } catch { /* nothing it left running is known */ }
         try { rmSync(join(s.dir, 'work'), { recursive: true, force: true }); } catch { /* stays */ }
         this.note({ ...s, state: 'ended', outcome: 'cut_off', report: (said === '' ? '(it had said nothing yet)' : said).slice(0, REPORT_CHARS) });
         closed.push(s.name);
