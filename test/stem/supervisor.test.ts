@@ -1041,9 +1041,21 @@ test('a lock whose pid is alive and is the program the lock names still keeps a 
   const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
   const p = paths(dir);
   mkdirSync(join(dir, '.teneral'));
-  const holder = Bun.spawn(['sleep', '300'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  const cmd = ['sleep', '300'];
+  const holder = Bun.spawn(cmd, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
   try {
-    for (const lock of [`${holder.pid}\n${JSON.stringify(['sleep', '300'])}\n`, `${holder.pid}\n`]) {
+    // On Linux the lock check compares argv. Wait for exec before claiming this process is sleep.
+    if (existsSync('/proc/self/cmdline')) {
+      let argv: string[] = [];
+      const deadline = performance.now() + 1000;
+      do {
+        argv = readFileSync(`/proc/${holder.pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+        if (argv.join('\0') === cmd.join('\0')) break;
+        await Bun.sleep(5);
+      } while (performance.now() < deadline);
+      expect(argv).toEqual(cmd);
+    }
+    for (const lock of [`${holder.pid}\n${JSON.stringify(cmd)}\n`, `${holder.pid}\n`]) {
       writeFileSync(p.lock, lock);
       expect(await supervise({ root: dir, ...QUIET })).toBe('halted');
       expect(started(readEvents(p.journal))).toBe(0);
