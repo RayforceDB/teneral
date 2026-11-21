@@ -1,9 +1,10 @@
 import { CHATGPT_USAGE_URL, PROVIDERS, type ProviderEntry } from '../../brain/providers';
-import { NEEDS_CALLBACK, NEXT_STEP, PLAN_NOTICE, setup, type Dialogue, type ModelChoice, type SetupOptions, type TestResult, type TestStep } from '../setup';
+import type { GithubAccount } from '../github';
+import { GITHUB_HOW, GITHUB_OWN, GITHUB_WHY, NEEDS_CALLBACK, NEXT_STEP, PLAN_NOTICE, accountFacts, githubLine, setup, type Dialogue, type GithubOutcome, type ModelChoice, type SetupOptions, type TestResult, type TestStep } from '../setup';
 import { EMPTY, edit, layout, type Edit } from './editor';
 import { KeyParser, type Key } from './keys';
 import { Lifeline, Screen, flowHeight, terminal, type Row, type Term } from './screen';
-import { clean, clip, wrap, type Line } from './text';
+import { clean, clip, width as cells, wrap, type Line } from './text';
 import { SPIN_MS, glyphs, type Glyphs, type Style } from './theme';
 import { duration, elapsed } from './view';
 
@@ -14,6 +15,12 @@ import { duration, elapsed } from './view';
 const DIM: Style = { fg: 'dim' };
 const WARN: Style = { fg: 'warn' };
 const BOLD: Style = { bold: true };
+const GOOD: Style = { fg: 'good' };
+const ACCENT: Style = { fg: 'accent', bold: true };
+
+/** The stages of the setup, as the top of every page names them. */
+type Stage = 'model' | 'github' | 'ready';
+const STAGE_NAME: Record<Stage, string> = { model: 'Model', github: 'GitHub', ready: 'Ready' };
 /** Text is not set wider than this, however wide the terminal. */
 const MEASURE = 78;
 
@@ -58,6 +65,8 @@ const isKey = (key: Key, name: string): boolean => key.kind === 'key' && key.nam
 export interface SetupScreenOptions {
   /** `one` starts the agent right after this setup: the last page says so instead of naming the command. */
   thenStart?: boolean;
+  /** The stages this run goes through, for the trail at the top. Default: the model, then ready. */
+  stages?: readonly Stage[];
   now?: () => number;
   /**
    * Ctrl-C while nothing is asked, in the middle of a request, or the terminal gone for good:
@@ -89,6 +98,8 @@ export class SetupScreens implements Dialogue {
   /** Lines for the ordinary screen, printed once this one is left. */
   private after: string[] = [];
 
+  private readonly stages: readonly Stage[];
+  private stage: Stage;
   private welcomed = false;
   /** Why the last answer could not be used. Shown with the question when it comes again. */
   private trouble = '';
@@ -100,6 +111,8 @@ export class SetupScreens implements Dialogue {
 
   constructor(private readonly term: Term, private readonly o: SetupScreenOptions = {}) {
     this.screen = new Screen(term);
+    this.stages = o.stages ?? ['model', 'ready'];
+    this.stage = this.stages[0]!;
     this.now = o.now ?? Date.now;
     this.g = glyphs(term.caps.utf8);
     // A setup nobody can answer any more must not sit there holding the sign-in's port.
@@ -202,8 +215,11 @@ export class SetupScreens implements Dialogue {
     if (!this.open) return;
     const { cols, rows } = this.term.size();
     const page = this.render();
-    const head: Line = [{ text: ' teneral', style: { fg: 'accent', bold: true } }, { text: `  setup`, style: DIM }];
-    const room = Math.max(1, rows - 3);
+    const head = this.head(cols);
+    const rule: Line = [{ text: ` ${this.g.rule.repeat(Math.max(1, Math.floor((cols - 2) / cells(this.g.rule))))}`, style: DIM }];
+    // The name, a rule and a blank row above the page; a rule and the keys under it. A small window keeps its rows for the page.
+    const framed = rows >= 24;
+    const room = Math.max(1, rows - (framed ? 5 : 3));
     const height = (row: Row): number => (Array.isArray(row) ? 1 : flowHeight(row, cols));
     const tall = (list: { row: Row }[]): number => list.reduce((sum, { row }) => sum + height(row), 0);
     // A page taller than the screen first gives up its blank rows, then shows the part around its focus.
@@ -224,7 +240,7 @@ export class SetupScreens implements Dialogue {
     let cursor: { row: number; col: number } | null = null;
     for (const { row, at } of kept) {
       if (used + height(row) > room) break;
-      if (page.cursor && page.cursor.row === at) cursor = { row: used + 2, col: page.cursor.col };
+      if (page.cursor && page.cursor.row === at) cursor = { row: used + (framed ? 3 : 2), col: page.cursor.col };
       body.push(row);
       used += height(row);
     }
@@ -232,7 +248,23 @@ export class SetupScreens implements Dialogue {
     let parts = page.hint;
     while (parts.length > 1 && parts.join(` ${this.g.sep} `).length + 2 > cols) parts = parts.slice(0, -1);
     const hint = clip([{ text: ` ${parts.join(` ${this.g.sep} `)}`, style: DIM }], cols, { text: this.g.ellipsis, style: DIM });
-    this.screen.paint({ rows: [head, [], ...body, ...pad, hint], cursor });
+    this.screen.paint({ rows: framed ? [head, rule, [], ...body, ...pad, rule, hint] : [head, [], ...body, ...pad, hint], cursor });
+  }
+
+  /** The first row: whose setup this is and, where there is room, the stages with the one in hand marked. */
+  private head(cols: number): Line {
+    const name: Line = [{ text: ' teneral', style: ACCENT }, { text: '  setup', style: DIM }];
+    const at = this.stages.indexOf(this.stage);
+    const trail: Line = [];
+    this.stages.forEach((stage, i) => {
+      if (i > 0) trail.push({ text: ` ${this.g.rule.repeat(Math.max(1, Math.floor(2 / cells(this.g.rule))))} `, style: DIM });
+      if (i < at) trail.push({ text: `${this.g.ok} `, style: GOOD }, { text: STAGE_NAME[stage], style: DIM });
+      else if (i === at) trail.push({ text: `${this.g.reply} `, style: ACCENT }, { text: STAGE_NAME[stage], style: BOLD });
+      else trail.push({ text: `${this.g.reasoning} ${STAGE_NAME[stage]}`, style: DIM });
+    });
+    const wide = (line: Line): number => line.reduce((sum, span) => sum + cells(span.text), 0);
+    const gap = cols - wide(name) - wide(trail) - 1;
+    return gap >= 3 && at !== -1 ? [...name, { text: ' '.repeat(gap) }, ...trail] : name;
   }
 
   private width(): number {
@@ -251,8 +283,34 @@ export class SetupScreens implements Dialogue {
   /** The top of every page: its title, and under it what is settled so far. */
   private top(title: string): Row[] {
     const rows: Row[] = [[{ text: `  ${title}`, style: BOLD }], []];
-    for (const fact of this.facts) rows.push(...this.para(fact, DIM), []);
+    // The first is what was done; what follows it is said about it.
+    this.facts.forEach((fact, i) => rows.push(...(i === 0 ? this.marked(fact) : this.para(fact, DIM, 4)), []));
     return rows;
+  }
+
+  /** A paragraph with a check mark before it: something that is settled. */
+  private marked(text: string, mark = this.g.ok, tone: Style = GOOD): Line[] {
+    const lines = this.para(text, DIM, 4);
+    if (lines.length > 0) lines[0] = [{ text: `  ${mark} `, style: tone }, ...lines[0]!.slice(1)];
+    return lines;
+  }
+
+  /** The rows under the option pointed at, set off by a bar down their left. */
+  private aside(text: readonly string[], indent: number): Line[] {
+    const lead: Line = [{ text: `${' '.repeat(indent)}${this.g.bar} `, style: DIM }];
+    return text.flatMap((line) => wrap([{ text: clean(line), style: DIM }], this.width(), lead));
+  }
+
+  /** A few characters to be read and typed elsewhere, in a frame of their own. */
+  private boxed(text: string): Line[] {
+    const [tl, tr, bl, br] = this.g.corners;
+    const inner = `   ${text}   `;
+    const side = this.g.rule.repeat(Math.ceil(cells(inner) / cells(this.g.rule)));
+    return [
+      [{ text: `  ${tl}${side}${tr}`, style: DIM }],
+      [{ text: `  ${this.g.bar}`, style: DIM }, { text: inner, style: ACCENT }, { text: this.g.bar, style: DIM }],
+      [{ text: `  ${bl}${side}${br}`, style: DIM }],
+    ];
   }
 
   private problemRows(): Row[] {
@@ -266,7 +324,7 @@ export class SetupScreens implements Dialogue {
     this.show(() => ({ rows: [...this.top('One moment'), [...this.spinner(), { text: what }, { text: ` ${this.g.sep} ${elapsed(this.now() - since)}`, style: DIM }]], hint: ['Ctrl-C stops'] }));
   }
 
-  private choose(title: string, intro: string[], options: Option[], initial = 0): Promise<number | null> {
+  private choose(title: string, intro: string[], options: Option[], initial = 0, then?: string): Promise<number | null> {
     let at = initial;
     const render = (): Page => {
       const rows: Row[] = [...this.top(title)];
@@ -279,7 +337,7 @@ export class SetupScreens implements Dialogue {
           { text: `${i + 1}  `, style: DIM },
           { text: option.label, style: here ? BOLD : undefined },
         ]);
-        if (here && option.detail) rows.push(...option.detail.flatMap((line) => this.para(line, DIM, 7)), []);
+        if (here && option.detail) rows.push(...this.aside(option.detail, 7), []);
         if (here) focus = rows.length - 1;
       });
       const letters = options.filter((option) => option.key).map((option) => option.key).join(', ');
@@ -296,7 +354,7 @@ export class SetupScreens implements Dialogue {
         if (byKey !== -1) return byKey;
       }
       return undefined;
-    });
+    }, then);
   }
 
   /** One line of text from the owner. `hidden`: a mark per character is shown, never the characters. */
@@ -519,7 +577,9 @@ export class SetupScreens implements Dialogue {
     const rows: Row[] = [...this.para(`${t.provider}, with ${t.model}: one question, then one that must come back as a tool call.`), []];
     for (const step of ['a reply', 'a tool call'] as const) {
       const s = t.steps[step];
-      const lead: Line = s.state === 'asking' ? this.spinner() : [{ text: `  ${this.g.tool} `, style: DIM }];
+      const lead: Line = s.state === 'asking' ? this.spinner()
+        : s.state === 'ok' ? [{ text: `  ${this.g.ok} `, style: GOOD }]
+          : s.state === 'failed' ? [{ text: `  ${this.g.failed} `, style: WARN }] : [{ text: `  ${this.g.reasoning} `, style: DIM }];
       const tone: Style = s.state === 'ok' ? { fg: 'good' } : s.state === 'failed' ? WARN : DIM;
       const time = s.state === 'asking' ? duration(this.now() - s.since) : s.state === 'waiting' ? '' : duration(s.ms);
       rows.push([...lead, { text: step.padEnd(14) }, { text: s.state.padEnd(9), style: tone }, { text: time, style: DIM }]);
@@ -555,7 +615,88 @@ export class SetupScreens implements Dialogue {
     return chosen === null ? null : (['retry', 'choose', 'quit'] as const)[chosen]!;
   }
 
-  async wrote(names: string[], entry: ProviderEntry): Promise<void> {
+  // --- the agent's account on GitHub ---
+
+  async github(current: GithubAccount | 'refused' | null): Promise<'signin' | 'leave' | null> {
+    this.stage = 'github';
+    // What the model's part settled has been said; this page is about something else.
+    this.facts = [];
+    const later = './one setup github does this step alone, at any time, with no restart. Until then the agent cannot publish its work on GitHub.';
+    const title = 'The agent\'s GitHub account';
+    if (current === null) {
+      const chosen = await this.choose(title, [GITHUB_WHY], [
+        { label: 'Sign it in now', key: 'y', detail: [GITHUB_HOW] },
+        { label: 'Later', key: 'n', detail: [later] },
+      ], 0, 'asking GitHub for a code');
+      return chosen === null ? null : chosen === 0 ? 'signin' : 'leave';
+    }
+    const intro = current === 'refused' ? 'A token is stored for the agent, but GitHub no longer accepts it.' : `The agent is signed in as ${accountFacts(current)}.`;
+    const chosen = await this.choose(title, [intro], [
+      { label: current === 'refused' ? 'Leave it for now' : 'Keep it', key: 'n' },
+      { label: current === 'refused' ? 'Sign in again' : 'Sign in to another account', key: 'y', detail: [GITHUB_HOW] },
+    ], current === 'refused' ? 1 : 0, 'asking GitHub for a code');
+    return chosen === null ? null : chosen === 1 ? 'signin' : 'leave';
+  }
+
+  githubCode(code: string, url: string, giveUp: () => void): void {
+    const since = this.now();
+    this.background = (key) => {
+      if (isCtrl(key, 'c') || isKey(key, 'escape')) giveUp();
+    };
+    this.show(() => {
+      const step = (n: number, text: string): Line[] => {
+        const lines = this.para(text, undefined, 5);
+        if (lines.length > 0) lines[0] = [{ text: `  ${n}  `, style: ACCENT }, ...lines[0]!.slice(1)];
+        return lines;
+      };
+      const rows: Row[] = [
+        ...this.top('The agent\'s GitHub account'),
+        ...step(1, 'In a browser where you are logged in as the agent\'s account, not your own, open:'), [],
+        [{ text: '     ' }, { text: url, style: { fg: 'accent' } }], [],
+        ...step(2, 'Type this code there, and approve:'), [],
+        ...this.boxed(code.split('').join(' ')),
+        [],
+      ];
+      rows.push([...this.spinner(), { text: 'waiting for GitHub to say the code was typed' }, { text: ` ${this.g.sep} ${elapsed(this.now() - since)}`, style: DIM }], []);
+      rows.push(...this.para('The code is good for a quarter of an hour and for one sign-in. It is asked for by GitHub\'s own command line program, gh, so that is the app GitHub names on the page.', DIM));
+      // The code is what must stay in view on a small screen.
+      return { rows, focus: rows.length - 5, hint: ['Esc gives up'] };
+    });
+  }
+
+  async githubIs(account: GithubAccount): Promise<boolean | null> {
+    const chosen = await this.choose('Whose account this is', [`The code was typed by ${accountFacts(account)}.`, GITHUB_OWN], [
+      { label: `Yes, ${clean(account.login)} is the agent's own account`, key: 'y', detail: ['Its token is stored in .teneral/auth/github-token, readable only by you and by the agent\'s own shell.'] },
+      { label: 'No, that is not the agent\'s', key: 'n', detail: ['Nothing is stored. You can sign in again, as the agent\'s account.'] },
+    ]);
+    return chosen === null ? null : chosen === 0;
+  }
+
+  async githubFailed(why: string): Promise<'retry' | 'leave' | null> {
+    const chosen = await this.choose('The sign-in at GitHub did not work', [why], [{ label: 'Try it again', key: 'r' }, { label: 'Leave it for later', key: 'l' }], 0, 'asking GitHub for a code');
+    return chosen === null ? null : chosen === 0 ? 'retry' : 'leave';
+  }
+
+  /** How the agent stands with GitHub, as one marked paragraph of the last page. */
+  private githubRows(github: GithubOutcome): Line[] {
+    if (github.account === null) return this.marked(githubLine(github), this.g.reasoning, DIM);
+    if (github.account === 'refused') return this.marked(githubLine(github), this.g.warn, WARN);
+    return this.marked(githubLine(github));
+  }
+
+  async finished(github: GithubOutcome): Promise<void> {
+    this.stage = 'ready';
+    this.facts = [];
+    await this.ask(() => {
+      const rows: Row[] = [...this.top('Ready'), ...this.githubRows(github)];
+      return { rows, focus: rows.length - 1, hint: ['Enter goes on'] };
+    }, () => true);
+    this.after.push(githubLine(github));
+    this.close();
+  }
+
+  async wrote(names: string[], entry: ProviderEntry, github?: GithubOutcome): Promise<void> {
+    this.stage = 'ready';
     const where = (file: string, what: string): Line[] => [[{ text: `    ${file}`, style: BOLD }], ...this.para(what, DIM, 6)];
     const next = this.o.thenStart
       ? ['The agent starts now. ./one talk attaches to it.']
@@ -564,10 +705,12 @@ export class SetupScreens implements Dialogue {
     this.facts = [];
     // Laid out anew for every frame: the window may change size while the page is up.
     const page = (): Row[] => [
-      ...this.top('Ready'), ...this.testRows().slice(-2), [],
+      ...this.top('Ready'), ...this.testRows().slice(-2),
+      ...(github ? this.githubRows(github) : []), [],
       [{ text: '  Written', style: DIM }],
       ...where('.env', `readable only by you: ${names.join(', ')}`),
       ...(entry.auth === 'chatgpt-signin' ? where(`.teneral/auth/${entry.id}.json`, 'the sign-in, readable only by you and by the agent\'s own shell') : []),
+      ...(github?.changed ? where('.teneral/auth/github-token', 'the agent\'s account on GitHub, readable only by you and by the agent\'s own shell') : []),
       ...(entry.auth === 'chatgpt-signin' ? [[], ...this.para(`Using ChatGPT plan. Manage usage: ${CHATGPT_USAGE_URL}`, DIM)] : []),
       [], [{ text: '  Next', style: DIM }],
       ...next.flatMap((line) => this.para(line, undefined, 4)),
@@ -576,7 +719,7 @@ export class SetupScreens implements Dialogue {
       const rows = page();
       return { rows, focus: rows.length - 1, hint: ['Enter goes on'] };
     }, () => true);
-    this.after.push(`Wrote .env, readable only by you: ${names.join(', ')}.`, ...(this.o.thenStart ? [] : [NEXT_STEP]));
+    this.after.push(`Wrote .env, readable only by you: ${names.join(', ')}.`, ...(github ? [githubLine(github)] : []), ...(this.o.thenStart ? [] : [NEXT_STEP]));
     this.close();
   }
 
@@ -588,7 +731,9 @@ export class SetupScreens implements Dialogue {
 
 /** The setup at the process's own terminal. Returns the exit status. */
 export async function runSetupScreens(options: Omit<SetupOptions, 'io' | 'ui'>, o: SetupScreenOptions = {}): Promise<number> {
+  const stages: Stage[] = options.only === 'github' ? ['github', 'ready'] : options.github ? ['model', 'github', 'ready'] : ['model', 'ready'];
   const ui = new SetupScreens(terminal(), {
+    stages,
     ...o,
     abort: () => {
       ui.stopped();

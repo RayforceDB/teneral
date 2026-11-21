@@ -1,4 +1,4 @@
- teneral  setup
+ teneral  setup                          ● Model ── ○ Ready
 
   Continue with ChatGPT
 

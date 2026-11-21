@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { GithubStep } from '../../../keeper/github';
 import { NEEDS_CALLBACK, setup } from '../../../keeper/setup';
 import { SetupScreens } from '../../../keeper/tui/setup';
 import { startFakeOpenAi, type FakeOpenAi } from '../../brain/fakeopenai';
@@ -35,12 +36,13 @@ interface Run {
   press: (bytes: string) => void;
 }
 
-function run(o: { term?: FakeTerm; cols?: number; rows?: number; callback?: boolean; resume?: boolean; thenStart?: boolean; fetch?: typeof fetch; lifelineMs?: number; abort?: () => void } = {}): Run {
+function run(o: { term?: FakeTerm; cols?: number; rows?: number; callback?: boolean; resume?: boolean; thenStart?: boolean; fetch?: typeof fetch; lifelineMs?: number; abort?: () => void; github?: GithubStep; only?: 'github' } = {}): Run {
   const term = o.term ?? fakeTerm(o.cols ?? 90, o.rows ?? 30);
-  const ui = new SetupScreens(term, { thenStart: o.thenStart, now: () => 0, lifelineMs: o.lifelineMs, abort: o.abort });
+  const stages = o.only ? ['github', 'ready'] as const : o.github ? ['model', 'github', 'ready'] as const : undefined;
+  const ui = new SetupScreens(term, { thenStart: o.thenStart, now: () => 0, lifelineMs: o.lifelineMs, abort: o.abort, stages });
   ui.start();
   const status = setup({
-    root, ui, signInTimeoutMs: 5000, callback: o.callback, resume: o.resume, fetch: o.fetch,
+    root, ui, signInTimeoutMs: 5000, callback: o.callback, resume: o.resume, fetch: o.fetch, github: o.github, only: o.only,
     env: { TENERAL_OPENAI_API: fake.api, TENERAL_OPENAI_AUTH: fake.url, TENERAL_CALLBACK_PORT: String(freePort()) },
   }).finally(() => ui.close(o.callback === false));
   const see = async (what: string | RegExp): Promise<string> => {
@@ -55,7 +57,7 @@ function run(o: { term?: FakeTerm; cols?: number; rows?: number; callback?: bool
 /** A frame without what differs from run to run: how long a request took, and the stand-in's port. */
 const steady = (frame: string): string => frame.replace(/\b(\d+ms|\d+\.\ds)$/gm, 'N.Ns').replace(/127\.0\.0\.1:\d+/g, '127.0.0.1:PORT');
 /** A frame as running text, however its rows were wrapped. */
-const flat = (frame: string): string => frame.replace(/\s+/g, ' ');
+const flat = (frame: string): string => frame.replace(/│/g, '').replace(/\s+/g, ' ');
 const dotEnv = () => readFileSync(join(root, '.env'), 'utf8');
 const UP = '\x1b[A';
 const DOWN = '\x1b[B';
@@ -64,7 +66,9 @@ test('a key provider from welcome to the last page: choose with the arrows, type
   const r = run();
   const welcome = await r.see('Where does the model come from?');
   expectFrame('setup-welcome-90x30', welcome);
-  expect(welcome.split('\n')[0]).toBe(' teneral  setup');
+  // The first row names the setup and, at its right, the stages with the one in hand marked.
+  expect(welcome.split('\n')[0]).toMatch(/^ teneral  setup +● Model ── ○ Ready$/);
+  expect(welcome.split('\n')[1]).toMatch(/^ ─+$/);
   expect(flat(welcome)).toContain('two test requests are made. Nothing is written until they have worked.');
   expect(welcome).toContain('  ▸ 1  ChatGPT plan (Continue with ChatGPT)');
   // The notes of the one pointed at are shown, with the link to the plan's usage.
@@ -90,9 +94,9 @@ test('a key provider from welcome to the last page: choose with the arrows, type
   expect(models).toContain('  ▸ fake-key-large  (the usual choice)\n    fake-key-small');
   r.press(DOWN + '\r');
 
-  const done = await r.see('Ready');
+  const done = await r.see('\n  Ready');
   expectFrame('setup-ready-90x30', steady(done));
-  expect(steady(done)).toContain('  · a reply       ok       N.Ns\n  · a tool call   ok       N.Ns');
+  expect(steady(done)).toContain('  ✓ a reply       ok       N.Ns\n  ✓ a tool call   ok       N.Ns');
   expect(done).toContain('    .env\n      readable only by you: TENERAL_PROVIDER=openai,');
   expect(flat(done)).toContain('TENERAL_API_KEY, TENERAL_MODEL=fake-key-small');
   expect(done).toContain('    ./one up starts the agent with it.');
@@ -126,7 +130,7 @@ test('a number key chooses a provider at once; another endpoint asks for its add
   r.press('fake-key-smal');
   expect(await r.see('or type a name: fake-key-smal')).toBeTruthy();
   r.press('l\r');
-  await r.see('Ready');
+  await r.see('\n  Ready');
   r.press(' ');
   expect(await r.status).toBe(0);
   expect(dotEnv().split('\n').filter((line) => /^TENERAL_(PROVIDER|BASE_URL|MODEL)=/.test(line))).toEqual([
@@ -161,7 +165,7 @@ test('Continue with ChatGPT: the address is one line the terminal wraps, a hyper
   expect(models).toContain('https://chatgpt.com/settings/usage');
   expect(models).toContain('  ▸ fake-plan-large  Fake Large  (the usual choice)\n    fake-plan-small  Fake Small');
   r.press('\r');
-  const done = await r.see('Ready');
+  const done = await r.see('\n  Ready');
   expectFrame('setup-ready-signed-in-80x34', steady(done));
   expect(done).toContain('    .teneral/auth/chatgpt.json\n      the sign-in, readable only by you and by the agent\'s own shell');
   r.press('\r');
@@ -188,7 +192,7 @@ test('the sign-in hands over to a second run without a second question: the firs
   await fetch(await fake.consent(second.term.vt.links.at(-1)!));
   await second.see('Models this endpoint lists for you:');
   second.press('\r');
-  await second.see('Ready');
+  await second.see('\n  Ready');
   second.press('\r');
   expect(await second.status).toBe(0);
   expect(second.term.vt.alt).toBe(false);
@@ -232,7 +236,7 @@ test('a wrong key: the test fails with the provider\'s status and words, nothing
   r.press('\r');
   const failed = await r.see('The test did not pass');
   expectFrame('setup-test-failed-90x30', steady(failed));
-  expect(steady(failed)).toContain('  · a reply       failed   N.Ns\n  · a tool call   waiting');
+  expect(steady(failed)).toContain('  ✗ a reply       failed   N.Ns\n  ○ a tool call   waiting');
   // The provider's own words, without the JSON they came in.
   expect(failed).toContain('  failed: status 401: Incorrect API key or token provided. (invalid_api_key)');
   expect(failed).not.toContain('{');
@@ -252,7 +256,7 @@ test('a wrong key: the test fails with the provider\'s status and words, nothing
   r.press('sk-fake-key\r');
   await r.see('Models this endpoint lists for you:');
   r.press('\r');
-  await r.see('Ready');
+  await r.see('\n  Ready');
   r.press('\r');
   expect(await r.status).toBe(0);
   expect(dotEnv()).toContain('TENERAL_API_KEY=sk-fake-key');
@@ -282,7 +286,7 @@ test('an existing .env is asked about first: kept, it stays byte for byte; repla
   replace.press('sk-fake-key\r');
   await replace.see('Models this endpoint lists for you:');
   replace.press('\r');
-  await replace.see('Ready');
+  await replace.see('\n  Ready');
   replace.press('\r');
   expect(await replace.status).toBe(0);
   expect(dotEnv()).toContain('TENERAL_PROVIDER=openai');
@@ -318,7 +322,7 @@ test('when the agent is started right after, the last page says so instead of na
   r.press('sk-fake-key\r');
   await r.see('Models this endpoint lists for you:');
   r.press('\r');
-  const done = await r.see('Ready');
+  const done = await r.see('\n  Ready');
   expect(done).toContain('    The agent starts now. ./one talk attaches to it.');
   expect(done).not.toContain('./one up starts');
   r.press('\r');
@@ -368,7 +372,7 @@ test('nothing the setup draws is anything but its own: no sequence a provider\'s
   r.press('\r');
   const failed = await r.see('The test did not pass');
   expect(failed).toContain('  failed: status 500: boom evil (server_error)');
-  expect(failed.split('\n')[0]).toBe(' teneral  setup');
+  expect(failed.split('\n')[0]).toMatch(/^ teneral  setup +● Model ── ○ Ready$/);
   const own = /^\x1b\[(\d+;\d+H|[\d;]*m|K|2K|2J|5n|\?(1049|25|2004|2026)[hl])$/;
   expect(sequences(r.term.written).filter((sequence) => !own.test(sequence))).toEqual([]);
   expect(r.term.written.join('')).not.toContain('owned');
@@ -431,7 +435,7 @@ test('an address too long for the window is not shown in part: the screen says w
   expect(models).toContain('Signed in as owner@example.com.');
   expect(models).not.toContain('You\'re using your ChatGPT plan');
   r.press('\r');
-  const done = await r.see('Ready');
+  const done = await r.see('\n  Ready');
   expect(done).toContain('Using ChatGPT plan. Manage usage: https://chatgpt.com/settings/usage');
   // Back on the small screen the last page does not fit: its title stays, and under it the end, which says what comes next.
   r.term.resize(60, 16);
@@ -441,4 +445,100 @@ test('an address too long for the window is not shown in part: the screen says w
   expect(tight.slice(-4)).toEqual(['    ./one up starts the agent with it.', '    One that is already running takes it up within a few', '    seconds: its body is started again.', ' Enter goes on']);
   r.press('\r');
   expect(await r.status).toBe(0);
+});
+
+// --- the agent's account on GitHub ---
+
+/** A sign-in whose code is typed when the test says so. */
+function codeTyped(accounts: Record<string, { login: string; created: string; repos: number }>): { step: GithubStep; typed: (token: string) => void; refused: (why: string) => void; cancelled: () => number } {
+  let settle: { ok: (token: string) => void; no: (err: Error) => void } | null = null;
+  let cancelled = 0;
+  return {
+    typed: (token) => settle!.ok(token),
+    refused: (why) => settle!.no(new Error(why)),
+    cancelled: () => cancelled,
+    step: {
+      who: async (token) => {
+        const account = accounts[token];
+        if (!account) throw new Error('GitHub did not accept the token: it has expired or was revoked');
+        return account;
+      },
+      signIn: async () => {
+        const done = new Promise<string>((ok, no) => { settle = { ok, no }; });
+        done.catch(() => {});
+        return { code: 'AB12-CD34', url: 'https://github.com/login/device', done, cancel: () => { cancelled += 1; settle!.no(new Error('given up')); } };
+      },
+    },
+  };
+}
+
+test('after the model the agent is signed in to GitHub: the code is shown in a frame of its own, the account is named before it is stored, and the last page says who the agent is', async () => {
+  const gh = codeTyped({ gho_owner: { login: 'the-owner', created: '2012-03-01', repos: 41 }, gho_morrow: { login: 'MorrowTeneral', created: '2026-11-17', repos: 0 } });
+  const r = run({ github: gh.step });
+  const welcome = await r.see('Where does the model come from?');
+  expect(welcome.split('\n')[0]).toMatch(/^ teneral  setup +● Model ── ○ GitHub ── ○ Ready$/);
+  r.press('2');
+  await r.see('API key for');
+  r.press('sk-fake-key\r');
+  await r.see('Models this endpoint lists for you:');
+  r.press('\r');
+
+  const asked = await r.see('Sign it in now');
+  expectFrame('setup-github-90x30', steady(asked));
+  expect(asked.split('\n')[0]).toMatch(/✓ Model ── ● GitHub ── ○ Ready$/);
+  expect(flat(asked)).toContain('In a browser where you are logged in as the agent\'s account (not your own), open the address and type it.');
+  // The configuration is in place already, whatever is answered here.
+  expect(dotEnv()).toContain('TENERAL_MODEL=fake-key-large');
+  r.press('\r');
+
+  const code = await r.see('waiting for GitHub to say the code was typed');
+  expectFrame('setup-github-code-90x30', code);
+  expect(code).toContain('  ╭───────────────────────╮\n  │   A B 1 2 - C D 3 4   │\n  ╰───────────────────────╯');
+  expect(code).toContain('     https://github.com/login/device');
+  expect(code.split('\n').at(-1)).toBe(' Esc gives up');
+  // Typed while logged in as the owner: said plainly, and not stored.
+  gh.typed('gho_owner');
+  const whose = await r.see('Whose account this is');
+  expectFrame('setup-github-whose-90x30', whose);
+  expect(flat(whose)).toContain('The code was typed by the-owner, made 2012-03-01, 41 public repositories.');
+  expect(whose).toContain('  ▸ 1  Yes, the-owner is the agent\'s own account');
+  r.press('n');
+  await r.see('Sign it in now');
+  expect(existsSync(join(root, '.teneral', 'auth', 'github-token'))).toBe(false);
+
+  r.press('y');
+  await r.see('waiting for GitHub to say the code was typed');
+  gh.typed('gho_morrow');
+  await r.see('Yes, MorrowTeneral is the agent\'s own account');
+  r.press('\r');
+  const done = await r.see('\n  Ready');
+  expectFrame('setup-github-ready-90x30', steady(done));
+  expect(done.split('\n')[0]).toMatch(/✓ Model ── ✓ GitHub ── ● Ready$/);
+  expect(flat(done)).toContain('✓ GitHub: the agent is MorrowTeneral; its git and gh act as that account from now on, with no restart.');
+  expect(done).toContain('    .teneral/auth/github-token');
+  expect(readFileSync(join(root, '.teneral', 'auth', 'github-token'), 'utf8')).toBe('gho_morrow');
+  expect(r.term.vt.text()).not.toContain('gho_');
+  r.press('\r');
+  expect(await r.status).toBe(0);
+  expect(r.term.vt.text()).toContain('GitHub: the agent is MorrowTeneral');
+});
+
+test('./one setup github alone: Esc gives up a code, a failure can be left for later, and the last page says the agent has no account', async () => {
+  const gh = codeTyped({});
+  const r = run({ github: gh.step, only: 'github' });
+  const asked = await r.see('Sign it in now');
+  expect(asked.split('\n')[0]).toMatch(/^ teneral  setup +● GitHub ── ○ Ready$/);
+  expect(asked).not.toContain('Welcome');
+  r.press('\r');
+  await r.see('waiting for GitHub to say the code was typed');
+  r.press('\x1b');
+  const failed = await r.see('The sign-in at GitHub did not work');
+  expect(gh.cancelled()).toBe(1);
+  expect(failed).toContain('  given up');
+  r.press('l');
+  const done = await r.see('\n  Ready');
+  expect(flat(done)).toContain('○ GitHub: the agent has no account yet. ./one setup github signs it in.');
+  r.press('\r');
+  expect(await r.status).toBe(0);
+  expect(existsSync(join(root, '.env'))).toBe(false);
 });

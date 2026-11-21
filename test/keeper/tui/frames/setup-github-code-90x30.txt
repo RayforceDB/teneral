@@ -1,0 +1,30 @@
+ teneral  setup                                            ✓ Model ── ● GitHub ── ○ Ready
+ ────────────────────────────────────────────────────────────────────────────────────────
+
+  The agent's GitHub account
+
+  1  In a browser where you are logged in as the agent's account, not your
+     own, open:
+
+     https://github.com/login/device
+
+  2  Type this code there, and approve:
+
+  ╭───────────────────────╮
+  │   A B 1 2 - C D 3 4   │
+  ╰───────────────────────╯
+
+  ⠋ waiting for GitHub to say the code was typed · 0:00
+
+  The code is good for a quarter of an hour and for one sign-in. It is asked
+  for by GitHub's own command line program, gh, so that is the app GitHub
+  names on the page.
+
+
+
+
+
+
+
+ ────────────────────────────────────────────────────────────────────────────────────────
+ Esc gives up

@@ -8,6 +8,8 @@ import { install, ownerCommand, publishing, speciesUpdate } from '../../species/
 import { readApproval } from '../../immune/approval';
 import { interrupt, leaveWord, tell } from '../owner';
 import { pairingCommand } from '../pairing';
+import { realGithub, type GithubStep } from '../github';
+import { Logins } from '../login';
 import { memoryCommand } from '../memory';
 import { modelCommand } from '../model';
 import { configured } from '../../stem/configuration';
@@ -215,6 +217,8 @@ export interface TalkScreenOptions {
   alive?: () => Alive;
   /** How often the terminal is asked whether it is still there. Default 15 s. */
   lifelineMs?: number;
+  /** GitHub and gh, for `/login`. Default: the real ones. */
+  github?: GithubStep;
 }
 
 /** Something asked of the helper on the owner's machine, and what to do with the answer. */
@@ -237,6 +241,7 @@ export class TalkScreen {
   private readonly g: Glyphs;
   private readonly root: string;
   private follower!: Follower;
+  private logins: Logins | null = null;
   private shown = new Set<string>();
   private standing: Standing = UNBORN;
   private edit: Edit = EMPTY;
@@ -386,7 +391,7 @@ export class TalkScreen {
     this.open();
     const timer = setInterval(() => this.tick(), TICK_MS);
     this.lifeline.start();
-    this.stops.push(() => clearInterval(timer), () => this.lifeline.stop());
+    this.stops.push(() => clearInterval(timer), () => this.lifeline.stop(), () => this.logins?.close());
     return new Promise<number>((resolve) => {
       if (this.closed) resolve(0);
       else this.finish = resolve;
@@ -1046,6 +1051,16 @@ export class TalkScreen {
         try { lines = pairingCommand(this.o.paths.root, arg, () => this.now()); } catch (err) { lines = [`It could not be done: ${err instanceof Error ? err.message : String(err)}`]; }
         const shown = clean(lines.join('\n')).split('\n');
         return shown.length === 1 ? this.say(shown[0]!) : this.page('your accounts', shown);
+      }
+      case '/login': {
+        // The agent's own accounts (keeper/login.ts). What it answers later is shown the same way, when it comes.
+        const show = (lines: string[]): void => {
+          const shown = clean(lines.join('\n')).split('\n');
+          if (shown.length === 1) this.say(shown[0]!); else this.page('the agent\'s accounts', shown);
+        };
+        this.logins ??= new Logins(this.o.paths.root, this.o.github ?? realGithub(), show);
+        void this.logins.command(arg).then(show, (err: unknown) => this.say(`It could not be done: ${err instanceof Error ? err.message : String(err)}`));
+        return;
       }
       case '/heart':
         // The body turns this owner line into one bounded pulse; it is not a second running turn.

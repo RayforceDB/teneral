@@ -267,3 +267,95 @@ test('a sign-in provider chosen before the way back is open ends with a status o
 test('a key provider needs no way back and is set up in one run', async () => {
   expect(await run(owner(['2', 'sk-fake-key', '']), { callback: false })).toBe(0);
 });
+
+// --- the agent's account on GitHub ---
+
+/** GitHub and gh as the setup's step sees them: each sign-in gives the next of `tokens`, and `accounts` says whose a token is. */
+function github(tokens: (string | Error)[], accounts: Record<string, { login: string; created: string; repos: number }>) {
+  const state = { started: 0, cancelled: 0 };
+  return {
+    state,
+    step: {
+      who: async (token: string) => {
+        const account = accounts[token];
+        if (!account) throw new Error('GitHub did not accept the token: it has expired or was revoked');
+        return account;
+      },
+      signIn: async () => {
+        const next = tokens.shift();
+        state.started += 1;
+        if (next === undefined) throw new Error('gh could not be started: none here');
+        return { code: 'AB12-CD34', url: 'https://github.com/login/device', done: next instanceof Error ? Promise.reject(next) : Promise.resolve(next), cancel: () => { state.cancelled += 1; } };
+      },
+    },
+  };
+}
+const MORROW = { login: 'MorrowTeneral', created: '2026-11-17', repos: 0 };
+const OWNER = { login: 'the-owner', created: '2012-03-01', repos: 41 };
+const tokenFile = () => join(root, '.teneral', 'auth', 'github-token');
+
+test('after the model, the agent is signed in to its own GitHub account by a code, and the token is stored for the owner only', async () => {
+  const gh = github(['gho_morrow'], { gho_morrow: MORROW });
+  const io = owner(['2', 'sk-fake-key', '', '', 'y']);
+  expect(await run(io, { github: gh.step })).toBe(0);
+  expect(io.left()).toBe(0);
+  const said = io.out.join('\n');
+  expect(said).toContain('Sign it in now? (n: later, with ./one setup github) [Y/n] ');
+  expect(said).toContain('Open https://github.com/login/device in a browser where you are logged in as the agent\'s account, and type this code:\n\n  AB12-CD34\n');
+  expect(said).toContain('That was MorrowTeneral, made 2026-11-17, 0 public repositories.');
+  expect(said).toContain('GitHub: the agent is MorrowTeneral; its git and gh act as that account from now on, with no restart.');
+  expect(said).not.toContain('gho_morrow');
+  expect(readFileSync(tokenFile(), 'utf8')).toBe('gho_morrow');
+  expect(mode(tokenFile())).toBe(0o600);
+  // The configuration was written before the question about GitHub, and stands whatever its answer.
+  expect(said.indexOf('a tool call: ok')).toBeLessThan(said.indexOf('Sign it in now?'));
+});
+
+test('an account the owner says is not the agent\'s is not stored, and the step can be left for later', async () => {
+  const gh = github(['gho_owner'], { gho_owner: OWNER });
+  // Signed in as the owner by mistake: no; then asked again, and left.
+  const io = owner(['2', 'sk-fake-key', '', 'y', '', 'n']);
+  expect(await run(io, { github: gh.step })).toBe(0);
+  expect(io.left()).toBe(0);
+  const said = io.out.join('\n');
+  expect(said).toContain('That was the-owner, made 2012-03-01, 41 public repositories.');
+  expect(said).toContain('If it is your own account, say no');
+  expect(existsSync(tokenFile())).toBe(false);
+  expect(said).toContain('GitHub: the agent has no account yet. ./one setup github signs it in.');
+  expect(dotEnv()).toContain('TENERAL_MODEL=fake-key-large');
+});
+
+test('./one setup github is that step alone: it says who is stored, replaces it on a new sign-in, and touches nothing else', async () => {
+  writeFileSync(join(root, '.env'), 'TENERAL_PROVIDER=openai\nTENERAL_MODEL=m\n');
+  const gh = github([new Error('error: the device code has expired'), 'gho_morrow'], { gho_owner: OWNER, gho_morrow: MORROW });
+  const { saveToken } = await import('../../species/github');
+  saveToken(join(root, '.teneral', 'auth'), 'gho_owner');
+  // Sign in again; the first code runs out, retry; then yes, it is the agent's.
+  const io = owner(['y', 'r', 'y', 'y']);
+  expect(await run(io, { github: gh.step, only: 'github' })).toBe(0);
+  expect(io.left()).toBe(0);
+  const said = io.out.join('\n');
+  expect(said).toContain('It is signed in as the-owner, made 2012-03-01, 41 public repositories.');
+  expect(said).toContain('The sign-in at GitHub did not work: error: the device code has expired');
+  expect(said).not.toContain('Replace it?');
+  expect(readFileSync(tokenFile(), 'utf8')).toBe('gho_morrow');
+  expect(dotEnv()).toBe('TENERAL_PROVIDER=openai\nTENERAL_MODEL=m\n');
+  expect(gh.state.started).toBe(2);
+});
+
+test('keeping the configuration still asks about GitHub; an owner who is gone by then has changed nothing', async () => {
+  writeFileSync(join(root, '.env'), 'TENERAL_PROVIDER=openai\nTENERAL_MODEL=m\n');
+  const gh = github([], { gho_morrow: MORROW });
+  const { saveToken } = await import('../../species/github');
+  saveToken(join(root, '.teneral', 'auth'), 'gho_morrow');
+  const kept = owner(['n', '']);
+  expect(await run(kept, { github: gh.step })).toBe(0);
+  expect(kept.out.join('\n')).toContain('It is signed in as MorrowTeneral');
+  expect(kept.out.join('\n')).toContain('GitHub: the agent is MorrowTeneral.');
+  expect(gh.state.started).toBe(0);
+
+  const gone = owner(['n', null]);
+  expect(await run(gone, { github: gh.step })).toBe(0);
+  expect(readFileSync(tokenFile(), 'utf8')).toBe('gho_morrow');
+  expect(dotEnv()).toBe('TENERAL_PROVIDER=openai\nTENERAL_MODEL=m\n');
+});

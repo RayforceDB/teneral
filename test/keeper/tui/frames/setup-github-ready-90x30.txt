@@ -1,0 +1,30 @@
+ teneral  setup                                            ✓ Model ── ✓ GitHub ── ● Ready
+ ────────────────────────────────────────────────────────────────────────────────────────
+
+  Ready
+
+  ✓ a reply       ok       N.Ns
+  ✓ a tool call   ok       N.Ns
+  ✓ GitHub: the agent is MorrowTeneral; its git and gh act as that account
+    from now on, with no restart.
+
+  Written
+    .env
+      readable only by you: TENERAL_PROVIDER=openai,
+      TENERAL_BASE_URL=http://127.0.0.1:PORT/v1, TENERAL_API_KEY,
+      TENERAL_MODEL=fake-key-large
+    .teneral/auth/github-token
+      the agent's account on GitHub, readable only by you and by the agent's
+      own shell
+
+  Next
+    ./one up starts the agent with it.
+    One that is already running takes it up within a few seconds: its body is
+    started again.
+
+
+
+
+
+ ────────────────────────────────────────────────────────────────────────────────────────
+ Enter goes on
