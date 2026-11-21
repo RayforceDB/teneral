@@ -6,7 +6,7 @@ import { runTurn, journalSuffixReads, noOpCall, NO_OP_RESULT } from '../../brain
 import { NO_OP_REPLY, QUIET_REPLY, SAME_REQUEST_REPLY } from '../../brain/quiet';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
-import { needsTurn } from '../../brain/memory';
+import { ARRIVED, needsTurn } from '../../brain/memory';
 import { decideBudget } from '../../body/adaptive-budget';
 
 import { appendEvent, readEvents } from '../../brain/journal';
@@ -228,10 +228,9 @@ test('a stimulus that arrives while the last reply is on its way gets another ro
 
   expect(seen).toHaveLength(2);
   expect(seen[0]!.some((m) => m.content === 'one more thing')).toBe(false);
-  expect(seen[1]!.some((m) => m.role === 'user' && m.content === 'one more thing')).toBe(true);
-  // The late stimulus sits before the first answer in the journal, so the request must not end on that answer.
-  expect(seen[1]!.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
-  expect(seen[1]!.at(-1)!.content).toContain('Something arrived while you were writing your last reply');
+  // The late stimulus sits before the first answer in the journal; it is shown after it, marked as new.
+  expect(seen[1]!.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
+  expect(seen[1]!.at(-1)!.content).toBe(`${ARRIVED}\none more thing`);
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'stimulus', 'assistant', 'note', 'assistant']);
 });
 
@@ -253,7 +252,7 @@ test('a late stimulus before a finished reply remains owed if the process dies b
   // The restart answers the late event rather than treating the older answer as complete.
   let seen: ChatMessage[] = [];
   await runTurn({ ...s.deps, provider: async messages => { seen = messages; return { text: 'late answer', toolCalls: [] }; } });
-  expect(seen.some(m => m.role === 'user' && m.content === 'arrived during the answer')).toBe(true);
+  expect(seen.some(m => m.role === 'user' && m.content === `${ARRIVED}\narrived during the answer`)).toBe(true);
   expect(needsTurn(readEvents(s.journal))).toBe(false);
 });
 

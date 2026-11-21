@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildMessages, needsTurn, type Sight } from '../../brain/memory';
+import { ARRIVED, buildMessages, needsTurn, type Sight } from '../../brain/memory';
 import { imageChars } from '../../body/images';
 import { toChatMessages, toResponsesInput } from '../../brain/provider';
 import type { JournalEvent } from '../../brain/journal';
@@ -183,7 +183,7 @@ function checkImages(messages: ReturnType<typeof buildMessages>, events: Journal
   for (const [i, m] of messages.entries()) {
     if (m.role !== 'user' || m.images === undefined) continue;
     if (m.images.length > 4) fail(`message ${i} has ${m.images.length} images`);
-    if (!m.content?.startsWith(OWNER_WORDS)) fail(`message ${i} has an image and is not the owner's: ${JSON.stringify(m.content)}`);
+    if (!m.content?.replace(`${ARRIVED}\n`, '').startsWith(OWNER_WORDS)) fail(`message ${i} has an image and is not the owner's: ${JSON.stringify(m.content)}`);
   }
   // What was read is only what a marker of the owner's, or the result of a look, names in the exact form.
   const allowed = new Set<string>();

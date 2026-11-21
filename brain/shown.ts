@@ -53,3 +53,43 @@ export function replyIsCurrent(events: JournalEvent[], reply: JournalEvent): boo
   // from a late one. Do not make every historical journal permanently owe a turn.
   return true;
 }
+
+/**
+ * Where what arrived during a turn is shown. A stimulus journaled while the model was writing a
+ * reply lies before that reply in the journal, though the reply was written without it: for each
+ * such stimulus, the position of that reply, after which (and after its tools' results) it is
+ * shown instead. `during` holds those and the ones journaled while a tool ran, which already lie
+ * after the results: everything that reached the agent in the middle of its work.
+ *
+ * It is read from the request boundaries alone, so a message never moves once a request has shown
+ * it. A journal from before the boundaries, or a boundary whose event was taken back, moves nothing.
+ */
+export function arrivals(events: JournalEvent[]): { after: Map<number, number>; during: Set<number> } {
+  const after = new Map<number, number>();
+  const during = new Set<number>();
+  const at = new Map<string, number>();
+  // The last reply so far, whether it left tools to run, and the newest boundary since it.
+  let previous = -1;
+  let working = false;
+  let boundary: number | null = null;
+  let waiting: number[] = [];
+  events.forEach((e, i) => {
+    at.set(e.id, i);
+    const shown = shownAt(e);
+    if (shown !== null) boundary = at.get(shown.through) ?? null;
+    else if (e.type === 'stimulus') {
+      waiting.push(i);
+      if (working) during.add(i);
+    } else if (e.type === 'turn.interrupted') working = false;
+    else if (e.type === 'assistant') {
+      if (boundary !== null) {
+        for (const s of waiting) if (s > boundary && s > previous) { after.set(s, i); during.add(s); }
+      }
+      previous = i;
+      working = Array.isArray(e.toolCalls) && e.toolCalls.length > 0;
+      boundary = null;
+      waiting = [];
+    }
+  });
+  return { after, during };
+}
