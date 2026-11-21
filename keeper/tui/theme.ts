@@ -20,8 +20,8 @@ export const PALETTE = {
   dim: [[138, 134, 128], 245, '2'],
   /** Rules, frames and the least important marks. */
   faint: [[108, 105, 100], 242, '2'],
-  /** Code, inline and in blocks. */
-  code: [[104, 160, 200], 74, '35'],
+  /** Code, inline and in blocks. A mauve, far from the owner's blue: in that blue a list of code read as choices to pick from. */
+  code: [[176, 146, 196], 140, '35'],
   /** The footer's segments: text on a ground of its own, so these three do not depend on the terminal's colours. */
   ink: [[22, 22, 20], 233, '30'],
   paper: [[232, 229, 220], 254, '37'],
