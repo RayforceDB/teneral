@@ -568,10 +568,14 @@ export const EXAM_SLACK = 0.02;
 
 /**
  * The memory's own gate. A mutation that changes how the agent remembers must find, of what its
- * exam asks, no less than the generation running did when it last sat it. The candidate is only
- * asked for its answers (`bun brain/exam.ts --answer`), against a copy of the journal; the
- * counting is done here, by the code of the generation that is running, so that no candidate
- * grades itself. Returns why the candidate fails, or null: when it passes, when it leaves the
+ * exam asks, no less than the generation running does. The candidate is only asked for its answers
+ * (`bun brain/exam.ts --answer`), against a copy of the journal; the counting is done here, by the
+ * code of the generation that is running, so that no candidate grades itself.
+ *
+ * Both sit the same exam: the generation running is asked the same questions of the same copy, in
+ * its own checkout. What it scored when it last sat the exam was on an older journal with other
+ * questions, and a candidate that remembers exactly as well was refused for the difference between
+ * the two days. That older score is the measure only where the running generation cannot be asked. Returns why the candidate fails, or null: when it passes, when it leaves the
  * memory as it is, and when there is nothing yet to hold it against.
  */
 async function memoryExam(
@@ -603,13 +607,34 @@ async function memoryExam(
   const given = Array.isArray(found) ? found : [];
   const answerOf = new Map(questions.map((q, i) => [q.question, Array.isArray(given[i]) ? (given[i] as unknown[]).filter((id): id is string => typeof id === 'string') : []]));
   const score = examine((question) => answerOf.get(question) ?? [], questions);
+  // The generation running, asked the same now, where its checkout is at hand and is that generation.
+  let now: ReturnType<typeof examine> | null = null;
+  const live = join(root, '.teneral', 'live');
+  if (existsSync(join(live, 'brain', 'exam.ts')) && git(live, 'rev-parse', 'HEAD').trim() === from) {
+    const theirs = join(tmp, 'exam-answers-running.json');
+    const again = join(tmp, 'exam-journal-running.jsonl');
+    // A copy of its own: the candidate has had its hands on the other one.
+    copyFileSync(journal, again);
+    const b = await runCheck(['bun', 'brain/exam.ts', '--answer', again, asked, theirs], live, env, o);
+    if (b.interrupted) return { interrupted: true, problem: null };
+    try {
+      const told: unknown = JSON.parse(readFileSync(theirs, 'utf8'));
+      const list = Array.isArray(told) ? told : null;
+      if (list !== null) {
+        const running = new Map(questions.map((q, i) => [q.question, Array.isArray(list[i]) ? (list[i] as unknown[]).filter((id): id is string => typeof id === 'string') : []]));
+        now = examine((question) => running.get(question) ?? [], questions);
+      }
+    } catch { /* it could not be asked: held against what it last scored, below */ }
+  }
+  const measure = now ?? held.recall;
   // Never less than one question's worth: with few questions, one more or less is chance.
-  if (rate(score) + Math.max(EXAM_SLACK, 1 / score.questions) >= rate(held.recall)) return pass;
+  if (rate(score) + Math.max(EXAM_SLACK, 1 / score.questions) >= rate(measure)) return pass;
   const percent = (share: number): string => `${Math.round(share * 100)}%`;
   return {
     interrupted: false,
     problem: `this mutation changes the memory and remembers worse: of ${score.questions} questions the candidate finds the answer to ${score.passed} (${percent(rate(score))}), `
-      + `and the generation running found ${percent(rate(held.recall))} when it last sat the exam (${held.at.slice(0, 16).replace('T', ' ')} UTC). bun brain/exam.ts shows which.`,
+      + (now !== null ? `and the generation running finds the answer to ${now.passed} of the same questions (${percent(rate(now))}), asked now of the same journal. bun brain/exam.ts shows which.`
+        : `and the generation running found ${percent(rate(held.recall))} when it last sat the exam (${held.at.slice(0, 16).replace('T', ' ')} UTC). bun brain/exam.ts shows which.`),
   };
 }
 
