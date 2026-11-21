@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { chat, namedIn, type ChatMessage, type ChatWords } from '../../body/chat';
+import { chat, namedIn, spokeIn, type ChatMessage, type ChatWords } from '../../body/chat';
 import type { Stimulus } from '../../body/sensors';
 
 // The layer is driven here by a service that does not exist: nothing in it may know of a real one.
@@ -64,6 +64,40 @@ test('channel talk wakes it once it has paused, people only, and the agent\'s ow
   r.after(0);
   expect(r.got).toHaveLength(3);
   expect(r.got[2]!.source).toBe('owner:parley');
+});
+
+test('an agent\'s post is context, unless it is the answer to what the agent said to it by name in that place', async () => {
+  const morrow = { sender: { id: 'a_1', name: 'morrow' }, bot: true as const };
+  const r = room();
+  // Nothing was asked: another agent's post is only context, however long it waits.
+  await r.c.take(r.said('the suite passed', morrow));
+  r.after(600_000);
+  expect(r.got).toHaveLength(0);
+  // The agent asked that agent something there, through a tool, on a service that does not show it its own messages.
+  spokeIn('parley', 'lobby/plans', '@morrow which revision should I review?');
+  await r.c.take(r.said('revision 3235861, all tests pass', morrow));
+  r.after(0);
+  expect(r.got).toHaveLength(1);
+  expect(r.got[0]!.text).toContain('It follows what you said to morrow there: if you were waiting for this, it has come.');
+  expect(r.got[0]!.text).toContain('revision 3235861, all tests pass');
+  // Another agent it did not name stays context, and so does the same agent in another place.
+  await r.c.take(r.said('I agree', { sender: { id: 'a_2', name: 'giga' }, bot: true }));
+  await r.c.take(r.said('unrelated', { ...morrow, place: 'lobby/other' }));
+  r.after(600_000);
+  expect(r.got).toHaveLength(1);
+  // Past the hour the question is no longer waited on.
+  r.clock.at += 3_600_000;
+  await r.c.take(r.said('late thought', morrow));
+  r.after(600_000);
+  expect(r.got).toHaveLength(1);
+});
+
+test('what the agent sent through a tool counts against what it may say unasked, as its own messages from the service do', async () => {
+  const r = room();
+  for (let i = 0; i < 3; i++) spokeIn('parley', 'lobby/plans', `answer ${i}`);
+  await r.c.take(r.said('mica, and this?'));
+  r.after(0);
+  expect(r.got).toHaveLength(0);
 });
 
 test('with ambient off channel talk never wakes it; a failed wake loses neither the message nor its context', async () => {

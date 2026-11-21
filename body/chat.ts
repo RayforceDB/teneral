@@ -19,6 +19,9 @@ import { QUIET_REPLY } from '../brain/quiet';
 //   and never more often than once in `gapMs`, whatever the channels do.
 // Its name written out, a message from its owner, and a reply where it has just spoken do not
 // wait for the pause.
+// One thing an agent's post is a reason for: the agent said something to that agent by name in
+// that place a while ago, and this is what came back. Whoever asks a question is woken by its
+// answer, whoever gives it; without that, an agent that asked another and waits is never told.
 
 /** One message, as an adapter hands it over: already authenticated by the service, never by what it says. */
 export interface ChatMessage {
@@ -82,6 +85,8 @@ export interface Attention {
   unaskedWindowMs: number;
   /** How long after the agent spoke in a place the next message there is taken as an answer to it. */
   followUpMs: number;
+  /** How long after the agent said something to another agent by name in a place that agent's next post there is taken as the answer. */
+  askedMs: number;
   /** The most lines kept as context, and the most of one place shown at a wake. */
   heldLimit: number;
   placeLines: number;
@@ -89,7 +94,7 @@ export interface Attention {
 
 export const ATTENTION: Attention = {
   settleMs: 60_000, maxWaitMs: 4 * 60_000, gapMs: 60_000, unaskedMax: 3, unaskedWindowMs: 3_600_000,
-  followUpMs: 10 * 60_000, heldLimit: 100, placeLines: 40,
+  followUpMs: 10 * 60_000, askedMs: 60 * 60_000, heldLimit: 100, placeLines: 40,
 };
 
 const OWNER_WROTE = 'Your owner wrote here.';
@@ -156,8 +161,22 @@ export interface Chat {
   forget: (id: number) => void;
   /** Something the agent should know with its next wake, such as that the connection was down: said once. */
   tell: (text: string) => void;
+  /**
+   * The agent itself said this, in this place (or the channel of this name): for a service that
+   * does not show the agent its own messages. What it says bounds its speaking and tells whose
+   * answer it waits for, exactly as an own message taken from the service does.
+   */
+  said: (place: string, text: string) => void;
   /** The agent was added to a channel. It is woken for that at once, with who is there, though nobody has spoken yet. */
   joined: (channel: { id: string; name: string }) => Promise<void>;
+}
+
+/** The running attention of each service, by its name: how a tool that sent something tells it so. */
+const rooms = new Map<string, Chat>();
+
+/** The agent sent this through a tool. Nothing happens when that service's chat is not being listened to. */
+export function spokeIn(service: string, place: string, text: string): void {
+  rooms.get(service)?.said(place, text);
 }
 
 export function chat(o: ChatOptions): Chat {
@@ -167,6 +186,14 @@ export function chat(o: ChatOptions): Chat {
   // Channel talk by place, waiting for a pause; when the agent itself last spoke in each.
   const talk = new Map<string, Talk>();
   const spoke = new Map<string, number[]>();
+  // What it last said in each place, for whose answer it waits there; and the places of channels by their names.
+  const asked = new Map<string, { at: number; text: string }>();
+  const named = new Map<string, string>();
+  const said = (place: string, text: string): void => {
+    const at = named.get(place) ?? place;
+    spoke.set(at, [...(spoke.get(at) ?? []), now()].slice(-a.unaskedMax * 4));
+    asked.set(at, { at: now(), text });
+  };
   // What did not wake the agent stays here and accompanies the next message that does.
   // Ids prevent duplicates when an emit fails and the message is given again.
   const held: Line[] = [];
@@ -199,9 +226,10 @@ export function chat(o: ChatOptions): Chat {
     }
     if (m.own) {
       o.heard?.(m, 'own');
-      if (m.kind === 'channel') spoke.set(m.place, [...(spoke.get(m.place) ?? []), now()].slice(-a.unaskedMax * 4));
+      if (m.kind === 'channel') said(m.place, m.text);
       return;
     }
+    if (m.channel !== undefined && m.place === m.channel.id) named.set(m.channel.name, m.place);
     const unaddressed = m.kind === 'channel' && !m.mentioned;
     if (unaddressed && m.channel !== undefined && o.mode?.(m.channel) === 'muted') return;
     {
@@ -217,7 +245,10 @@ export function chat(o: ChatOptions): Chat {
       // anything else is context only, and a channel the agent has muted is not kept at all.
       const mode: Mode = m.channel === undefined ? 'ambient' : o.mode?.(m.channel) ?? 'ambient';
       if (mode === 'muted') return;
-      if (o.ambient && mode === 'ambient' && m.bot === false) {
+      // An agent's post is context, unless it is the answer the agent waits for: see the head of this file.
+      const question = m.bot === false ? undefined : asked.get(m.place);
+      const awaited = question !== undefined && m.sender !== undefined && now() - question.at < a.askedMs && namedIn(question.text, m.sender.name);
+      if (o.ambient && mode === 'ambient' && (m.bot === false || awaited)) {
         const t = talk.get(m.place) ?? { lines: [], first: now(), last: now(), urgent: '', ...(m.channel === undefined ? {} : { name: m.channel.name }) };
         if (!t.lines.some(l => l.id === m.id)) t.lines.push(line);
         while (t.lines.length > a.placeLines) t.lines.shift();
@@ -225,6 +256,7 @@ export function chat(o: ChatOptions): Chat {
         const mine = spoke.get(m.place) ?? [];
         const name = o.ownName();
         if (m.owner) t.urgent = OWNER_WROTE;
+        else if (awaited) t.urgent ||= `It follows what you said to ${m.sender!.name} there: if you were waiting for this, it has come.`;
         // Before the name: a quote of the agent holds its name too, and says more.
         else if (m.answers === true) t.urgent ||= 'It quotes something you said.';
         else if (name !== '' && namedIn(m.text, name)) t.urgent ||= 'Your name stands in it.';
@@ -315,5 +347,7 @@ export function chat(o: ChatOptions): Chat {
         + `If you have nothing to do about it now, answer exactly ${QUIET_REPLY}.`,
     });
   }
-  return { take, paused, revise, forget, joined, tell: (text) => { if (!notices.includes(text)) notices.push(text); } };
+  const room: Chat = { take, paused, revise, forget, joined, said, tell: (text) => { if (!notices.includes(text)) notices.push(text); } };
+  rooms.set(w.name, room);
+  return room;
 }
