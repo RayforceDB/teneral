@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { appendEvent, readEvents } from '../brain/journal';
 import { ENGINES_FILE, ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parsePins, provideOrgans, type Organ, type Pins } from './organs';
 import { protectedChanges } from './protected';
@@ -237,7 +237,9 @@ function dropGateTree(root: string, tree: string): void {
   }
   if (existsSync(tree)) sh(['git', 'worktree', 'remove', '--force', tree], root);
   try { rmSync(tree, { recursive: true, force: true }); } catch { /* left for the owner; the next gate run will say why it cannot start */ }
-  sh(['git', 'worktree', 'prune'], root);
+  // Only this gate's registration: a repository-wide prune can forget candidate/live
+  // when their back-pointer is temporarily missing during recovery.
+  rmSync(join(root, '.git', 'worktrees', basename(tree)), { recursive: true, force: true });
 }
 
 /** Inside a gate checkout: the checks' temp directory, and the throwaway install the smoke run lives in. Both dot-named, so bun's test scan skips them. */
