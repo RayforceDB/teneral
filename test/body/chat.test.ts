@@ -125,6 +125,20 @@ test('what the agent sent through a tool counts against what it may say unasked,
   expect(r.got).toHaveLength(1);
 });
 
+test('talk that addressed nobody is marked as overheard, with its lines alone; the owner\'s own words and what addresses the agent are not', async () => {
+  const r = room();
+  await r.c.take(r.said('which port is it?', { channel: { id: 'c1', name: '#build' }, place: 'c1' }));
+  r.after(60_000);
+  expect(r.got[0]!.overheard).toBe('In #build\nroom 1\n{"content":"which port is it?"}');
+  expect(r.got[0]!.text).toContain('Take part as a member would');
+  await r.c.take(r.said('plan for tomorrow', { owner: true }));
+  r.after(0);
+  expect(r.got[1]!.source).toBe('owner:parley');
+  expect(r.got[1]!.overheard).toBeUndefined();
+  await r.c.take(r.said('mica, are you there?', { mentioned: true }));
+  expect(r.got[2]!.overheard).toBeUndefined();
+});
+
 test('with ambient off channel talk never wakes it; a failed wake loses neither the message nor its context', async () => {
   const off = room({ ambient: false });
   await off.c.take(off.said('which port is it?'));

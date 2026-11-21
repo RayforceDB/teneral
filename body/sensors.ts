@@ -15,6 +15,11 @@ export interface Stimulus {
    */
   source: string;
   text: string;
+  /**
+   * Set for talk that addressed nobody: the lines alone, without what the agent is told about them.
+   * Such a stimulus may be glanced at before it becomes a turn (heart/glance.ts).
+   */
+  overheard?: string;
 }
 
 /** Only a source the body itself established as the owner's may hurry a failed-turn retry. */

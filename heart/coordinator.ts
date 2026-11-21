@@ -26,7 +26,7 @@ import { clockText, type Stimulus } from '../body/sensors';
 // the owner has said nothing for a while. Until then nothing of the agent's own stands between
 // the owner and an answer, and nothing of it is paid for in the middle of a conversation.
 
-export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wake' | 'wait';
+export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wake' | 'glance' | 'wait';
 export interface HeartState { look: boolean; pulse: boolean }
 export const heartCommand = (line: string): boolean => line.trim() === '/heart';
 
@@ -105,6 +105,13 @@ export interface HeartDeps {
    * null when nothing has come, or when the owner's interruption holds the agent's own work.
    */
   arrived?: () => Stimulus | null;
+  /**
+   * Talk that addressed nobody waits to be glanced at (heart/glance.ts), and the glance: one small
+   * request that either lets the talk become a turn or settles it as nothing to say. It must not
+   * throw and must leave nothing waiting that it was given.
+   */
+  overheard?: () => boolean;
+  glance?: () => Promise<unknown>;
   /** Milliseconds until something it waits for may have come; undefined when it waits for nothing with a time. */
   nextLook?: () => number | undefined;
   /**
@@ -191,6 +198,11 @@ export class Heart {
       try { await this.during(() => this.d.settle()); } catch (error) { this.d.onError(error); }
       // A step it named is queued, and is told below when its time comes (`arrived`): no tick is made up here.
       return 'reflect';
+    }
+    // Talk it overheard is glanced at before anything of its own: if it concerns the agent, the turn for it is the next beat.
+    if (this.d.glance !== undefined && this.d.overheard?.() === true) {
+      try { await this.during(() => this.d.glance!()); } catch (error) { this.d.onError(error); return 'wait'; }
+      return 'glance';
     }
     // What it waits for has come: it is told now, in conversation or at rest, and the turn that follows is the next beat.
     try {

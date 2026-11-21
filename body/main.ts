@@ -10,6 +10,7 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
+import { glance, overheard, setDown } from '../heart/glance';
 import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -100,6 +101,10 @@ async function keepZulipImage(bytes: Buffer): Promise<string> {
 const prompt = readFileSync(join(import.meta.dir, '..', 'brain', 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
+// Talk that addressed nobody is glanced at before it costs a turn, unless the owner turned that off; on another model when one is named.
+const GLANCE = process.env.TENERAL_GLANCE !== '0';
+const glanceProvider = process.env.TENERAL_GLANCE_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_GLANCE_MODEL.trim() }) : provider;
+const soulHead = (): string => { try { return readFileSync(join(soulDir, 'identity.md'), 'utf8'); } catch { return ''; } };
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
 // A fresh individual never inherits this install's personal accounts or agenda. These integrations
@@ -226,6 +231,11 @@ function emit(s: Stimulus): void {
     heart.requestPulse();
     // A pulse is work for the next beat, not a cancellation of reflection, memory or a live turn.
     idleWake?.();
+    return;
+  }
+  if (s.overheard !== undefined && GLANCE) {
+    // Talk that addressed nobody is set down and glanced at by the heart before a turn is spent on it (heart/glance.ts).
+    if (setDown(journal, gen, journalNow(), { ...s, overheard: s.overheard })) idleWake?.();
     return;
   }
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
@@ -533,6 +543,11 @@ const heart = new Heart({
   events: () => journalNow(),
   born: () => clockMayTick(journalNow(), soulDir),
   emit,
+  overheard: () => GLANCE && overheard(journalNow()).length > 0,
+  glance: async () => {
+    const decided = await glance({ journal, gen, provider: glanceProvider, who: soulHead, events: journalNow, emit });
+    if (decided !== null) console.error(`[glance] overheard talk: ${decided}`);
+  },
   settle: async () => {
     const woken = new AbortController();
     wake = () => woken.abort();

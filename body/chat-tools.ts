@@ -2,6 +2,7 @@ import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
 import { openCommunity, tieWord, type Community } from './community';
 import { memberOf, spokeIn, type Mode } from './chat';
+import { GLANCE_KIND } from '../heart/glance';
 import { QUIET_REPLY } from '../brain/quiet';
 import type { Tool, ToolContext } from './tools';
 
@@ -444,6 +445,15 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
     if (d.service === service && (d.channel === channel.id || d.channel === channel.name) && (d.mode === 'ambient' || d.mode === 'mentions' || d.mode === 'muted')) return { mode: d.mode, why: 'chosen' };
   }
   const mark = memberOf(channel.name);
+  // What a glance settled as nothing to say was no wake: it cost no turn, and is no sign that the agent has nothing to say here (heart/glance.ts).
+  const glanced = new Set<number>();
+  let settling = 0;
+  events.forEach((e, i) => {
+    if (e.type === 'note' && e.kind === GLANCE_KIND) {
+      const d = e.data as { verdict?: unknown; of?: unknown } | null;
+      settling = d?.verdict === 'ignore' && Array.isArray(d.of) ? d.of.length : 0;
+    } else if (e.type === 'stimulus' && settling > 0) { glanced.add(i); settling -= 1; }
+  });
   // Backwards from now: the newest wakes for this channel's talk first, until one that was answered.
   let run = 0;
   let after: 'quiet' | 'spoke' | null = null;
@@ -452,7 +462,7 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
     if (e.type === 'assistant' && !(e.toolCalls?.length > 0)) after ??= e.text.trim() === QUIET_REPLY ? 'quiet' : 'spoke';
     else if (e.type === 'tool.intent' && /^chat_(reply|send|react)$|_reply$/.test(e.name)) after = 'spoke';
     else if (e.type === 'stimulus') {
-      if (e.source === `agent:${service}` && e.text.includes(mark)) {
+      if (e.source === `agent:${service}` && e.text.includes(mark) && !glanced.has(i)) {
         // Still being answered, or answered with words or a reaction: the run ends here.
         if (after !== 'quiet') break;
         run += 1;
