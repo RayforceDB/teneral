@@ -361,6 +361,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   // Any wake except the owner's terminal/birth may settle quietly. Keep streamed markers out of the terminal.
   const quietTick = mayStayQuiet(journalNow().findLast(e => e.type === 'stimulus')?.source);
   const genericTyping = typingFor(workspace);
+  const ownerBefore = ownerArrived;
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -370,7 +371,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
-      onDelta: (t) => { if (!quietTick) console.log(t); },
+      // Once the owner has said something in the middle of such a turn, what follows is said to them and is printed like any reply.
+      onDelta: (t) => { if (!quietTick || ownerArrived !== ownerBefore) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
       // The chat adapter shows composition only for the exact stimulus that warrants it.
       onTyping: genericTyping,

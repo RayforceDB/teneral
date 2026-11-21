@@ -163,6 +163,8 @@ export class Inline {
   /** Last history row the owner has seen, while anchored; new rows wait below it. */
   private seen = 0;
   private on = false;
+  /** How many rows the region last had while it was held in place (`paint`), blank rows counted. */
+  private height = 0;
 
   constructor(private readonly term: Term) {}
 
@@ -234,14 +236,34 @@ export class Inline {
     this.shown = null;
   }
 
-  /** Print what is queued and make the live region these rows. More rows than fit under one row of what was printed are dropped from the top. */
-  paint(live: Line[]): void {
+  /**
+   * Print what is queued and make the live region these rows. More rows than fit under one row of what was printed are dropped from the top.
+   *
+   * The region begins under the last finished row, so one that lost a row would end a row higher,
+   * and what stands at its end, the input and the footer, would jump up and then down again with
+   * every line that comes and goes above them. With `hold`, a region that became shorter is given
+   * blank rows at its top instead, as many as keep its last row where it was; rows printed since
+   * take their place first, so the gap closes with the next thing said. Without `hold` the region
+   * is drawn as given and its height is not remembered: that is for what the owner opened
+   * themselves, a list or a tall input, which gives its rows back when it closes.
+   */
+  paint(live: Line[], hold = false): void {
     if (!this.on) return;
     const { cols, rows } = this.term.size();
     this.live = live;
     const depth = this.term.caps.depth;
     const max = Math.max(1, cols - 1);
-    const next = live.slice(-Math.max(1, rows - 1)).map((row) => encode(row, max, depth));
+    const most = Math.max(1, rows - 1);
+    let next = live.slice(-most).map((row) => encode(row, max, depth));
+    // A window that changed its width has moved every row: there is no place left to hold.
+    if (cols !== this.cols || live.length === 0) this.height = 0;
+    if (live.length > 0) {
+      // While the owner pages, what is queued is not printed and takes no row's place yet.
+      const printed = this.anchor === null ? this.queue.length : 0;
+      const kept = Math.min(most, this.height - printed);
+      if (kept > next.length) next = [...Array.from({ length: kept - next.length }, () => ''), ...next];
+      if (this.anchor === null) this.height = hold ? next.length : Math.max(0, this.height - printed);
+    }
     let out = '';
     if (this.anchor !== null) {
       out += '\r';

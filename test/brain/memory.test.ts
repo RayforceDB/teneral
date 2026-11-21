@@ -248,6 +248,17 @@ test('a message the request did show is left where it is, and one between turns 
   expect(shape([first, shown(first), replied('answer'), said('later')])).toEqual(['first', 'answer', 'later']);
 });
 
+test('a note of the stem that arrives while a reply is being written is shown after that reply, marked; one that follows a tool is not marked', () => {
+  const first = said('first');
+  const rejected = () => ev({ type: 'mutation.rejected', commit: 'b2', gate: 'types', output: 'x' });
+  const late = shape([first, shown(first), rejected(), replied('answer to first')]);
+  expect(late.slice(0, 2)).toEqual(['first', 'answer to first']);
+  expect(late[2]).toStartWith(`${ARRIVED}\n[stem] `);
+  expect(late).toHaveLength(3);
+  const asked = shape([first, shown(first), called('c1'), intent('c1'), result('c1', 'out'), rejected()]);
+  expect(asked.at(-1)).toStartWith('[stem] ');
+});
+
 test('after the owner interrupted, what is said next is not something that arrived during work', () => {
   const first = said('first');
   const events = [first, shown(first), called('c1'), intent('c1'), result('c1', 'out'), ev({ type: 'turn.interrupted' }), said('do this instead')];

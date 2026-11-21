@@ -199,6 +199,35 @@ test('finished rows are printed once and scroll away; the live region stays unde
   expect(term.vt.all().split('\n').filter((row) => row === 'reply row 39')).toHaveLength(1);
 });
 
+test('a held region that loses a row keeps its last row where it was; what is printed next closes the gap', () => {
+  const term = fakeTerm(30, 12);
+  const inline = new Inline(term);
+  inline.start();
+  inline.print(lines('one'));
+  inline.paint(lines('', 'working', 'input', ' footer'), true);
+  const footerAt = () => term.vt.text().split('\n').indexOf(' footer');
+  const at = footerAt();
+  expect(at).toBe(4);
+  // The line above the input goes: the input and the footer do not move, a blank row stands at the top.
+  inline.paint(lines('', 'input', ' footer'), true);
+  expect(footerAt()).toBe(at);
+  expect(term.vt.text().split('\n').slice(0, 5)).toEqual(['one', '', '', 'input', ' footer']);
+  // It comes back: still nothing moves, and the blank row is used.
+  inline.paint(lines('', 'working', 'input', ' footer'), true);
+  expect(footerAt()).toBe(at);
+  inline.paint(lines('', 'input', ' footer'), true);
+  // A finished row takes the blank row's place and the region goes down by none.
+  inline.print(lines('two'));
+  inline.paint(lines('', 'input', ' footer'), true);
+  expect(term.vt.text().split('\n').slice(0, 5)).toEqual(['one', 'two', '', 'input', ' footer']);
+  expect(footerAt()).toBe(at);
+  // What the owner opened is not held: it gives its rows back when it closes, and the footer is where it was.
+  inline.paint(lines('', 'input', 'a', 'b', 'c'));
+  inline.paint(lines('', 'input', ' footer'), true);
+  expect(footerAt()).toBe(at);
+  expect(term.vt.text().split('\n').slice(5).every(row => row === '')).toBe(true);
+});
+
 test('no row is written into the last column, and a live region taller than the screen keeps its last rows', () => {
   const term = fakeTerm(20, 6);
   const inline = new Inline(term);
