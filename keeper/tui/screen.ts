@@ -168,6 +168,14 @@ export class Inline {
   private on = false;
   /** How many rows the region last had while it was held in place (`paint`), blank rows counted. */
   private height = 0;
+  /** Rows written since the region's last row was last not known to be the screen's last: finished rows, and the region under them. */
+  private fed = 0;
+  /** The region ends on the last row of the screen: enough was written to have scrolled it there, and it has not been let up since. */
+  private pinned = false;
+  /** While pinned: the first history row on the screen, and how many history rows have scrolled off into the terminal's own scrollback. */
+  private top = 0;
+  private sunk = 0;
+  private rows = 0;
 
   constructor(private readonly term: Term) {}
 
@@ -194,6 +202,8 @@ export class Inline {
     const excess = Math.max(0, this.history.length - 20_000);
     if (excess > 0) this.history.splice(0, excess);
     if (this.anchor !== null) this.anchor = Math.max(0, this.anchor - excess);
+    this.top = Math.max(0, this.top - excess);
+    this.sunk = Math.max(0, this.sunk - excess);
     this.seen = Math.max(0, this.seen - excess);
   }
 
@@ -249,6 +259,15 @@ export class Inline {
    * take their place first, so the gap closes with the next thing said. One that lost more rows than that moves up. Without `hold` the region
    * is drawn as given and its height is not remembered: that is for what the owner opened
    * themselves, a list or a tall input, which gives its rows back when it closes.
+   *
+   * Once the region ends on the last row of the screen it stays there. A region that lost more
+   * rows than are held, or was not held, would otherwise end higher and leave the rows under it
+   * empty until enough was said to push it down again. Instead the screen is written anew from its
+   * first row: the last finished rows, as many as now fit, and the region under them, so the
+   * conversation comes down to the region and not the region up to the conversation. The rows that
+   * come back at the top are already in the terminal's scrollback, so from then on the screen is
+   * written this way, and only rows the scrollback does not have are scrolled into it, until the
+   * two agree again: the scrollback holds every finished row once, whatever opened and closed.
    */
   paint(live: Line[], hold = false): void {
     if (!this.on) return;
@@ -260,6 +279,9 @@ export class Inline {
     let next = live.slice(-most).map((row) => encode(row, max, depth));
     // A window that changed its width has moved every row: there is no place left to hold.
     if (cols !== this.cols || live.length === 0) this.height = 0;
+    // Where the region ends is known only by what was written since the window last had this size.
+    if (cols !== this.cols || rows !== this.rows) { this.pinned = false; this.fed = 0; }
+    this.rows = rows;
     if (live.length > 0) {
       // While the owner pages, what is queued is not printed and takes no row's place yet.
       const printed = this.anchor === null ? this.queue.length : 0;
@@ -286,18 +308,48 @@ export class Inline {
         for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
         this.queue = [];
         this.anchor = null;
+        // A page is written from the first row of the screen to its last: the region ends there now.
+        this.pinned = true;
+        this.top = this.sunk = Math.max(0, this.history.length - first);
         out += next.map((row) => `${row}\x1b[K`).join('\r\n');
         out += '\x1b[J';
         if (next.length > 1) out += `\x1b[${next.length - 1}A`;
         out += '\r';
       }
     } else if (this.queue.length > 0 || this.shown === null || this.shown.length !== next.length || cols !== this.cols) {
-      // From the first row of the region: the finished rows, then the region anew, then nothing below it.
-      for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
-      out += next.map((row) => `${row}\x1b[K`).join('\r\n');
-      out += '\x1b[J';
-      if (next.length > 1) out += `\x1b[${next.length - 1}A`;
-      out += '\r';
+      const room = rows - next.length;
+      const top = this.history.length - room;
+      const known = this.pinned && this.shown !== null && next.length > 0 && top >= 0;
+      // How many rows the region, with what is printed above it, is shorter than it was.
+      const lost = known ? this.shown!.length - this.queue.length - next.length : 0;
+      if (known && (lost > 0 || this.top !== this.sunk)) {
+        // Rows the scrollback does not have yet leave by the top of the screen, as rows do; those it has are only written over.
+        for (let left = top - this.sunk; left > 0;) {
+          const n = Math.min(left, rows);
+          for (let i = 0; i < n; i++) out += `\x1b[${i + 1};1H${encode(this.history[this.sunk + i]!, max, depth)}\x1b[K`;
+          out += `\x1b[${rows};1H${'\n'.repeat(n)}`;
+          this.sunk += n;
+          left -= n;
+        }
+        // The screen from its first row: the finished rows that fit, and the region under them on the last rows.
+        for (let i = 0; i < room; i++) out += `\x1b[${i + 1};1H${encode(this.history[top + i]!, max, depth)}\x1b[K`;
+        for (let i = 0; i < next.length; i++) out += `\x1b[${room + i + 1};1H${next[i]}\x1b[K`;
+        out += `\x1b[${room + 1};1H`;
+        this.top = top;
+      } else {
+        // From the first row of the region: the finished rows, then the region anew, then nothing below it.
+        for (const row of this.queue) out += `${encode(row, max, depth)}\x1b[K\r\n`;
+        out += next.map((row) => `${row}\x1b[K`).join('\r\n');
+        out += '\x1b[J';
+        if (next.length > 1) out += `\x1b[${next.length - 1}A`;
+        out += '\r';
+        if (this.shown === null || next.length === 0) { this.pinned = false; this.fed = 0; }
+        if (next.length > 0) {
+          this.fed += this.queue.length;
+          if (this.fed + next.length >= rows && top >= 0) this.pinned = true;
+          if (this.pinned) this.top = this.sunk = top;
+        }
+      }
       this.queue = [];
     } else {
       for (let i = 0; i < next.length; i++) {
