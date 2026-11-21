@@ -54,6 +54,8 @@ export interface ChatMessage {
   answers?: boolean;
   /** What it says, for finding the agent's name in it. */
   text: string;
+  /** What its sender wrote and nothing else, when `text` holds more than that, such as who said it where. */
+  body?: string;
   /** The service handed over only the beginning of it, and the rest could not be fetched. */
   partial?: boolean;
   /** How it is shown to the agent, on one line. */

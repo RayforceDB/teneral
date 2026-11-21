@@ -190,9 +190,9 @@ test('finished rows are printed once and scroll away; the live region stays unde
   expect(term.vt.cursor).toEqual({ row: 5, col: 0 });
   expect(term.vt.text().split('\n').at(-1)).toBe(' footer');
 
-  // A region that shrinks leaves nothing of its old rows; one that grows at the bottom of the screen scrolls for itself.
+  // A region that shrinks at the bottom of the screen stays there, and leaves nothing of its old rows: the conversation comes down to it.
   inline.paint(lines('', 'only this'));
-  expect(term.vt.text().split('\n').slice(5)).toEqual(['', 'only this', '', '', '']);
+  expect(term.vt.text().split('\n')).toEqual([...many.slice(-8), '', 'only this']);
   inline.paint(lines('', 'a', 'b', 'c', 'd', 'e', 'f'));
   expect(term.vt.text().split('\n').slice(-7)).toEqual(['', 'a', 'b', 'c', 'd', 'e', 'f']);
   expect(term.vt.cursor).toEqual({ row: 3, col: 0 });
@@ -350,4 +350,65 @@ test('stopping prints what is still queued, takes the live region away and gives
   // Relative painting is used normally; the anchored pager may name rows and owns wheel mode.
   const own = /^\x1b\[(\d*[ABKJ]|\d+;\d+H|[\d;]*m|\?(25|1002|1006|2004|2026)[hl])$/;
   expect(sequences(term.written).filter((sequence) => !own.test(sequence))).toEqual([]);
+});
+
+test('a region on the last row of the screen stays there when it loses rows, and the scrollback still holds every finished row once', () => {
+  const term = fakeTerm(30, 10);
+  const inline = new Inline(term);
+  inline.start();
+  const said = Array.from({ length: 20 }, (_, i) => `row ${i}`);
+  inline.print(lines(...said));
+  const small = lines('', 'input', ' footer');
+  const list = lines('', 'input', '/a', '/b', '/c', '/d', ' hint');
+  const screen = () => term.vt.text().split('\n');
+  // What has scrolled off is the finished rows from the first on, each once and in order, and it reaches at least to where the screen begins.
+  const once = () => {
+    const off = term.vt.scrollback.map((row) => row.trimEnd()).filter((row) => row.startsWith('row '));
+    expect(off).toEqual(said.slice(0, off.length));
+    const first = screen().find((row) => row.startsWith('row '))!;
+    expect(off.length).toBeGreaterThanOrEqual(said.indexOf(first));
+  };
+  inline.paint(small, true);
+  expect(screen()).toEqual([...said.slice(-7), '', 'input', ' footer']);
+  // The owner opens a list: the region grows and the screen scrolls for it.
+  inline.paint(list);
+  expect(screen()).toEqual([...said.slice(-3), ...list.map((row) => row[0]!.text)]);
+  // It closes: the footer is still on the last row, and the rows that had scrolled off are back above the region.
+  inline.paint(small, true);
+  expect(screen()).toEqual([...said.slice(-7), '', 'input', ' footer']);
+  expect(term.vt.cursor).toEqual({ row: 7, col: 0 });
+  once();
+  // Opened and closed again, and something said meanwhile: nothing is twice in the scrollback, and nothing is missing.
+  inline.paint(list);
+  expect(screen()).toEqual([...said.slice(-3), ...list.map((row) => row[0]!.text)]);
+  once();
+  said.push('row 20');
+  inline.print(lines('row 20'));
+  inline.paint(small, true);
+  expect(screen()).toEqual([...said.slice(-7), '', 'input', ' footer']);
+  once();
+  for (let i = 21; i < 40; i++) {
+    said.push(`row ${i}`);
+    inline.print(lines(`row ${i}`));
+    inline.paint(i % 5 === 0 ? list : small, i % 5 !== 0);
+    expect(screen().at(-1)).toBe(i % 5 === 0 ? ' hint' : ' footer');
+    once();
+  }
+  // A row of the region that changes is still written alone.
+  inline.paint(small, true);
+  const count = term.written.length;
+  inline.paint(lines('', 'input!', ' footer'), true);
+  expect(term.written.length).toBe(count + 1);
+  expect(term.written.at(-1)).not.toContain('footer');
+  expect(screen()).toEqual([...said.slice(-7), '', 'input!', ' footer']);
+});
+
+test('a region that has not reached the last row of the screen gives its rows back as before', () => {
+  const term = fakeTerm(30, 20);
+  const inline = new Inline(term);
+  inline.start();
+  inline.print(lines('one'));
+  inline.paint(lines('', 'input', '/a', '/b', '/c'));
+  inline.paint(lines('', 'input', ' footer'));
+  expect(term.vt.text().split('\n').slice(0, 5)).toEqual(['one', '', 'input', ' footer', '']);
 });

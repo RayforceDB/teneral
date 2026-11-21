@@ -59,7 +59,7 @@ export function rayboardChat(given: Row, ownerId?: string): ChatMessage {
     own: false, bot: sender.startsWith('a_') ? true : sender.startsWith('u_') ? false : undefined,
     owner: ownerId !== undefined && sender === ownerId,
     // A mention names the agent; a comment on a task of the agent's is said to it as well.
-    mentioned: n.type === 'mention' || n.type === 'comment', text: said, line: JSON.stringify(n), ...(cut === true ? { partial: true } : {}),
+    mentioned: n.type === 'mention' || n.type === 'comment', text: said, ...(head ? { body: said.slice(head[0].length) } : {}), line: JSON.stringify(n), ...(cut === true ? { partial: true } : {}),
   };
 }
 export function rayboardCa(path: string | undefined): string | undefined {

@@ -6,6 +6,7 @@ import type { JournalEvent } from '../../brain/journal';
 import { PAIRED_SOURCE, ownerAccounts } from '../../brain/owners';
 import { chat, type ChatMessage, type ChatWords } from '../../body/chat';
 import { Owners, bare, readPairing } from '../../body/pairing';
+import { rayboardChat } from '../../body/rayboard';
 import type { Stimulus } from '../../body/sensors';
 
 const dm = (text: string, id = '42', more: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -47,6 +48,14 @@ test('the code sent in a direct message makes that account the owner\'s, once', 
   expect(owners.claim('zulip', dm('ABCD-EFGH', '99'))).toBe(true);
   expect(owners.is('zulip', '99')).toBe(false);
   expect(out).toHaveLength(1);
+});
+
+test('a service that hands a message over with who said it where is still read for the code alone', () => {
+  const { owners } = setup();
+  owners.offer({ service: 'rayboard', code: 'Y9KXMCQ5', until: 60_000 });
+  const n = { seq: 7, ts: '2026-11-21T17:40:00.000Z', type: 'dm', subject: 'd_1', sender: 'u_k2wxzyex', text: 'anton in @morrow: Y9KX-MCQ5' };
+  expect(owners.claim('rayboard', rayboardChat(n))).toBe(true);
+  expect(owners.is('rayboard', 'u_k2wxzyex')).toBe(true);
 });
 
 test('a code does not outlive its time, and a few wrong ones void it', () => {

@@ -183,7 +183,13 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   expect(typed(s)).toEqual(['›']);
   expect(listed(s)).toEqual([]);
   // The list was part of the live region only: the conversation above is what it was, and nothing was sent.
-  expect(s.all().startsWith(before.slice(0, before.lastIndexOf('\n╭')))).toBe(true);
+  // What scrolled off is its beginning, and what stands over the box is its end: the box stays on the last rows, so rows that had scrolled off stand there again.
+  const conversation = before.slice(0, before.lastIndexOf('\n╭')).split('\n');
+  const off = s.term.vt.scrollback.map((row) => row.trimEnd());
+  expect(off).toEqual(conversation.slice(0, off.length));
+  const screen = s.term.vt.text().split('\n');
+  const above = screen.slice(0, screen.findIndex((row) => row.startsWith('╭'))).filter((row) => row !== '');
+  expect(above).toEqual(conversation.filter((row) => row !== '').slice(-above.length));
   expect(s.term.vt.all()).not.toMatch(/▸|Tab completes|\/generations/);
   expect(channel(s)).toEqual([]);
   expect(s.term.vt.alt).toBe(false);
