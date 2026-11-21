@@ -22,7 +22,7 @@ const clock = (intervalMs: number, mayTick?: () => boolean) => (emit: (s: Stimul
 };
 import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
-import { interrupt, tell } from '../../keeper/owner';
+import { interrupt, tell, leavePairing } from '../../keeper/owner';
 
 async function* lines(...items: string[]) {
   for (const item of items) yield item;
@@ -468,4 +468,19 @@ test('a tick is due one interval after the last, or after the start when there w
   expect(clockTick(1500, undefined)).toBeNull();
   expect(clockTick(1500, 1500, () => false)).toBeNull();
   expect(clockTick(1500, 1500, () => true, () => 'Your agenda: one thing.')?.text).toEndWith(' Your agenda: one thing.');
+});
+
+test('a pairing code in the owner\'s directory is handed over as it is, and is never a line', async () => {
+  const dir = ownerDir();
+  leavePairing(dir, { service: 'zulip', code: 'ABCD-EFGH', until: 5 });
+  const got: Stimulus[] = [];
+  const words: string[] = [];
+  const pairings: string[] = [];
+  const stop = owner(dir, 10, () => {}, (text) => words.push(text), (text) => pairings.push(text))((s) => got.push(s));
+  await new Promise((r) => setTimeout(r, 40));
+  stop();
+  expect(got).toEqual([]);
+  expect(words).toEqual([]);
+  expect(pairings.map((text) => JSON.parse(text))).toEqual([{ service: 'zulip', code: 'ABCD-EFGH', until: 5 }]);
+  expect(readdirSync(dir)).toEqual([]);
 });

@@ -22,12 +22,19 @@ import { join } from 'node:path';
 // name starts with a dot, so a body from before it passes it over like every such name, and ends in
 // `.memory`. It holds the word as JSON, and is read as nothing more than that.
 
+// A sixth thing is a pairing code (body/pairing.ts): the owner asks for one of their accounts in a
+// chat service to be taken as theirs, and proves the account by sending the code from it. Like a
+// word about memory it is for the body and is no line: a dot in front, `.pairing` at the end, JSON
+// inside. It is never journaled, so the model does not see the code.
+
 /** What the name of an interrupt ends with. */
 export const INTERRUPT_SUFFIX = '.interrupt';
 /** What the name of an approval of a mutation ends with. */
 export const MUTATION_SUFFIX = '.mutation';
 /** What the name of a word about the agent's memory ends with. */
 export const MEMORY_SUFFIX = '.memory';
+/** What the name of a pairing code ends with. */
+export const PAIRING_SUFFIX = '.pairing';
 
 let lastMs = 0;
 let count = 0;
@@ -75,6 +82,16 @@ export function leaveWord(dir: string, word: unknown): string {
   const name = `.${nextName(MEMORY_SUFFIX)}`;
   const tmp = join(dir, `${name}.tmp`);
   writeFileSync(tmp, JSON.stringify(word));
+  renameSync(tmp, join(dir, name));
+  return name;
+}
+
+/** Leave, as the owner, a pairing code for the body: the service, the code, and until when it holds. Returns the file's name. */
+export function leavePairing(dir: string, pairing: { service: string; code: string; until: number }): string {
+  mkdirSync(dir, { recursive: true });
+  const name = `.${nextName(PAIRING_SUFFIX)}`;
+  const tmp = join(dir, `${name}.tmp`);
+  writeFileSync(tmp, JSON.stringify(pairing));
   renameSync(tmp, join(dir, name));
   return name;
 }

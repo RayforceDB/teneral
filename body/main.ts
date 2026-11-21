@@ -35,6 +35,7 @@ import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
 import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
+import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
 import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
 import { endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
@@ -117,6 +118,15 @@ const mailConfigPath = process.env.TENERAL_MAIL_CONFIG_FILE ?? join(workspace, '
 const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
 const zulipOwnerNumber = /^\d+$/.test(zulipOwnerSetting) ? Number(zulipOwnerSetting) : 0;
 const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber > 0 ? zulipOwnerNumber : undefined;
+// The owner's accounts in every chat service: what the settings name, what they typed, and what they paired (body/pairing.ts).
+// What is known is also written beside the owner's directory, for `/owner` in their terminal to show.
+const owners = new Owners({
+  events: journalNow(), emit: (s) => emit(s), note: (data) => { appendEvent(journal, gen, { type: 'note', kind: SPENT_KIND, data }); }, status: join(ownerDir, '..', 'owners.json'), log: (line) => console.error(line),
+  settled: {
+    ...(zulipOwnerId === undefined ? {} : { zulip: [String(zulipOwnerId)] }),
+    ...(rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID) === undefined ? {} : { rayboard: [rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID)!] }),
+  },
+});
 // Only commits observed on the owner's explicitly resolved species ref become update proposals.
 // Other watched repositories remain ordinary untrusted activity. GitHub never grants mutation approval.
 let upstream: { repository: string; branch: string } | undefined;
@@ -281,6 +291,8 @@ function emit(s: Stimulus): void {
     return;
   }
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
+  // A typed line may name one of the owner's chat accounts, or take the accounts of a service back (brain/owners.ts).
+  if (s.source === 'terminal' && / (is|account is) me$/i.test(s.text.trim())) owners.heard(journalNow());
   if (ownerStimulus(s)) {
     ownerArrived += 1;
     // Only the owner's own channels end a wait for a failed turn. A tick, a peer, or another
@@ -319,6 +331,18 @@ function ownerWord(text: string): void {
   words.push(word);
   if (word.do === 'back') current?.abort();
   wake?.();
+}
+
+/** The owner asked in their terminal for one of their chat accounts to be paired (body/pairing.ts). The code is kept here and never journaled. */
+function ownerPairing(text: string): void {
+  const pairing = readPairing(text);
+  if (pairing === null) return console.error('[owner] a pairing that could not be read was dropped');
+  owners.offer(pairing);
+}
+/** The owner's accounts of one service, as a chat adapter asks about them. */
+function ownersOn(service: string) {
+  owners.serves(service);
+  return { is: (id: string) => owners.is(service, id), claim: (m: ChatMessage) => owners.claim(service, m), any: () => owners.any(service) };
 }
 
 /** Journals the owner's words that wait. A word about something the journal does not hold is dropped. */
@@ -363,12 +387,12 @@ const sensors: Sensor[] = [
     wake?.();
   }),
   // The owner's lines from `./one talk`, which may come and go while this process lives.
-  owner(ownerDir, undefined, interrupt, ownerWord),
+  owner(ownerDir, undefined, interrupt, ownerWord, ownerPairing),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
   ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
     url: process.env.TENERAL_RAYBOARD_URL,
     // No implicit binding: the owner chooses which API-verified account can speak for them.
-    ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
+    ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID), owners: ownersOn('rayboard'),
     // Talk on the board is chat like any other: the same attention, the same hands, the same record of who is there.
     chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'), peer: peerOn('rayboard'),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
@@ -406,7 +430,7 @@ const sensors: Sensor[] = [
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => journalNow(),
-    ownerId: confirmedZulipOwnerId(journalNow(), zulipOwnerId), keepImage: keepZulipImage,
+    ownerId: confirmedZulipOwnerId(journalNow(), zulipOwnerId), owners: ownersOn('zulip'), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
     mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'), peer: peerOn('zulip'),
     entered: (stream, members) => enter(journal, gen, journalNow(), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),

@@ -30,6 +30,8 @@ export const COMMANDS: readonly Command[] = [
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
   // Answered by keeper/model.ts; the stem takes up what it writes to `.env` (stem/configuration.ts).
   { name: '/model', hint: '[name]', about: 'the model the agent thinks with; with a name, test that one and change to it', plain: true },
+  // Answered by keeper/pairing.ts; the code it gives is carried to the body (body/pairing.ts).
+  { name: '/owner', hint: '[service]', about: 'which chat accounts are yours; with a service, pair one', plain: true },
   { name: '/heart', hint: '', about: 'give the agenda one pulse now', plain: true },
   // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
   { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },
