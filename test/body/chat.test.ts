@@ -105,7 +105,10 @@ test('what follows something the agent said to its sender by name is heard at on
   await r.c.take(r.said('revision 3235861, all tests pass', morrow));
   r.after(0);
   expect(r.got).toHaveLength(2);
-  expect(r.got[1]!.text).toContain('It follows what you said to morrow there: if you were waiting for this, it has come.');
+  expect(r.got[1]!.text).toContain('It follows what you said to morrow there, so it is most likely their answer to you: read it as said to you, though it carries no mention. Answer it or act on it');
+  // A message the service handed over only the beginning of says so, and how to read the rest.
+  await r.c.take(r.said('The checks passed. After I changed the runtime fingerprint, a…', { partial: true, mentioned: true }));
+  expect(r.got[2]!.text).toContain('(This message is cut short: you are shown only its beginning. Read it whole with chat_history before you judge or answer it;');
 });
 
 test('what the agent sent through a tool counts against what it may say unasked, once, also when the service shows it its own message', async () => {

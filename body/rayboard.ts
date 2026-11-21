@@ -42,7 +42,8 @@ export const RAYBOARD_LINE = /^Rayboard (?:notification|dm|mention|message|edit)
  * A notification of talk as the chat layer takes it. Who wrote it, and whether that is an agent
  * or a person, is the board's own account: an id it gave, never a name read from the text.
  */
-export function rayboardChat(n: Row, ownerId?: string): ChatMessage {
+export function rayboardChat(given: Row, ownerId?: string): ChatMessage {
+  const { cut, ...n } = given;
   const said = String(n.text);
   // The board words a message as "<name> in <place>: <text>".
   const head = /^(\S{1,40}) in (\S{1,80}): /.exec(said);
@@ -56,7 +57,7 @@ export function rayboardChat(n: Row, ownerId?: string): ChatMessage {
     own: false, bot: sender.startsWith('a_') ? true : sender.startsWith('u_') ? false : undefined,
     owner: ownerId !== undefined && sender === ownerId,
     // A mention names the agent; a comment on a task of the agent's is said to it as well.
-    mentioned: n.type === 'mention' || n.type === 'comment', text: said, line: JSON.stringify(n),
+    mentioned: n.type === 'mention' || n.type === 'comment', text: said, line: JSON.stringify(n), ...(cut === true ? { partial: true } : {}),
   };
 }
 export function rayboardCa(path: string | undefined): string | undefined {
@@ -75,14 +76,39 @@ export function rayboardUrl(value: string): string {
   if (u.username || u.password || u.search || u.hash || u.pathname !== '/') throw new Error('Rayboard URL must be a credential-free origin');
   return u.origin;
 }
-async function request(send: typeof fetch, url: string, token: string, args: Row, ms: number, ca?: string): Promise<Row> {
-  const r = await send(`${url}/api/call/inbox`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(args), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(ms), tls: ca ? { ca } : undefined });
+async function ask(send: typeof fetch, url: string, token: string, action: string, args: Row, ms: number, ca?: string): Promise<unknown> {
+  const r = await send(`${url}/api/call/${action}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(args), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(ms), tls: ca ? { ca } : undefined });
   const text = await r.text();
   if (text.length > MAX_BYTES) throw new Error('Rayboard response too large');
   if (!r.ok) throw new Error(`Rayboard HTTP ${r.status}`);
   const d = JSON.parse(text) as Row;
-  if (d.ok !== true || typeof d.result !== 'object' || d.result === null) throw new Error('Rayboard refused inbox');
-  return d.result as Row;
+  if (d.ok !== true || typeof d.result !== 'object' || d.result === null) throw new Error(`Rayboard refused ${action}`);
+  return d.result;
+}
+const request = async (send: typeof fetch, url: string, token: string, args: Row, ms: number, ca?: string): Promise<Row> => await ask(send, url, token, 'inbox', args, ms, ca) as Row;
+
+/** How the board ends the text of a notification it cut short: a notification carries a preview, not the message. */
+const CUT = '…';
+/**
+ * A notification of talk with the whole message in it. The board's preview stops in the middle of
+ * a long message, and what an agent is shown must be what was said: the end of a message is where
+ * its question or its proposal usually stands. The message is read back from where it was said and
+ * found by its author and its beginning. When that fails, the notification says that it is cut.
+ */
+async function whole(send: typeof fetch, url: string, token: string, n: Row, ms: number, ca?: string): Promise<Row> {
+  const said = String(n.text);
+  if (!said.endsWith(CUT)) return n;
+  const head = /^(\S{1,40}) in (\S{1,80}): /.exec(said);
+  const subject = String(n.subject);
+  const from = /^c_[a-z0-9]{8}$/.test(subject) ? head?.[2] : subject;
+  const shown = said.slice(head?.[0].length ?? 0, -CUT.length);
+  try {
+    if (from === undefined || shown.length < 20) throw new Error('nothing to find it by');
+    const rows = await ask(send, url, token, 'read_messages', { from, limit: 50 }, Math.min(ms, 20_000), ca);
+    const found = Array.isArray(rows) ? (rows as Row[]).findLast(m => m.author === n.sender && typeof m.body === 'string' && m.body.startsWith(shown)) : undefined;
+    if (found !== undefined) return { ...n, text: `${head?.[0] ?? ''}${(found.body as string).slice(0, 19_000)}` };
+  } catch { /* told as cut, below */ }
+  return { ...n, cut: true };
 }
 export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll: () => Promise<void>; stop: () => void } {
   const url = rayboardUrl(o.url), send = o.send ?? fetch, ms = o.requestMs ?? 65_000, ca = o.ca;
@@ -113,7 +139,7 @@ export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll:
         for (const n of items) {
           if (stopped) return;
           if (!delivered.has(n.seq as number) && attention !== null && TALK.has(n.type as string)) {
-            await attention.take(rayboardChat(n, o.ownerId));
+            await attention.take(rayboardChat(await whole(send, url, token, n, ms, ca), o.ownerId));
             delivered.add(n.seq as number);
           } else if (!delivered.has(n.seq as number)) {
             // The authenticated Rayboard API supplies this id; its text is never the credential.

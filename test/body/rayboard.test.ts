@@ -147,6 +147,35 @@ test('what people say on the board is chat like any other: a direct message and 
   expect(got).toHaveLength(3);
 });
 
+test('a message the board cut short in its notification is read back whole; when that fails, it is told as cut', async () => {
+  const long = `Both checks passed on the head. ${'It held under every probe I ran. '.repeat(12)}I recommend merging this head.`;
+  const preview = `morrow in #general: ${long.slice(0, 120)}…`;
+  const asked: { action: string; args: Record<string, unknown> }[] = [];
+  let history: unknown = [{ seq: 7, ts: 't', author: 'a_cccccccc', body: 'an older one' }, { seq: 8, ts: 't', author: 'a_cccccccc', body: long }];
+  let inbox = [said(11, 'mention', 'c_abcdefgh', 'a_cccccccc', preview)];
+  const send = (async (url: string | URL | Request, init?: RequestInit) => {
+    const action = String(url).split('/api/call/')[1]!;
+    const args = JSON.parse(String(init?.body)); asked.push({ action, args });
+    if (action === 'read_messages') return history === null ? new Response('no', { status: 500 }) : new Response(JSON.stringify({ ok: true, result: history }));
+    return new Response(JSON.stringify({ ok: true, result: { items: args.through ? [] : inbox, more: false } }));
+  }) as unknown as typeof fetch;
+  const got: Stimulus[] = [];
+  const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send, chat: true, ambient: true }, s => got.push(s));
+  await p.poll();
+  expect(asked.find(a => a.action === 'read_messages')!.args).toEqual({ from: '#general', limit: 50 });
+  expect(got).toHaveLength(1);
+  expect(got[0]!.text).toContain('I recommend merging this head.');
+  expect(got[0]!.text).not.toContain('cut short');
+  // The history cannot be read: the agent is shown the beginning, and told that it is one.
+  history = null;
+  inbox = [said(12, 'mention', 'c_abcdefgh', 'a_cccccccc', preview)];
+  await p.poll();
+  expect(got).toHaveLength(2);
+  expect(got[1]!.text).not.toContain('I recommend merging this head.');
+  expect(got[1]!.text).toContain('(This message is cut short: you are shown only its beginning. Read it whole with chat_history');
+  expect(got[1]!.text).not.toContain('"cut"');
+});
+
 test('a restart tells of nothing twice, whichever way it was told, also what only came along as context', async () => {
   const f = fixture([said(1, 'message', 'c_abcdefgh', 'u_bbbbbbbb', 'ann in #general: hm'), said(2, 'mention', 'c_abcdefgh', 'u_bbbbbbbb', 'ann in #general: @mica?'), note(3)]);
   const events: JournalEvent[] = [];
