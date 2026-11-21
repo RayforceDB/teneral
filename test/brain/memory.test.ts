@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { buildMessages, needsTurn } from '../../brain/memory';
+import { ARRIVED, buildMessages, needsTurn } from '../../brain/memory';
+import { SHOWN_KIND } from '../../brain/shown';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 
 let n = 0;
@@ -103,7 +104,7 @@ test('a rejection journaled under its former name, molt.rejected, is the same [s
 test('over budget, the oldest messages go and no orphan tool result leads', () => {
   const events = [
     said('old '.repeat(50)), called('c1'),
-    ev({ type: 'tool.result', callId: 'c1', ok: true, output: 'r'.repeat(100) }),
+    ev({ type: 'tool.result', callId: 'c1', ok: true, output: 'r'.repeat(100) }), replied('done'),
     said('new'), replied('answer'),
   ];
   // Room for 'new', 'answer' and the note that follows a closing reply, which counts like any message.
@@ -212,6 +213,45 @@ test('a list that would end with a plain reply ends with a note instead: what ca
     { role: 'assistant', content: 'answer to first' },
     { role: 'user', content: LATE },
   ]);
+});
+
+/** The boundary the loop journals before a request: the last event that request may contain. */
+const shown = (through: JournalEvent) => ev({ type: 'note', kind: SHOWN_KIND, data: { through: through.id } });
+const shape = (events: JournalEvent[]) => buildMessages(events, 'S').slice(1).map(m => m.role === 'tool' ? 'result' : m.content);
+
+test('what arrives while a reply with tool calls is being written is shown after that reply and its results, marked as new', () => {
+  const first = said('first');
+  const events = [first, shown(first), said('second'), called('c1'), intent('c1'), result('c1', 'out')];
+  expect(shape(events)).toEqual(['first', null, 'result', `${ARRIVED}\nsecond`]);
+  // It stays there in every later request: the next boundary covers it and nothing moves.
+  const more = [...events, shown(events.at(-1)!), replied('both done'), said('next')];
+  expect(shape(more)).toEqual(['first', null, 'result', `${ARRIVED}\nsecond`, 'both done', 'next']);
+});
+
+test('what arrives while a final reply is being written is shown after it, and no other note is needed', () => {
+  const first = said('first');
+  expect(shape([first, shown(first), said('second'), replied('answer to first')])).toEqual(['first', 'answer to first', `${ARRIVED}\nsecond`]);
+});
+
+test('what arrives while a tool runs is marked where it lies, after the results', () => {
+  const first = said('first');
+  expect(shape([first, shown(first), called('c1'), intent('c1'), said('second'), result('c1', 'out')])).toEqual(['first', null, 'result', `${ARRIVED}\nsecond`]);
+});
+
+test('a message the request did show is left where it is, and one between turns carries no mark', () => {
+  const first = said('first');
+  const second = said('second');
+  // Both were journaled before the request went out: the reply was written with both.
+  expect(shape([first, second, shown(second), replied('answer to both'), said('next')])).toEqual(['first', 'second', 'answer to both', 'next']);
+  // A request that failed and was made again: the second boundary covers what came after the first.
+  expect(shape([first, shown(first), second, shown(second), replied('answer to both'), said('next')])).toEqual(['first', 'second', 'answer to both', 'next']);
+  expect(shape([first, shown(first), replied('answer'), said('later')])).toEqual(['first', 'answer', 'later']);
+});
+
+test('after the owner interrupted, what is said next is not something that arrived during work', () => {
+  const first = said('first');
+  const events = [first, shown(first), called('c1'), intent('c1'), result('c1', 'out'), ev({ type: 'turn.interrupted' }), said('do this instead')];
+  expect(shape(events).at(-1)).toBe('do this instead');
 });
 
 test('a reply that ends with tool calls, or a list that ends with a user message, gets no such note', () => {

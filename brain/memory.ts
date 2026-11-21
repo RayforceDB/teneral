@@ -6,7 +6,7 @@ import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
-import { replyIsCurrent } from './shown';
+import { arrivals, replyIsCurrent } from './shown';
 
 // How the stem's events read is in brain/stemnote.ts; it is given out from here as well, where it always was.
 export { stemNote };
@@ -206,8 +206,18 @@ function latestSteps(asked: ChatMessage, after: ChatMessage[], budgetChars: numb
 }
 
 /**
+ * Stands over a message that reached the agent in the middle of its work: while it was writing a
+ * reply, or while a tool ran. It is shown after the steps that were taken without it (`arrivals`
+ * in brain/shown.ts), and this says that nothing above was an answer to it. What to do with it is
+ * in brain/prompt.md.
+ */
+export const ARRIVED = '[arrived while you were working]';
+
+/**
  * A stimulus journaled while the model was replying lies before that reply in the journal, and the
- * loop then asks again. The list would end with the agent's own finished reply; this says why it is asked.
+ * loop then asks again. Where the request boundaries say so, it is shown after that reply (see
+ * ARRIVED). This is for what they do not cover, a journal from before them or a note of the stem's:
+ * the list would end with the agent's own finished reply, and this says why it is asked.
  */
 const LATE =
   '[context] Something arrived while you were writing your last reply; it is shown above, before that reply. Respond to it now.';
@@ -284,13 +294,26 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
     return wire;
   };
 
-  for (let i = 0; i < events.length; i++) {
+  const { after, during } = arrivals(events);
+  const show = (e: JournalEvent & { type: 'stimulus' }, i: number, at: number): void => {
+    const text = stimulusText(e.source, e.text);
+    const message: ChatMessage = { role: 'user', content: during.has(i) ? `${ARRIVED}\n${text}` : text };
+    if (sight && (e.source === 'terminal' || e.source === 'owner:zulip')) takeMarkers(message, slots);
+    out.push(message);
+    origin.push(at);
+  };
+  // What a reply was written without, in the order it arrived: shown once that reply and its results are.
+  let held: number[] = [];
+  for (let i = 0; i <= events.length; i++) {
+    if (held.length > 0 && (i === events.length || after.get(held[0]!)! < i)) {
+      for (const s of held) show(events[s] as JournalEvent & { type: 'stimulus' }, s, after.get(s)!);
+      held = [];
+    }
+    if (i === events.length) break;
     const e = events[i]!;
     if (e.type === 'stimulus') {
-      const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
-      if (sight && (e.source === 'terminal' || e.source === 'owner:zulip')) takeMarkers(message, slots);
-      out.push(message);
-      origin.push(i);
+      if (after.has(i)) held.push(i);
+      else show(e, i, i);
     } else if (e.type === 'assistant') {
       const { text, calls } = reply(e);
       const said = text.trim() === '' ? null : text;

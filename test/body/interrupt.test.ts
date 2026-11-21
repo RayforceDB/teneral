@@ -194,7 +194,7 @@ test('a terminal line read during a mutation turn is answered before generation 
   const l = life(async (n, asked) => {
     if (n === 1) return reply({ content: '', tool_calls: [tool('m1', 'mutate', { motive: 'test hand-off' })] });
     if (n === 2) { await hold; return says('Mutation requested.'); }
-    expect(asked.messages.some(m => m.role === 'user' && m.content === 'keep my late line')).toBe(true);
+    expect(asked.messages.some(m => m.role === 'user' && typeof m.content === 'string' && m.content.endsWith('keep my late line'))).toBe(true);
     return says('Kept.');
   });
   // Never release the provider if an assertion or timeout fails.
