@@ -725,6 +725,21 @@ test('a mutation that changes the memory and remembers worse than the running ge
   expect(result.output).toContain('of 30 questions the candidate finds the answer to 20 (67%), and the generation running found 97%');
 });
 
+test('where the running generation can be asked, both sit the same exam: what it scored on another day does not refuse a candidate that remembers as well', async () => {
+  // The running generation scored 29 of 30 when it last sat the exam; asked today, on today's journal, it finds 20.
+  const running = examined(20, 29);
+  const { dir, seed } = makeRepo({ 'brain/exam.ts': running.examiner, 'brain/recall.ts': 'export const a = 1;\n' });
+  git(dir, 'worktree', 'add', '-q', '--detach', join(dir, '.teneral', 'live'), seed);
+  // A candidate that finds the same 20 is no worse, though 20 is far below the 29 of that other day.
+  writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+  expect(await runGates(dir, seed, commitAll(dir, 'the same memory, moved'), NO_CHECKS, { journal: running.journal })).toEqual({ ok: true, gate: 'all', output: '' });
+  // One that finds 10 of them is worse, and is told so against today's score, not the old one.
+  writeFiles(dir, { 'brain/exam.ts': examined(10, 29).examiner, 'brain/recall.ts': 'export const a = 3;\n' });
+  const result = await runGates(dir, seed, commitAll(dir, 'a worse recall'), NO_CHECKS, { journal: running.journal });
+  expect(result).toMatchObject({ ok: false, gate: 'memory' });
+  expect(result.output).toContain('of 30 questions the candidate finds the answer to 10 (33%), and the generation running finds the answer to 20 of the same questions (67%), asked now of the same journal');
+});
+
 test('one that remembers as well passes, and so does one a question short of it', async () => {
   for (const right of [29, 30]) {
     const { journal, examiner } = examined(right, 30);
