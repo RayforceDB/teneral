@@ -1,0 +1,30 @@
+ teneral  setup                                            ✓ Model ── ● GitHub ── ○ Ready
+ ────────────────────────────────────────────────────────────────────────────────────────
+
+  The agent's GitHub account
+
+  With an account of its own on GitHub the agent pushes its branches, opens
+  pull requests and answers reviews by itself, under its own name. Make the
+  account at github.com first if it has none.
+
+  ▸ 1  Sign it in now
+       │ You are shown a one-time code. In a browser where you are logged in
+       │ as the agent's account (not your own), open the address and type it.
+
+    2  Later
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ────────────────────────────────────────────────────────────────────────────────────────
+ Enter confirms · Up/Down choose · Ctrl-C stops · or press y, n

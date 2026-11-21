@@ -1,4 +1,5 @@
- teneral  setup
+ teneral  setup                                                        ● Model ── ○ Ready
+ ────────────────────────────────────────────────────────────────────────────────────────
 
   Welcome
 
@@ -9,14 +10,14 @@
   Where does the model come from?
 
   ▸ 1  ChatGPT plan (Continue with ChatGPT)
-       Uses your ChatGPT Plus or Pro plan for the agent's requests, through
-       OpenAI's sign-in for open-source apps that run locally.
-       You sign in on a page at OpenAI in your own browser. teneral never sees
-       your password.
-       The tokens OpenAI issues are stored in .teneral/auth/, readable only by
-       you, and by the agent's own shell.
-       What the agent uses counts against your plan; review and limit it at
-       https://chatgpt.com/settings/usage
+       │ Uses your ChatGPT Plus or Pro plan for the agent's requests, through
+       │ OpenAI's sign-in for open-source apps that run locally.
+       │ You sign in on a page at OpenAI in your own browser. teneral never
+       │ sees your password.
+       │ The tokens OpenAI issues are stored in .teneral/auth/, readable only
+       │ by you, and by the agent's own shell.
+       │ What the agent uses counts against your plan; review and limit it at
+       │ https://chatgpt.com/settings/usage
 
     2  OpenAI API key
     3  Another OpenAI-compatible endpoint
@@ -25,6 +26,5 @@
 
 
 
-
-
+ ────────────────────────────────────────────────────────────────────────────────────────
  Enter confirms · Up/Down choose · Ctrl-C stops · or press 1-4

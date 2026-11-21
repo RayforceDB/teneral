@@ -1,0 +1,30 @@
+ teneral  setup                                            ✓ Model ── ● GitHub ── ○ Ready
+ ────────────────────────────────────────────────────────────────────────────────────────
+
+  Whose account this is
+
+  The code was typed by the-owner, made 2012-03-01, 41 public repositories.
+
+  Whatever this account may do on GitHub, the agent may do. If it is your own
+  account, say no and log in as the agent's.
+
+  ▸ 1  Yes, the-owner is the agent's own account
+       │ Its token is stored in .teneral/auth/github-token, readable only by
+       │ you and by the agent's own shell.
+
+    2  No, that is not the agent's
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ────────────────────────────────────────────────────────────────────────────────────────
+ Enter confirms · Up/Down choose · Ctrl-C stops · or press y, n

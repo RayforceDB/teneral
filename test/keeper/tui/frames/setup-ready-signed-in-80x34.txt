@@ -1,9 +1,10 @@
- teneral  setup
+ teneral  setup                                              ✓ Model ── ● Ready
+ ──────────────────────────────────────────────────────────────────────────────
 
   Ready
 
-  · a reply       ok       N.Ns
-  · a tool call   ok       N.Ns
+  ✓ a reply       ok       N.Ns
+  ✓ a tool call   ok       N.Ns
 
   Written
     .env
@@ -29,6 +30,5 @@
 
 
 
-
-
+ ──────────────────────────────────────────────────────────────────────────────
  Enter goes on

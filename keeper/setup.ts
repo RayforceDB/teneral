@@ -5,6 +5,8 @@ import { ProviderError, connect, type Provider } from '../brain/provider';
 import { CHATGPT_USAGE_URL, PROVIDERS, authDir, findProvider, userAgent, type ProviderEntry } from '../brain/providers';
 import { MANAGED } from '../stem/configuration';
 import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } from '../brain/signin';
+import { saveToken } from '../species/github';
+import { storedAccount, type GithubAccount, type GithubStep } from './github';
 
 // The owner's first-run setup: `./one setup`. It offers the providers in brain/providers.ts, asks
 // for what the chosen one needs (a key, or a sign-in at OpenAI), makes two real requests through
@@ -12,6 +14,10 @@ import { CALLBACK_PORT, DEFAULT_ISSUER, accessToken, readCredentials, signIn } f
 //
 // It is in keeper/ because it is the owner's tool. The one thing it takes from the body is
 // `connect` in brain/provider.ts, so that what is tested here is what the agent will run.
+//
+// Then comes the agent's own account on GitHub (keeper/github.ts): a sign-in by a one-time code,
+// which the owner may leave for later. `./one setup github` is that step alone, for an agent that
+// is set up already; it needs no restart, since the token is read from its file at each use.
 //
 // A key or a token is never shown: not when typed, not in an error, not in what is said at the end.
 
@@ -211,11 +217,42 @@ export interface Dialogue {
   progress?: (step: TestStep, state: 'asking' | 'ok' | 'failed', ms: number) => void;
   tested: (result: TestResult) => void;
   testFailed: () => Promise<'retry' | 'choose' | 'quit' | null>;
-  /** `.env` is written. `names`: what it now holds of the setup's, the key by its name only. */
-  wrote: (names: string[], entry: ProviderEntry) => void | Promise<void>;
+  /** `.env` is written. `names`: what it now holds of the setup's, the key by its name only. `github`: how the step for the agent's account ended, when there was one. */
+  wrote: (names: string[], entry: ProviderEntry, github?: GithubOutcome) => void | Promise<void>;
   /** Ended early; nothing was written. */
   stopped: () => void;
+  /** The agent's own account on GitHub: whether to sign in to one now. `current` is what is stored already. */
+  github: (current: GithubAccount | 'refused' | null) => Promise<'signin' | 'leave' | null>;
+  /** The code to type at `url`. The wait for GitHub to say it was typed follows; `giveUp` ends it. */
+  githubCode: (code: string, url: string, giveUp: () => void) => void;
+  /** Whose account the code was typed in: whether that is the agent's own, to be stored. */
+  githubIs: (account: GithubAccount) => Promise<boolean | null>;
+  githubFailed: (why: string) => Promise<'retry' | 'leave' | null>;
+  /** The step for the agent's account, where it was the whole of this run (`./one setup github`). */
+  finished: (github: GithubOutcome) => void | Promise<void>;
 }
+
+/** How the step for the agent's account on GitHub ended: what is stored now, and whether this run stored it. */
+export interface GithubOutcome {
+  account: GithubAccount | 'refused' | null;
+  changed: boolean;
+}
+
+/** One line on the agent's account, for the end of either dialogue. */
+export function githubLine(github: GithubOutcome): string {
+  if (github.account === null) return 'GitHub: the agent has no account yet. ./one setup github signs it in.';
+  if (github.account === 'refused') return 'GitHub: the stored token is no longer accepted. ./one setup github signs the agent in again.';
+  return `GitHub: the agent is ${github.account.login}${github.changed ? '; its git and gh act as that account from now on, with no restart' : ''}.`;
+}
+
+/** What the owner is told of an account before it is stored: enough to see whether it is their own. */
+export function accountFacts(account: GithubAccount): string {
+  return `${account.login}${account.created ? `, made ${account.created}` : ''}, ${account.repos === 1 ? '1 public repository' : `${account.repos} public repositories`}`;
+}
+
+export const GITHUB_WHY = 'With an account of its own on GitHub the agent pushes its branches, opens pull requests and answers reviews by itself, under its own name. Make the account at github.com first if it has none.';
+export const GITHUB_HOW = 'You are shown a one-time code. In a browser where you are logged in as the agent\'s account (not your own), open the address and type it.';
+export const GITHUB_OWN = 'Whatever this account may do on GitHub, the agent may do. If it is your own account, say no and log in as the agent\'s.';
 
 const yes = (answer: string, fallback: boolean): boolean => {
   const a = answer.trim().toLowerCase();
@@ -232,6 +269,30 @@ export function plainDialogue(io: Io): Dialogue {
       return answer === null ? null : yes(answer, false);
     },
     kept: () => io.say('Left as it is.'),
+    github: async (current) => {
+      io.say('\nThe agent\'s account on GitHub.');
+      if (current === null) io.say(`${GITHUB_WHY}\n${GITHUB_HOW}`);
+      else if (current === 'refused') io.say('A token is stored, but GitHub no longer accepts it.');
+      else io.say(`It is signed in as ${accountFacts(current)}.`);
+      const answer = await io.ask(current === null ? 'Sign it in now? (n: later, with ./one setup github) [Y/n] ' : 'Sign in to an account again? [y/N] ');
+      return answer === null ? null : yes(answer, current === null) ? 'signin' : 'leave';
+    },
+    githubCode: (code, url) => {
+      io.say(`\nOpen ${url} in a browser where you are logged in as the agent's account, and type this code:\n\n  ${code}\n`);
+      io.say('Waiting for GitHub to say it was typed (Ctrl-C gives up) ...');
+    },
+    githubIs: async (account) => {
+      io.say(`\nThat was ${accountFacts(account)}.\n${GITHUB_OWN}`);
+      const answer = await io.ask('Is this the agent\'s own account? [y/N] ');
+      return answer === null ? null : yes(answer, false);
+    },
+    githubFailed: async (why) => {
+      io.say(`\nThe sign-in at GitHub did not work: ${why}`);
+      const answer = await io.ask('[r]etry it, or [l]eave it for later: ');
+      if (answer === null) return null;
+      return answer.trim().toLowerCase().startsWith('r') ? 'retry' : 'leave';
+    },
+    finished: (github) => io.say(`\n${githubLine(github)}`),
     provider: async () => {
       PROVIDERS.forEach((p, i) => {
         io.say(`  ${i + 1}. ${p.name}`);
@@ -283,8 +344,9 @@ export function plainDialogue(io: Io): Dialogue {
       const next = answer.trim().toLowerCase();
       return next.startsWith('q') ? 'quit' : next.startsWith('c') ? 'choose' : 'retry';
     },
-    wrote: (names) => {
+    wrote: (names, _entry, github) => {
       io.say(`\nWrote .env, readable only by you: ${names.join(', ')}.`);
+      if (github) io.say(githubLine(github));
       io.say(NEXT_STEP);
     },
     stopped: () => io.say('\nStopped. No configuration was written.'),
@@ -311,6 +373,10 @@ export interface SetupOptions {
   /** Go on from where a run that ended with NEEDS_CALLBACK stopped. */
   resume?: boolean;
   signInTimeoutMs?: number;
+  /** The step for the agent's account on GitHub. Without it there is no such step. */
+  github?: GithubStep;
+  /** That step alone, for an agent that is set up already. */
+  only?: 'github';
 }
 
 /** What a setup that ended early left for the one that goes on from it. */
@@ -356,7 +422,47 @@ export async function setup(o: SetupOptions): Promise<number> {
   const resumed = o.resume ? left() : null;
   rmSync(resumeFile(root), { force: true });
 
+  /** The agent's account on GitHub: sign in by a code, as often as it takes, or leave it. */
+  const githubStep = async (gh: GithubStep): Promise<GithubOutcome> => {
+    const current = await storedAccount(auth, gh.who);
+    for (;;) {
+      if (await need(ui.github(current)) === 'leave') return { account: current, changed: false };
+      let started: Awaited<ReturnType<GithubStep['signIn']>> | null = null;
+      try {
+        started = await gh.signIn();
+        const under = started;
+        ui.githubCode(under.code, under.url, () => under.cancel());
+        // However the wait ends, it is over: there is nothing left to give up.
+        const token = await under.done.finally(() => { started = null; });
+        const account = await gh.who(token);
+        // Not the agent's own: nothing is stored, and the question comes again.
+        if (!await need(ui.githubIs(account))) continue;
+        saveToken(auth, token);
+        return { account, changed: true };
+      } catch (err) {
+        started?.cancel();
+        if (err instanceof Cancelled) throw err;
+        if (await need(ui.githubFailed(err instanceof Error ? err.message : String(err))) === 'leave') return { account: current, changed: false };
+      }
+    }
+  };
+  /** The same after the configuration is settled: an owner who stops here has still set the agent up. */
+  const githubAfter = async (): Promise<GithubOutcome | undefined> => {
+    if (o.github === undefined) return undefined;
+    try {
+      return await githubStep(o.github);
+    } catch (err) {
+      if (!(err instanceof Cancelled)) throw err;
+      return { account: await storedAccount(auth, o.github.who), changed: false };
+    }
+  };
+
   try {
+    if (o.only === 'github') {
+      if (o.github === undefined) throw new Error('this setup has no step for GitHub');
+      await ui.finished(await githubStep(o.github));
+      return 0;
+    }
     let replace = resumed?.replace === true;
     if (!resumed) {
       ui.welcome();
@@ -365,7 +471,8 @@ export async function setup(o: SetupOptions): Promise<number> {
         const value = (name: string) => new RegExp(`^${name}=(.*)$`, 'm').exec(current)?.[1]?.trim() || null;
         const provider = findProvider(value('TENERAL_PROVIDER') ?? undefined);
         if (!await need(ui.replace(provider?.name ?? 'an OpenAI-compatible endpoint', value('TENERAL_MODEL') ?? 'not set'))) {
-          ui.kept();
+          const github = await githubAfter();
+          if (github === undefined) ui.kept(); else await ui.finished(github);
           return 0;
         }
         replace = true;
@@ -471,7 +578,7 @@ export async function setup(o: SetupOptions): Promise<number> {
       const existing = existsSync(envFile) ? readFileSync(envFile, 'utf8') : null;
       writeEnv(envFile, envText(existing, values), replace);
       const names = Object.entries(values).filter(([, value]) => value !== null).map(([name, value]) => (name === 'TENERAL_API_KEY' ? name : `${name}=${value}`));
-      await ui.wrote(names, entry);
+      await ui.wrote(names, entry, await githubAfter());
       return 0;
     }
   } catch (err) {
@@ -545,7 +652,11 @@ if (import.meta.main) {
     console.error('The setup asks questions and needs a terminal. Run ./one setup from one.');
     process.exit(1);
   }
-  const options = { root: join(import.meta.dir, '..'), env: process.env, callback: !args.includes('--no-callback'), resume: args.includes('--resume') };
+  const { realGithub } = await import('./github');
+  const options = {
+    root: join(import.meta.dir, '..'), env: process.env, callback: !args.includes('--no-callback'), resume: args.includes('--resume'),
+    github: realGithub(), ...(args.includes('github') ? { only: 'github' as const } : {}),
+  };
   // The screens, at a terminal that can show them; --plain keeps the dialogue as lines of text.
   if (!args.includes('--plain') && process.stdout.isTTY && process.env.TERM !== 'dumb') {
     const { runSetupScreens } = await import('./tui/setup');

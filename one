@@ -8,7 +8,9 @@ usage() {
 usage: ./one <command>
 
   setup           choose the model provider, sign in or enter a key, and test it; writes .env.
-                  Run again to change provider or to sign in again
+                  Then sign the agent in to its own GitHub account, by a code you type in a
+                  browser. Run again to change provider or to sign in again
+  setup github    that last step alone, for an agent that is set up already; no restart
   up              start the agent in the background; it outlives this terminal.
                   The first time, with no .env yet, it runs the setup first
   talk            attach this terminal to it: the conversation is printed into the terminal as

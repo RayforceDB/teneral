@@ -22,6 +22,7 @@ import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './ima
 import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
+import { GITHUB_ACCOUNT_KIND, githubAccount } from './github-account';
 import { TIMER_MAX_MS, clockMayTick, clockTick, inbox, owner, ownerStimulus, terminal, tickAt, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
@@ -417,6 +418,12 @@ const sensors: Sensor[] = [
       appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
     },
   })),
+  // Which account the stored token belongs to, told to the agent when it is new (body/github-account.ts).
+  ...(process.env.TENERAL_AUTH ? [githubAccount({
+    token: () => { try { return readFileSync(join(process.env.TENERAL_AUTH!, 'github-token'), 'utf8'); } catch { return ''; } },
+    events: () => journalNow(),
+    note: (login) => appendEvent(journal, gen, { type: 'note', kind: GITHUB_ACCOUNT_KIND, data: { login } }),
+  })] : []),
   ...(process.env.TENERAL_AUTH && hasToken(process.env.TENERAL_AUTH) ? [(emit: (s: Stimulus) => void) => {
     const worker = githubNotificationPoller({
       events: () => journalNow(),
