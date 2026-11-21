@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { chat, namedIn, type ChatMessage, type ChatWords } from '../../body/chat';
+import { chat, namedIn, spokeIn, type ChatMessage, type ChatWords } from '../../body/chat';
 import type { Stimulus } from '../../body/sensors';
 
 // The layer is driven here by a service that does not exist: nothing in it may know of a real one.
@@ -64,6 +64,65 @@ test('channel talk wakes it once it has paused, people only, and the agent\'s ow
   r.after(0);
   expect(r.got).toHaveLength(3);
   expect(r.got[2]!.source).toBe('owner:parley');
+});
+
+test('an agent it has dealings with is heard like anyone, a bounded number of times while no person speaks; a service is context', async () => {
+  const morrow = { sender: { id: 'a_1', name: 'morrow' }, bot: true as const };
+  const r = room({ peer: (sender) => sender.id === 'a_1' });
+  // A service's post, and an agent's it has never dealt with, wake it for nothing.
+  await r.c.take(r.said('CI: build 81 passed', { sender: { id: 'b_9', name: 'ci' }, bot: true }));
+  r.after(600_000);
+  expect(r.got).toHaveLength(0);
+  // Another agent's post that names nobody: heard once it has paused, and said to be talk without a person in it.
+  await r.c.take(r.said('the suite passed on revision 3', morrow));
+  r.after(30_000);
+  expect(r.got).toHaveLength(0);
+  r.after(30_000);
+  expect(r.got).toHaveLength(1);
+  expect(r.got[0]!.text).toContain('No person has a part in it: only other agents spoke. You are shown such talk 4 times running at most');
+  // Four times running; after that such talk is context until a person speaks.
+  for (let i = 0; i < 5; i++) { await r.c.take(r.said(`and more ${i}`, morrow)); r.after(120_000); }
+  expect(r.got).toHaveLength(4);
+  await r.c.take(r.said('what did you two decide?'));
+  r.after(60_000);
+  expect(r.got).toHaveLength(5);
+  expect(r.got[4]!.text).not.toContain('No person has a part in it');
+  // What the agents said meanwhile was kept as context and is not lost.
+  await r.c.take(r.said('we chose revision 3', morrow));
+  r.after(60_000);
+  expect(r.got).toHaveLength(6);
+});
+
+test('what follows something the agent said to its sender by name is heard at once, also from an agent it has had no dealings with', async () => {
+  const morrow = { sender: { id: 'a_1', name: 'morrow' }, bot: true as const };
+  const r = room();
+  const first = r.said('who can review this?');
+  await r.c.take(first);
+  r.after(60_000);
+  expect(r.got).toHaveLength(1);
+  // The agent answered through a tool, naming morrow, on a service that does not show it its own messages.
+  spokeIn('parley', first.id, '@morrow which revision should I review?');
+  await r.c.take(r.said('revision 3235861, all tests pass', morrow));
+  r.after(0);
+  expect(r.got).toHaveLength(2);
+  expect(r.got[1]!.text).toContain('It follows what you said to morrow there: if you were waiting for this, it has come.');
+});
+
+test('what the agent sent through a tool counts against what it may say unasked, once, also when the service shows it its own message', async () => {
+  const r = room();
+  const asked = r.said('mica, which port?');
+  await r.c.take(asked);
+  r.after(0);
+  expect(r.got).toHaveLength(1);
+  // Three answers through the tool; one service echoes each, another does not: either way three were said.
+  for (let i = 0; i < 3; i++) {
+    spokeIn('parley', asked.id, `answer ${i}`);
+    if (i < 2) await r.c.take(r.said(`answer ${i}`, { own: true }));
+    r.clock.at += 60_000;
+  }
+  await r.c.take(r.said('mica, and this?'));
+  r.after(0);
+  expect(r.got).toHaveLength(1);
 });
 
 test('with ambient off channel talk never wakes it; a failed wake loses neither the message nor its context', async () => {

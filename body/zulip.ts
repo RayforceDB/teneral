@@ -40,6 +40,7 @@ interface Options {
   entered?: (stream: { id: string; name: string }, members: { id: string; name: string; bot?: boolean }[] | null) => string;
   /** Told of every message taken: see `heard` in body/chat.ts. */
   heard?: (m: ChatMessage, how: 'own' | 'dm' | 'mention' | 'quote' | 'name' | 'follow' | 'none') => void;
+  peer?: (sender: { id: string; name: string }) => boolean;
   /** How the agent listens in a stream: see `mode` in body/chat.ts. */
   mode?: (stream: { id: string; name: string }) => Mode;
   /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
@@ -151,7 +152,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const attention = chat({
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
-    ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}),
+    ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}), ...(o.peer ? { peer: o.peer } : {}),
   });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
