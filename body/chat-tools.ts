@@ -1,7 +1,7 @@
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
 import { openCommunity, tieWord, type Community } from './community';
-import { memberOf, type Mode } from './chat';
+import { memberOf, spokeIn, type Mode } from './chat';
 import { QUIET_REPLY } from '../brain/quiet';
 import type { Tool, ToolContext } from './tools';
 
@@ -173,7 +173,10 @@ export const chatReply: Tool = {
     const a = args as Record<string, unknown>;
     const { service, id } = reference(a.message);
     if (a.everyone !== undefined && typeof a.everyone !== 'boolean') throw new Error('everyone must be true or false');
-    return `Reply ${await deliver(service, a.content as string, (part) => service.reply(ctx, id, part, a.everyone === true, signal))}.`;
+    const sent = await deliver(service, a.content as string, (part) => service.reply(ctx, id, part, a.everyone === true, signal));
+    // Not every service shows the agent its own messages: what it said, and where, is told to its attention here (body/chat.ts).
+    if (/^[0-9]{1,15}$/.test(id)) spokeIn(service.name, Number(id), a.content as string);
+    return `Reply ${sent}.`;
   },
 };
 
@@ -221,7 +224,9 @@ export const chatSend: Tool = {
       if (opened > OPENED_MAX) throw new Error(`you have opened ${OPENED_MAX} messages nobody asked for in ${channel} within the hour. Wait, or answer what people say there with chat_reply`);
       to = { channel: channel!, thread };
     }
-    return `Message ${await deliver(service, (args as Record<string, unknown>).content as string, (part) => service.send!(ctx, to, part, signal))}.`;
+    const sent = await deliver(service, (args as Record<string, unknown>).content as string, (part) => service.send!(ctx, to, part, signal));
+    if (channel !== undefined) spokeIn(service.name, channel, (args as Record<string, unknown>).content as string);
+    return `Message ${sent}.`;
   },
 };
 

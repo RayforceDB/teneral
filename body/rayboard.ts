@@ -25,6 +25,7 @@ interface Options {
   who?: (speakers: Speaker[]) => string;
   mode?: (channel: { id: string; name: string }) => Mode;
   heard?: (m: ChatMessage, how: 'own' | 'dm' | 'mention' | 'quote' | 'name' | 'follow' | 'none') => void;
+  peer?: (sender: { id: string; name: string }) => boolean;
   now?: () => number;
 }
 /** How Rayboard is spoken of in what the agent is told (body/chat.ts). */
@@ -92,7 +93,7 @@ export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll:
     // Talk that came along as context with a later message was delivered too.
     for (const m of e.text.matchAll(/^\{"seq":([1-9][0-9]*),/gm)) delivered.add(Number(m[1]));
   }
-  const attention = o.chat ? chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => '', ...(o.now ? { now: o.now } : {}), ...(o.who ? { who: o.who } : {}), ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}) }) : null;
+  const attention = o.chat ? chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => '', ...(o.now ? { now: o.now } : {}), ...(o.who ? { who: o.who } : {}), ...(o.peer ? { peer: o.peer } : {}), ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}) }) : null;
   async function poll(): Promise<void> {
     if (stopped || busy) return;
     busy = true;

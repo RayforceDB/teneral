@@ -195,10 +195,26 @@ function whoSpeaks(service: string, speakers: Speaker[]): string {
   return whoLines(events, seen, meet(journal, gen, events, seen), community);
 }
 
+/**
+ * Who has spoken to this agent, by service and id: a direct message, a mention, an answer to
+ * something it said. Of those the service has not called people, these are the agents it has
+ * dealings with, whose talk in a channel it hears (body/chat.ts). Read from the journal's own
+ * notes of what was heard, so a restart forgets none of them.
+ */
+const SPOKE_TO_ME = new Set<How>(['dm', 'mention', 'quote']);
+const dealings = new Set<string>();
+for (const e of journalNow()) {
+  if (e.type !== 'note' || e.kind !== HEARD_KIND || typeof e.data !== 'object' || e.data === null || Array.isArray(e.data)) continue;
+  const d = e.data as Partial<Heard>;
+  if (typeof d.service === 'string' && typeof d.sender === 'string' && d.how !== undefined && SPOKE_TO_ME.has(d.how)) dealings.add(`${d.service}:${d.sender}`);
+}
+const peerOn = (service: string) => (sender: { id: string }): boolean => dealings.has(`${service}:${sender.id}`);
+
 /** Every message a chat sensor takes is noted, for the table of who said what where (body/community.ts). Never its words: those are in the stimulus, when it was shown. */
 function heardOn(service: string): (m: ChatMessage, how: How) => void {
   return (m, how) => {
     if (m.sender === undefined) return;
+    if (SPOKE_TO_ME.has(how)) dealings.add(`${service}:${m.sender.id}`);
     appendEvent(journal, gen, { type: 'note', kind: HEARD_KIND, data: { service, id: m.id, place: m.place.replace(/\n/g, ' / '), where: m.where ?? m.place, sender: m.sender.id, name: m.sender.name, how } satisfies Heard });
   };
 }
@@ -302,7 +318,7 @@ const sensors: Sensor[] = [
     // No implicit binding: the owner chooses which API-verified account can speak for them.
     ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
     // Talk on the board is chat like any other: the same attention, the same hands, the same record of who is there.
-    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'),
+    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'), peer: peerOn('rayboard'),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => journalNow(),
@@ -340,7 +356,7 @@ const sensors: Sensor[] = [
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => journalNow(),
     ownerId: confirmedZulipOwnerId(journalNow(), zulipOwnerId), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
-    mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'),
+    mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'), peer: peerOn('zulip'),
     entered: (stream, members) => enter(journal, gen, journalNow(), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {

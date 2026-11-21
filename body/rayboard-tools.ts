@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { readEvents, type JournalEvent } from '../brain/journal';
-import { spokeIn } from './chat';
 import { MaybeSent, chatReply, register, type ChatService } from './chat-tools';
 import { RAYBOARD_LINE, rayboardCa, rayboardToken, rayboardUrl } from './rayboard';
 import type { Tool, ToolContext } from './tools';
@@ -79,15 +78,12 @@ export function rayboardServiceWith(o: Reach = {}): ChatService {
       if (to === undefined) throw new Error(`rayboard:${id} is not talk that can be answered where it was said; work in its task instead`);
       const posted = await call(o, 'post_message', { to, body: content, request_id: once(ctx, 'reply', id, content) }, 20_000, signal) as Row;
       if (!Number.isSafeInteger(posted.seq)) throw new MaybeSent('Rayboard reply: invalid receipt; read the conversation before retrying');
-      // The board does not show the agent its own messages: the chat layer is told here that it spoke, and to whom.
-      spokeIn('rayboard', String(n.subject), content);
       return String(posted.seq);
     },
     async send(ctx, to, content, signal) {
       const where = 'user' in to ? `@${to.user.replace(/^@/, '')}` : /^(#|T-)/.test(to.channel) ? to.channel : `#${to.channel}`;
       const posted = await call(o, 'post_message', { to: where, body: content, request_id: once(ctx, 'send', where, content) }, 20_000, signal) as Row;
       if (!Number.isSafeInteger(posted.seq)) throw new MaybeSent('Rayboard send: invalid receipt; read the conversation before retrying');
-      if ('channel' in to) spokeIn('rayboard', where, content);
       return String(posted.seq);
     },
     async history(_ctx, where) {
