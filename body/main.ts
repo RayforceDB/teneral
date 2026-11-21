@@ -10,7 +10,7 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
-import { glance, overheard, setDown } from '../heart/glance';
+import { decide, glance, overheard, setDown, unsettled } from '../heart/glance';
 import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -225,6 +225,14 @@ function heardOn(service: string): (m: ChatMessage, how: How) => void {
 }
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
+const glanceDeps = () => ({ journal, gen, provider: glanceProvider, who: soulHead, events: journalNow, emit });
+/** The glance being made beside a running turn, if one is. */
+let glancing: Promise<unknown> | null = null;
+function glanceBeside(): Promise<unknown> {
+  glancing ??= decide(glanceDeps()).then((decided) => { if (decided !== null) console.error(`[glance] overheard talk, beside the turn: ${decided}`); }).finally(() => { glancing = null; });
+  return glancing;
+}
+
 function emit(s: Stimulus): void {
   if (s.source === 'terminal') terminalPrompt.submitted();
   if (s.source === 'terminal' && heartCommand(s.text)) {
@@ -235,7 +243,11 @@ function emit(s: Stimulus): void {
   }
   if (s.overheard !== undefined && GLANCE) {
     // Talk that addressed nobody is set down and glanced at by the heart before a turn is spent on it (heart/glance.ts).
-    if (setDown(journal, gen, journalNow(), { ...s, overheard: s.overheard })) idleWake?.();
+    if (setDown(journal, gen, journalNow(), { ...s, overheard: s.overheard })) {
+      // While a turn runs the heart is not asked: the deciding is done beside it, so that what concerns the agent reaches that turn.
+      if (working && process.env.TENERAL_BACKGROUND !== 'serial') void glanceBeside();
+      idleWake?.();
+    }
     return;
   }
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
@@ -543,9 +555,11 @@ const heart = new Heart({
   events: () => journalNow(),
   born: () => clockMayTick(journalNow(), soulDir),
   emit,
-  overheard: () => GLANCE && overheard(journalNow()).length > 0,
+  overheard: () => GLANCE && (overheard(journalNow()).length > 0 || unsettled(journalNow()).length > 0),
   glance: async () => {
-    const decided = await glance({ journal, gen, provider: glanceProvider, who: soulHead, events: journalNow, emit });
+    // One that was begun beside the turn that has just ended is let finish: the same talk is not decided twice.
+    if (glancing !== null) await glancing;
+    const decided = await glance(glanceDeps());
     if (decided !== null) console.error(`[glance] overheard talk: ${decided}`);
   },
   settle: async () => {

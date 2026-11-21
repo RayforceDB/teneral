@@ -2,7 +2,7 @@ import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
 import { openCommunity, tieWord, type Community } from './community';
 import { memberOf, spokeIn, type Mode } from './chat';
-import { GLANCE_KIND } from '../heart/glance';
+import { SETTLED_KIND } from '../heart/glance';
 import { QUIET_REPLY } from '../brain/quiet';
 import type { Tool, ToolContext } from './tools';
 
@@ -449,9 +449,10 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
   const glanced = new Set<number>();
   let settling = 0;
   events.forEach((e, i) => {
-    if (e.type === 'note' && e.kind === GLANCE_KIND) {
-      const d = e.data as { verdict?: unknown; of?: unknown } | null;
-      settling = d?.verdict === 'ignore' && Array.isArray(d.of) ? d.of.length : 0;
+    if (e.type === 'note' && e.kind === SETTLED_KIND) {
+      // The note stands right before the talk it settles: that many of the stimuli that follow are no wakes.
+      const d = e.data as { of?: unknown } | null;
+      settling = Array.isArray(d?.of) ? d.of.length : 0;
     } else if (e.type === 'stimulus' && settling > 0) { glanced.add(i); settling -= 1; }
   });
   // Backwards from now: the newest wakes for this channel's talk first, until one that was answered.
