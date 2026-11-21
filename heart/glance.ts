@@ -19,6 +19,11 @@ import { agendaFor } from './coordinator';
 //           read it and had nothing to say. It stands in the conversation from then on, so the
 //           agent has it in front of it the next time anything wakes it.
 //
+// A glance may be made beside a turn that is running, so that talk which does concern the agent
+// reaches that turn and does not wait for its end. Only the deciding is done then: an ignore is
+// written into the conversation later, between turns (`settleIgnored`), because a reply set down in
+// the middle of a turn's steps would part its calls from their results.
+//
 // It fails open. A request that cannot be made, or an answer that is not plainly "ignore", is a
 // look: a glance may save a turn and must never cost a message. What addresses the agent, a
 // mention, a direct message, its owner's word, is never glanced at; it gets its turn.
@@ -27,6 +32,8 @@ import { agendaFor } from './coordinator';
 export const OVERHEARD_KIND = 'chat.overheard.v1';
 /** What a glance decided, of which overheard notes, and what it cost. */
 export const GLANCE_KIND = 'chat.glance.v1';
+/** The ignored talk of these overheard notes now stands in the conversation. */
+export const SETTLED_KIND = 'chat.glance.settled.v1';
 
 export interface Overheard { id: string; source: string; text: string; lines: string }
 
@@ -40,6 +47,38 @@ export function overheard(events: JournalEvent[]): Overheard[] {
     else if (e.kind === GLANCE_KIND && Array.isArray(d.of)) for (const id of d.of) if (typeof id === 'string') waiting.delete(id);
   }
   return [...waiting.values()];
+}
+
+/** Talk a glance ignored that does not stand in the conversation yet, oldest first. */
+export function unsettled(events: JournalEvent[]): Overheard[] {
+  const all = new Map<string, Overheard>();
+  const ignored = new Set<string>();
+  for (const e of events) {
+    if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null || Array.isArray(e.data)) continue;
+    const d = e.data as Record<string, unknown>;
+    const of = Array.isArray(d.of) ? d.of.filter((id): id is string => typeof id === 'string') : [];
+    if (e.kind === OVERHEARD_KIND && typeof d.source === 'string' && typeof d.text === 'string') all.set(e.id, { id: e.id, source: d.source, text: d.text, lines: typeof d.lines === 'string' ? d.lines : d.text });
+    else if (e.kind === GLANCE_KIND && d.verdict === 'ignore') for (const id of of) ignored.add(id);
+    else if (e.kind === SETTLED_KIND) for (const id of of) ignored.delete(id);
+  }
+  return [...ignored].flatMap(id => all.get(id) ?? []);
+}
+
+/**
+ * Writes what a glance ignored into the conversation, as a turn that read it and had nothing to
+ * say would have left it. Only between turns. Returns how many pieces it wrote.
+ */
+export function settleIgnored(journal: string, gen: string, events: JournalEvent[]): number {
+  const talk = unsettled(events);
+  if (talk.length === 0) return 0;
+  // Marked first: written twice, the talk would stand in the conversation twice.
+  appendEvent(journal, gen, { type: 'note', kind: SETTLED_KIND, data: { of: talk.map(t => t.id) } });
+  for (const t of talk) {
+    // The two are written in one go, so no turn is owed between them.
+    appendEvent(journal, gen, { type: 'stimulus', source: t.source, text: t.text });
+    appendEvent(journal, gen, { type: 'assistant', text: QUIET_REPLY, toolCalls: [] });
+  }
+  return talk.length;
 }
 
 /** Sets talk down as overheard, unless the same talk already waits: an adapter gives a message again when it cannot tell that it was taken. */
@@ -94,10 +133,11 @@ export interface GlanceDeps {
 }
 
 /**
- * Glances at everything overheard that waits, in one request, and journals what was decided.
+ * Decides, in one request, about everything overheard that waits, and journals the decision. A
+ * look is emitted at once; an ignore is only decided here (`settleIgnored`). May run beside a turn.
  * Returns the verdict, or null when nothing waited. Never throws: what cannot be glanced at is looked at.
  */
-export async function glance(d: GlanceDeps): Promise<'look' | 'ignore' | null> {
+export async function decide(d: GlanceDeps): Promise<'look' | 'ignore' | null> {
   const talk = overheard(d.events());
   if (talk.length === 0) return null;
   let decided: { verdict: 'look' | 'ignore'; why: string };
@@ -110,13 +150,14 @@ export async function glance(d: GlanceDeps): Promise<'look' | 'ignore' | null> {
     decided = { verdict: 'look', why: `the glance could not be made: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}` };
   }
   appendEvent(d.journal, d.gen, { type: 'note', kind: GLANCE_KIND, data: { of: talk.map(t => t.id), ...decided, ...(usage === undefined ? {} : { usage: { ...usage } }) } });
-  for (const t of talk) {
-    if (decided.verdict === 'look') d.emit({ source: t.source, text: t.text });
-    else {
-      // As a turn that read it and had nothing to say would have left it. The two are written in one go, so no turn is owed between them.
-      appendEvent(d.journal, d.gen, { type: 'stimulus', source: t.source, text: t.text });
-      appendEvent(d.journal, d.gen, { type: 'assistant', text: QUIET_REPLY, toolCalls: [] });
-    }
-  }
+  if (decided.verdict === 'look') for (const t of talk) d.emit({ source: t.source, text: t.text });
   return decided.verdict;
+}
+
+/** The whole of it, between turns: what was ignored earlier is written down, what waits is decided, and what that ignored is written down too. */
+export async function glance(d: GlanceDeps): Promise<'look' | 'ignore' | null> {
+  settleIgnored(d.journal, d.gen, d.events());
+  const decided = await decide(d);
+  if (decided === 'ignore') settleIgnored(d.journal, d.gen, d.events());
+  return decided;
 }

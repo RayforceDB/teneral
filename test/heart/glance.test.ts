@@ -8,7 +8,9 @@ import type { ChatMessage, Provider } from '../../brain/provider';
 import { QUIET_REPLY } from '../../brain/quiet';
 import type { Stimulus } from '../../body/sensors';
 import { Heart } from '../../heart/coordinator';
-import { GLANCE_KIND, GLANCE_SYSTEM, glance, overheard, setDown, verdictOf } from '../../heart/glance';
+import { GLANCE_KIND, GLANCE_SYSTEM, decide, glance, overheard, setDown, settleIgnored, unsettled, verdictOf } from '../../heart/glance';
+import { QUIET_RUN, modeOf } from '../../body/chat-tools';
+import { memberOf } from '../../body/chat';
 
 const TALK: Stimulus & { overheard: string } = {
   source: 'agent:parley',
@@ -83,6 +85,38 @@ test('talk that does not is settled as nothing to say: it stands in the conversa
   expect(needsTurn(l.events())).toBe(false);
   expect(overheard(l.events())).toHaveLength(0);
   expect(await l.run()).toBeNull();
+});
+
+test('beside a running turn an ignore is only decided: it is written into the conversation between turns, once', async () => {
+  const l = life(() => 'IGNORE: nothing to do with the gates');
+  setDown(l.journal, 'g', l.events(), TALK);
+  const before = l.events().filter(e => e.type !== 'note').length;
+  const deps = { journal: l.journal, gen: 'g', provider: l.provider, who: () => '', events: l.events, emit: l.emit };
+  expect(await decide(deps)).toBe('ignore');
+  // Nothing but notes was added: no reply stands among the steps of the turn that is running.
+  expect(l.events().filter(e => e.type !== 'note').length).toBe(before);
+  expect(overheard(l.events())).toHaveLength(0);
+  expect(unsettled(l.events())).toHaveLength(1);
+  // Between turns it is settled, with no second request.
+  expect(await glance(deps)).toBeNull();
+  expect(l.asked).toHaveLength(1);
+  expect(unsettled(l.events())).toHaveLength(0);
+  expect(l.events().slice(-2).map(e => e.type)).toEqual(['stimulus', 'assistant']);
+  expect(settleIgnored(l.journal, 'g', l.events())).toBe(0);
+});
+
+test('what a glance ignored is no silent wake: a channel does not go to mentions for it', async () => {
+  const l = life(() => 'IGNORE: chatter');
+  const channel = { id: 'c1', name: '#build' };
+  const talk = (n: number) => ({ ...TALK, text: `Parley room ${n}\nthis is talk in ${memberOf(channel.name)}, shown once it paused.\nline ${n}` });
+  for (let n = 0; n < QUIET_RUN + 2; n++) { setDown(l.journal, 'g', l.events(), talk(n)); await l.run(); }
+  expect(modeOf(l.events(), 'parley', channel)).toEqual({ mode: 'ambient', why: 'default' });
+  // The same talk answered with silence by turns of its own does send it there.
+  for (let n = 0; n < QUIET_RUN; n++) {
+    appendEvent(l.journal, 'g', { type: 'stimulus', source: 'agent:parley', text: talk(100 + n).text });
+    appendEvent(l.journal, 'g', { type: 'assistant', text: QUIET_REPLY, toolCalls: [] });
+  }
+  expect(modeOf(l.events(), 'parley', channel)).toEqual({ mode: 'mentions', why: 'quiet' });
 });
 
 test('a glance that cannot be made, or that answers anything else, costs no message: it is a look', async () => {

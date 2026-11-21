@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { JournalEvent } from '../../brain/journal';
 import { cacheUse } from '../../keeper/tui/view';
-import { LOOKING_AHEAD, REMEMBERING, formatUsage, memoryLine, share, usageReport } from '../../keeper/usage';
+import { GLANCING, LOOKING_AHEAD, REMEMBERING, formatUsage, memoryLine, share, usageReport } from '../../keeper/usage';
 
 const NOW = Date.parse('2027-01-15T12:00:00Z');
 const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -56,6 +56,20 @@ test('usage separates looking ahead from forming memories, and other notes with 
   const shown = formatUsage(r).join('\n');
   expect(shown).toContain(REMEMBERING);
   expect(shown).toContain(LOOKING_AHEAD);
+});
+
+test('a glance at overheard talk is counted, under a row of its own', () => {
+  const glanced = (minutesAgo: number, verdict: string, usage: unknown): JournalEvent => ev({ type: 'note', kind: 'chat.glance.v1', data: { of: ['x'], verdict, why: '', usage }, ts: at(minutesAgo), gen: 'g2' });
+  const events = [
+    said('terminal', 30), reply(29, { input: 1000, output: 10 }),
+    glanced(20, 'ignore', { input: 900, output: 6 }), glanced(10, 'look', { input: 950, output: 8, cached: 800 }),
+    // One that could not be made carries no usage.
+    glanced(5, 'look', undefined),
+  ];
+  const r = usageReport(events, NOW, 'g2');
+  expect(r.spans[0]!.spent).toEqual({ requests: 3, input: 2850, cached: 800, output: 24 });
+  expect(Object.fromEntries(r.sources.map((s) => [s.name, s.spent]))[GLANCING]).toEqual({ requests: 2, input: 1850, cached: 800, output: 14 });
+  expect(formatUsage(r).join('\n')).toContain(GLANCING);
 });
 
 test('the report says how the memory stands: what is remembered, what waits, what could not be, and what is held', () => {

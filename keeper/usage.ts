@@ -6,6 +6,7 @@ import { known } from '../brain/known';
 import { health } from '../brain/health';
 import { rate } from '../brain/exam';
 import { SUBAGENT_KIND } from '../brain/agenda';
+import { GLANCE_KIND } from '../heart/glance';
 
 export interface Spent {
   requests: number;
@@ -28,6 +29,8 @@ export const REMEMBERING = 'remembering';
 export const LOOKING_AHEAD = 'looking ahead';
 /** And for what the agent's subagents cost. */
 export const SUBAGENTS = 'subagents';
+/** And the glances at talk that addressed nobody, each a small request made before, or in place of, a turn (heart/glance.ts). */
+export const GLANCING = 'glancing';
 
 export interface UsageReport {
   /** By span of time, the widest last. */
@@ -84,7 +87,8 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
     const memory = e.type === 'note' && typeof f.kind === 'string' && f.kind.startsWith('memory.') && typeof f.data === 'object' && f.data !== null;
     // And a subagent (body/subagents.ts): the note of its end carries all that its requests cost, which no turn of the agent's shows.
     const subagent = e.type === 'note' && f.kind === SUBAGENT_KIND && typeof f.data === 'object' && f.data !== null && (f.data as Record<string, unknown>).state === 'ended';
-    const told = memory || subagent ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
+    const glanced = e.type === 'note' && f.kind === GLANCE_KIND && typeof f.data === 'object' && f.data !== null;
+    const told = memory || subagent || glanced ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
     if (typeof told !== 'object' || told === null) continue;
     const u = told as Record<string, unknown>;
     const input = count(u.input);
@@ -97,7 +101,7 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       if (inSpan) add(span.spent, input, cached, output, requests);
     }
     if (Number.isFinite(at) && at >= now - 24 * HOUR) {
-      const name = subagent ? SUBAGENTS : memory ? (f.kind === 'memory.reflection.v1' ? LOOKING_AHEAD : REMEMBERING) : source;
+      const name = glanced ? GLANCING : subagent ? SUBAGENTS : memory ? (f.kind === 'memory.reflection.v1' ? LOOKING_AHEAD : REMEMBERING) : source;
       if (!sources.has(name)) sources.set(name, NONE());
       add(sources.get(name)!, input, cached, output, requests);
     }
