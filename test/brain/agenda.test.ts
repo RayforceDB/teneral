@@ -347,6 +347,10 @@ test('what a turn leaves is read from a strict form: steps to take now, what wai
     done: [{ mark: 'Iaaaa1111', how: 'Shipped it' }, { mark: 'Ibbbb2222', how: 'No longer wanted', ended: 'dropped' }],
   });
   // No more than three of either: a turn that leaves more was not one turn's work.
+  // What follows something of the agent's own names it by its mark: it is taken up when that one is closed.
+  expect(parseSettle('Waiting:\n- [after I1a2b3c4] Go back to the Rayforce tasks => Read the board and take the first open task')).toEqual({
+    next: [], done: [], waiting: [{ text: 'Go back to the Rayforce tasks', step: 'Read the board and take the first open task', after: 'I1a2b3c4' }],
+  });
   expect(parseSettle('Nothing')).toEqual({ next: [], waiting: [], done: [] });
   expect(parseSettle('**Nothing.**')).toEqual({ next: [], waiting: [], done: [] });
   expect(parseSettle('I think everything is fine.')).toHaveProperty('problem');

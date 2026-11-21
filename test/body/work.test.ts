@@ -182,6 +182,37 @@ test('the time the agent set to look again wakes it when it comes, once, and the
   } finally { rmSync(s.dir, { recursive: true }); }
 });
 
+test('what was to come after a commitment is on the agenda from the start, and the agent is woken to take it when that one is closed', async () => {
+  const s = setup();
+  try {
+    const T0 = Date.parse('2026-11-21T12:00:00Z');
+    await work.run({ status: 'waiting', task: 'Finish the skill task with the others', next: 'Wait for the review of the implementation' }, s.ctx);
+    const first = item(s.journal, 'Finish the skill task with the others')!;
+    // "finish this, then go back to that": the second is set down when the first is taken on.
+    expect(String(await work.run({ status: 'waiting', task: 'Go back to the Rayforce tasks', next: 'Read the board and take the first open task', after: first.mark }, s.ctx)))
+      .toContain(`You are woken to take it when ${first.mark} is closed.`);
+    const second = item(s.journal, 'Go back to the Rayforce tasks')!;
+    expect(second.work).toMatchObject({ status: 'waiting', after: first.id });
+    expect(knownText(known(readEvents(s.journal)), '2026-11-21', '[memory]')).toContain(`to be taken up when ${first.mark} is closed`);
+    // While the first is open nothing is due and nothing is told.
+    expect(workDueAt(readEvents(s.journal), T0)).toBeUndefined();
+    expect(dueWork(s.journal, 'g1', T0)).toBeNull();
+    // It is closed: the second is due at once, told once, and from then on is ordinary ready work.
+    await work.run({ status: 'done', task: first.mark, next: 'Merged and adopted.' }, s.ctx);
+    expect(workDueAt(readEvents(s.journal), T0)).toBe(T0);
+    const told = dueWork(s.journal, 'g1', T0)!;
+    expect(told.source).toBe('work');
+    expect(told.text).toContain(`What ${second.mark} was to come after is closed, so it is its turn now.`);
+    expect(told.text).toContain('Task: Go back to the Rayforce tasks Step: Read the board and take the first open task');
+    expect(item(s.journal, 'Go back to the Rayforce tasks')!.work).toMatchObject({ status: 'queued' });
+    expect(item(s.journal, 'Go back to the Rayforce tasks')!.work!.after).toBeUndefined();
+    expect(dueWork(s.journal, 'g1', T0)).toBeNull();
+    // What it names must be open, another, and it goes with waiting.
+    await expect(work.run({ status: 'waiting', task: 'Third thing to do', next: 'x step', after: 'I00000000' }, s.ctx)).rejects.toThrow('no open commitment has the mark');
+    await expect(work.run({ status: 'queued', task: 'Third thing to do', next: 'x step', after: second.mark }, s.ctx)).rejects.toThrow('after goes with waiting');
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
 test('the time of the next thing due is the earliest that the scheduler would take, and none when nothing waits for a time', async () => {
   const s = setup();
   try {

@@ -535,7 +535,7 @@ export interface Left {
   /** Ready now: a new commitment, or by its mark one already held, with its first step. */
   next: { mark?: string; text: string; step: string }[];
   /** Waiting: for what, and in how many minutes to look again when nothing will announce it. */
-  waiting: { mark?: string; text: string; step: string; minutes?: number }[];
+  waiting: { mark?: string; text: string; step: string; minutes?: number; after?: string }[];
   done: Looked['done'];
 }
 
@@ -545,6 +545,7 @@ export function settleQuestion(cut = false): string {
     `${MEMORY_MARK} Your turn has just ended${cut ? ', stopped by the limit of rounds in one turn and not by you' : ''}. Before you rest, settle what it leaves behind, so that nothing you began or promised is held only by this conversation. `
     + 'Look at what was asked in it, at what you did and said, and at what you mean to do, listed above.',
     'Is what was asked finished, as the one who asked would judge it? If a step remains that you can take now, without anyone\'s word, name it under Next: you are woken at once to take it. '
+    + 'When what was asked held more than one thing, or something to go on to afterwards ("finish this, then go back to that"), each is a commitment of its own: the later one is set down as well, under Next when it can begin now, and otherwise under Waiting with [after <mark>], the mark of what comes before it. You are then woken to take it when that one is closed, and it is not forgotten with it. '
     + 'If it waits for something, name that under Waiting. If something in your list above was settled in this turn, close it under Done.'
     + (cut ? ' If you were still getting somewhere when you were stopped, the step you were on goes under Next; if you were going round in circles, say under Waiting what stops you, for your owner.' : ''),
     'Only what this turn began, promised or settled. To change something already in your list above, begin the line with its mark and do not set it down again in other words. '
@@ -553,7 +554,8 @@ export function settleQuestion(cut = false): string {
     'Next:\n- <the commitment, in a sentence that can be understood on its own> => <the concrete step you take first>\n- I1a2b3c4 => <the next step of something already in your list>',
     'Waiting:\n- [owner] <the commitment> => <what you need from your owner before you can go on>\n- [arrives] <the commitment> => <the message, review or notification it waits for>\n'
     + '- [45m] <the commitment> => <what you will go and look at then; m, h or d>\n- I1a2b3c4 [2h] => <the same, for something already in your list>\n'
-    + 'In the brackets: owner or arrives when you will be told, and nothing is to be looked at meanwhile; a time only when nothing will tell you and you must go and look.',
+    + '- [after I1a2b3c4] <the commitment that follows that one> => <its first step, taken when that one is closed>\n'
+    + 'In the brackets: owner or arrives when you will be told, and nothing is to be looked at meanwhile; a time only when nothing will tell you and you must go and look; after and a mark when it follows something of your own.',
     'Done:\n- I1a2b3c4 [done] <how it ended>\n- I1a2b3c4 [dropped] <why it is given up>',
   ].join('\n\n');
 }
@@ -594,7 +596,9 @@ export function parseSettle(reply: string): Left | { problem: string } {
     else if (list === 'waiting' && found.waiting.length < SETTLE_MAX) {
       const time = /^(\d{1,4})\s*(m|min|h|d)\w*$/.exec(tag);
       const minutes = time === null ? undefined : Math.min(60 * 24 * 30, Math.max(1, Number(time[1]) * (time[2] === 'h' ? 60 : time[2] === 'd' ? 1440 : 1)));
-      found.waiting.push({ ...mark, text, step, ...(minutes === undefined ? {} : { minutes }) });
+      // [after I1a2b3c4]: it comes after another commitment, and is taken up when that one is closed.
+      const after = /^after\s+(I[0-9a-zA-Z]{4,8})$/i.exec(tagged?.[1]?.trim() ?? '')?.[1];
+      found.waiting.push({ ...mark, text, step, ...(minutes === undefined ? {} : { minutes }), ...(after === undefined ? {} : { after }) });
     }
   }
   return headed ? found : { problem: 'it had none of the lists "Next:", "Waiting:", "Done:" and was not the one word "Nothing"' };
@@ -629,13 +633,15 @@ export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.no
     if (!('problem' in left)) {
       const open = (mark: string | undefined): Intention | undefined => (mark === undefined ? undefined : held.intentions.find((i) => i.mark === mark && !i.waits));
       const said = new Set(held.intentions.map((i) => i.text));
-      const record = (item: Left['next'][number], status: WorkState['status'], minutes?: number): boolean => {
+      const record = (item: Left['next'][number], status: WorkState['status'], minutes?: number, after?: string): boolean => {
         const old = open(item.mark);
         // A mark that names nothing open, or words already held, sets nothing down.
         if (old === undefined && (item.mark !== undefined || said.has(item.text))) return false;
         const attempts = old?.work !== undefined && old.work.next === item.step && old.work.status === status ? old.work.attempts : 0;
-        const { at: _, checkAt: __, ...kept } = old?.work ?? ({} as Partial<WorkState>);
-        const work: WorkState = { ...kept, status, next: item.step, attempts, resumeAt: now, ...(status === 'waiting' && minutes !== undefined ? { checkAt: now + minutes * 60_000 } : {}) };
+        const { at: _, checkAt: __, after: ___, ...kept } = old?.work ?? ({} as Partial<WorkState>);
+        // What it comes after must be open and another: one that is already closed leaves this ready, which is said by Next, not here.
+        const first = after === undefined ? undefined : held.intentions.find((i) => i.mark === after && i.id !== old?.id && !ended.has(i.id));
+        const work: WorkState = { ...kept, status, next: item.step, attempts, resumeAt: now, ...(status === 'waiting' && minutes !== undefined ? { checkAt: now + minutes * 60_000 } : {}), ...(status === 'waiting' && first !== undefined ? { after: first.id } : {}) };
         if (old === undefined) {
           said.add(item.text);
           put(d, { type: 'note', kind: INTENTION_KIND, data: { text: item.text, work } });
@@ -654,7 +660,7 @@ export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.no
       }
       const live = <T extends { mark?: string }>(items: T[]): T[] => items.filter((item) => !ended.has(open(item.mark)?.id ?? ''));
       const next = live(left.next).filter((item) => record(item, 'queued')).length;
-      const waiting = live(left.waiting).filter((item) => record(item, 'waiting', item.minutes)).length;
+      const waiting = live(left.waiting).filter((item) => record(item, 'waiting', item.minutes, item.after)).length;
       put(d, { type: 'note', kind: SETTLE_KIND, data: { next, waiting, closed, ...(usage ? { usage } : {}) } });
       return 'reflected';
     }
