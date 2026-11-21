@@ -8,9 +8,14 @@ WORKDIR /teneral
 # source when the agent works on a patch for it: clang with its sanitizer runtimes, and make.
 # openssh-client for ssh-keygen alone: the individual's signing key and its signatures (species/offerkey.ts).
 # gh for the agent's own work on GitHub: pull requests, issues, reviews (below).
+# chromium, with one family of fonts so that a page has letters, is the agent's own browser: for the
+# pages a person would open by hand, such as signing in to an account its owner made for it. It has
+# no window, and is started with --no-sandbox: its own sandbox needs privileges this container is
+# run without, and the container is what confines it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates procps \
     curl tar gzip clang libclang-rt-dev libc6-dev make openssh-client gh \
+    chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 # The agent's git and gh sign in to github.com with the token its owner stored (./one offer token):
