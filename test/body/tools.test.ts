@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bashEnv, runBash, TOOLS, type ToolContext } from '../../body/tools';
+import { SKILL_TOOLS } from '../../body/skill-tools';
 import { MAX_HOPS, archive, collect, deliver } from '../../body/envelope';
 import { git } from '../../immune/gates';
 import { readEvents } from '../../brain/journal';
@@ -25,7 +26,7 @@ function context(workspace: string, gen = 'gen'): ToolContext {
 }
 
 test('the seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'chat_attention', 'chat_edit', 'chat_fetch', 'chat_history', 'chat_places', 'chat_react', 'chat_reply', 'chat_send', 'community', 'contact', 'done', 'edit', 'forget', 'intend', 'jobs', 'know', 'lesson', 'look', 'lsp', 'mutate', 'open', 'rayboard_reply', 'read', 'recall', 'send', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
+  expect([...TOOLS, ...SKILL_TOOLS].map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'chat_attention', 'chat_edit', 'chat_fetch', 'chat_history', 'chat_places', 'chat_react', 'chat_reply', 'chat_send', 'community', 'contact', 'done', 'edit', 'forget', 'intend', 'jobs', 'know', 'lesson', 'look', 'lsp', 'mutate', 'open', 'rayboard_reply', 'read', 'recall', 'send', 'skill', 'skill_outcome', 'skill_search', 'skill_show', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
 });
 
 test('write creates parent directories and read returns the content', async () => {

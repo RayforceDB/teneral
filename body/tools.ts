@@ -17,6 +17,7 @@ import { journalPast, shown, timeline as timelineOf, when, type Past } from '../
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
 import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessons } from '../brain/lessons';
+import type { SkillRegistry } from '../brain/skills';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
 import { jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
@@ -42,6 +43,10 @@ export interface ToolContext {
   events?: () => JournalEvent[];
   /** Who said what where, laid out for asking (body/community.ts). A context without it goes through the journal's notes. */
   community?: Community;
+  /** Immutable know-how packages in Rayforce, when the database is available. */
+  skills?: SkillRegistry | null;
+  /** Actual exposed tool names, used to verify package dependencies without granting them. */
+  toolNames?: string[];
 }
 
 export interface Tool {
