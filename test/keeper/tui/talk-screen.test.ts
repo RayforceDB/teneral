@@ -1701,15 +1701,33 @@ test('paging holds an old conversation still while output waits, then returns to
 test('an action that holds something for the owner says so, and Down goes onto it first', () => {
   const s = stage(110, 40);
   settled(s);
+  git(s.p.root, 'init', '-q', '-b', 'main');
+  writeFiles(s.p.root, { '.gitignore': '.teneral\nmemory\nsoul\n', 'stem/k.ts': 'export const k = 1;\n' });
+  const waiting = commitAll(s.p.root, 'a stem change');
+  const short = waiting.slice(0, 12);
   mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
-  writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: 'e5f6a7b'.padEnd(40, '0') }));
+  writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: waiting }));
   s.clock.at = 60_000;
-  expect(s.live().split('\n').at(-1)).toMatch(/mutate +approve e5f6a7b00000( |$)/);
+  expect(s.live().split('\n').at(-1)).toMatch(new RegExp(`mutate +approve ${short}( |$)`));
   s.type('\x1b[B');
   s.type('\r');
-  expect(s.live()).toContain('▸ approve e5f6a7b00000 ');
+  expect(s.live()).toContain(`▸ approve ${short} `);
   expect(s.live()).toContain('let the waiting mutation through');
   s.type('\x1b');
   s.app.settleKeys();
   expect(s.live().split('\n').at(-1)).toContain('←→  move');
+
+  // Approved from the menu: at once it reads as approved and on its way, and is not offered again.
+  s.type('\r');
+  s.type('\r');
+  s.app.settleKeys();
+  s.frame();
+  const bar = s.live().split('\n').at(-1)!;
+  expect(bar).toMatch(new RegExp(`mutate +approved ${short} . in progress`));
+  expect(bar).not.toContain(`approve ${short}`);
+  s.type('\x1b[B');
+  s.type('\r');
+  expect(s.live()).toContain(`approved ${short}`);
+  expect(s.live()).toContain('nothing more is needed from you');
+  expect(s.live()).not.toContain('let the waiting mutation through');
 });

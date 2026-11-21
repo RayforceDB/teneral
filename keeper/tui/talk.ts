@@ -57,6 +57,8 @@ const TIP_MS = 20_000;
 const STALE_PULSE_MS = 120_000;
 /** How often the status line works out anew how the memory stands. */
 const MEMORY_BADGE_MS = 30_000;
+/** How long something the owner said yes to is shown as on its way, when nothing says sooner that it arrived or failed. */
+const IN_PROGRESS_MS = 15 * 60_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
 /** One thing a menu offers: what it is called, what it does, and the command line it stands for; null for a line that only says something. */
 interface MenuItem { name: string; about: string; run: string | null }
@@ -252,6 +254,10 @@ export class TalkScreen {
   private offersUnsent = 0;
   /** The mutation that waits for the owner's approval, by the start of its commit; empty when none does. */
   private mutationWaiting = '';
+  /** The commit the owner approved a little while ago that is not the running generation yet: it is on its way through the checks, and there is nothing left to approve. */
+  private mutationPassing = '';
+  /** When the owner last had the species' update taken: until it shows as a mutation or the species has nothing new, it is on its way. */
+  private updateTakenAt = 0;
   /** Commits the species has that the lineage has not taken, as this install last heard: a mutation proposed from outside. */
   private speciesAhead = 0;
   /** The action the keys are on, while they are on the row of actions under the footer; null while they are in the input. */
@@ -542,6 +548,13 @@ export class TalkScreen {
     this.page(thoughts.length === 1 ? 'what it thought' : `what it thought, in ${thoughts.length} stretches`, thoughts.flatMap((e, i) => [...(i > 0 ? [''] : []), ...(e as { text: string }).text.split('\n')]));
   }
 
+  /** The owner just changed what waits for them: what the actions say of it is read again at once, not at its usual interval, so that nothing already answered is offered a second time. */
+  private restate(): void {
+    this.publishedAt = 0;
+    this.menu = null;
+    this.dirty = true;
+  }
+
   /** Send every line that was kept, in the order it was typed. */
   private sendQueued(): void {
     for (const line of this.queue.splice(0)) {
@@ -715,16 +728,22 @@ export class TalkScreen {
    */
   private actions(): Action[] {
     const waits = this.mutationWaiting;
-    const ahead = this.speciesAhead;
+    // What the owner already said yes to and is still on its way: shown as that, and not offered again.
+    const passing = this.mutationPassing;
+    const taking = this.updateTakenAt !== 0;
+    const ahead = passing !== '' ? 0 : this.speciesAhead;
     return [
       {
-        label: 'mutate', icon: 'mutate', tone: 'amber', note: waits !== '' ? `approve ${waits.slice(0, SHORT)}` : ahead > 0 ? `update ${this.g.sep} ${ahead} new` : '', hot: waits !== '' || ahead > 0,
+        label: 'mutate', icon: 'mutate', tone: 'amber', hot: waits !== '' || (ahead > 0 && !taking),
+        note: waits !== '' ? `approve ${waits.slice(0, SHORT)}` : passing !== '' ? `approved ${passing.slice(0, SHORT)} ${this.g.sep} in progress` : taking ? `update ${this.g.sep} in progress` : ahead > 0 ? `update ${this.g.sep} ${ahead} new` : '',
         items: () => [
-          ...(waits === '' && ahead === 0 ? [{ name: 'nothing waits', about: 'no mutation waits for your approval, and the species has nothing new', run: null }] : []),
+          ...(waits === '' && passing === '' && ahead === 0 ? [{ name: 'nothing waits', about: 'no mutation waits for your approval, and the species has nothing new', run: null }] : []),
           ...(waits === '' ? [] : [{ name: `approve ${waits.slice(0, SHORT)}`, about: 'let the waiting mutation through; the agent is told to ask again', run: `/approve ${waits}` }]),
+          ...(passing === '' ? [] : [{ name: `approved ${passing.slice(0, SHORT)}`, about: 'you said yes; it is being checked, and nothing more is needed from you', run: null }]),
           // From outside: what the species has that this lineage has not taken. From inside: what the agent asked for, above.
           ...(ahead === 0 ? [] : [
-            { name: 'take the update', about: `have the agent merge the species' ${ahead} new ${ahead === 1 ? 'commit' : 'commits'}, test and ask to mutate`, run: '/update take' },
+            taking ? { name: 'the update is being taken', about: 'the agent merges and tests it, then asks to mutate; what lies outside its body will wait for your approval', run: null }
+              : { name: 'take the update', about: `have the agent merge the species' ${ahead} new ${ahead === 1 ? 'commit' : 'commits'}, test and ask to mutate`, run: '/update take' },
             { name: 'what it brings', about: 'the changes the species has that the agent has not taken', run: '/update' },
           ]),
           { name: 'generations', about: 'the generations this individual has lived in', run: '/generations' },
@@ -1040,12 +1059,15 @@ export class TalkScreen {
       case '/update':
       case '/publish': {
         const lines = clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n');
+        if (name === '/update' && arg.trim() === 'take') this.updateTakenAt = this.now();
+        this.restate();
         return lines.length === 1 ? this.say(lines[0]!) : this.page(name === '/update' ? 'the species' : 'publishing', lines);
       }
       case '/offers':
       case '/approve': {
         // The owner's word to the stem (immune/approval.ts) or about what goes out (species/offer.ts). The agent is not told by the command itself.
         const lines = clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n');
+        this.restate();
         return name === '/approve' && lines.length === 1 ? this.say(lines[0]!) : this.page(name === '/offers' ? 'waiting for your approval' : 'approval', lines);
       }
       default:
@@ -1256,8 +1278,16 @@ export class TalkScreen {
       try { this.speciesAhead = speciesUpdate(install(this.o.paths.root))?.ahead ?? 0; } catch { this.speciesAhead = 0; }
       try {
         const approval = readApproval(this.o.paths.root);
-        this.mutationWaiting = approval.asked !== undefined && approval.asked !== approval.approved ? approval.asked.slice(0, 12) : '';
-      } catch { this.mutationWaiting = ''; }
+        // The owner's yes from this client lies in their directory until the stem takes it, when the agent next asks: from then on the stem's own record says it.
+        let given: string[] = [];
+        try { given = readdirSync(this.o.paths.owner).filter((name) => name.endsWith('.mutation')).map((name) => readFileSync(join(this.o.paths.owner, name), 'utf8').trim()); } catch { /* none given */ }
+        const asked = approval.asked !== undefined && approval.asked !== approval.approved ? approval.asked : '';
+        const since = approval.at === undefined ? NaN : now - Date.parse(approval.at);
+        const taken = asked === '' && approval.approved !== undefined && approval.approved !== s.current && since >= 0 && since < IN_PROGRESS_MS ? approval.approved : '';
+        this.mutationWaiting = asked !== '' && !given.includes(asked) ? asked.slice(0, 12) : '';
+        this.mutationPassing = (asked !== '' && given.includes(asked) ? asked : taken).slice(0, 12);
+      } catch { this.mutationWaiting = ''; this.mutationPassing = ''; }
+      if (this.mutationWaiting !== '' || this.mutationPassing !== '' || this.speciesAhead === 0 || now - this.updateTakenAt >= IN_PROGRESS_MS) this.updateTakenAt = 0;
     }
     const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
@@ -1268,7 +1298,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.subagents.map(a => `${a.name}:${a.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.subagents.map(a => `${a.name}:${a.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.speciesAhead}:${this.mutationWaiting}:${this.mutationPassing}:${this.updateTakenAt}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
