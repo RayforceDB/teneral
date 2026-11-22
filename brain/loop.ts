@@ -131,7 +131,9 @@ export function noOpCall(call: { name: string; args: unknown }): boolean {
 export const NO_OP_RESULT = 'Not run: this call does nothing. A turn ends with a reply that has no tool call in it; on a clock turn with nothing to do, that reply is exactly ' + QUIET_REPLY + '. A second round of calls like this ends the turn for you.';
 
 export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
-  const stimulus = d.signal?.aborted ? undefined : readEvents(d.journal).findLast((e): e is Extract<JournalEvent, { type: 'stimulus' }> => e.type === 'stimulus');
+  // The thing just said, asked of the past where the turn has one: the journal is not read through for it.
+  const said = d.signal?.aborted ? undefined : d.ctx.past !== undefined ? d.ctx.past.latest('stimulus') ?? undefined : readEvents(d.journal).findLast((e) => e.type === 'stimulus');
+  const stimulus = said?.type === 'stimulus' ? said : undefined;
   const typing = d.onTyping?.(stimulus);
   typing?.(true);
   try {

@@ -29,7 +29,7 @@ import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
 import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
-import { openServedPast } from '../brain/past';
+import { openServedPast, sourceOf } from '../brain/past';
 import { chooseReminder, lately } from '../brain/reminded';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
@@ -418,7 +418,7 @@ const sensors: Sensor[] = [
       // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
       // holds this checkpoint back. One note replaces all feed cursors for a repository atomically;
       // a crash before it repeats stimuli, whose ids suppress duplicates after restart.
-      const pending = journalNow().findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND && typeof e.data === 'object' && e.data !== null && !Array.isArray(e.data) && 'repository' in e.data && e.data.repository === repository);
+      const pending = past.notes([GITHUB_CURSOR_KIND]).findLast(e => e.type === 'note' && typeof e.data === 'object' && e.data !== null && !Array.isArray(e.data) && 'repository' in e.data && e.data.repository === repository);
       if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
       appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
     },
@@ -448,7 +448,7 @@ const sensors: Sensor[] = [
     entered: (stream, members) => enter(journal, gen, journalNow(), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
-      const pending = journalNow().findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
+      const pending = past.latest('note', ZULIP_QUEUE_CURSOR_KIND);
       if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
       appendEvent(journal, gen, { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: cursor });
     },
@@ -463,7 +463,7 @@ const sensors: Sensor[] = [
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
   // Any wake except the owner's terminal/birth may settle quietly. Keep streamed markers out of the terminal.
-  const quietTick = mayStayQuiet(journalNow().findLast(e => e.type === 'stimulus')?.source);
+  const quietTick = mayStayQuiet(sourceOf(past.latest('stimulus')));
   const genericTyping = typingFor(workspace);
   const ownerBefore = ownerArrived;
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.

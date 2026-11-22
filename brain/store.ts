@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { JournalEvent } from './journal';
-import { eventChars } from './episodes';
+import { eventChars, shownChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
 import { CURRENT_NOTES, currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
 
@@ -27,7 +27,7 @@ import { CURRENT_NOTES, currentMemoryIds, documentOf, postings, type Index, type
 // for a body that is no longer the one running, and one that is rolled back to builds its own again.
 
 /** The version of the layout below. It is in the directory's name: see `storeDir`. */
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 3;
 
 /** Where the store of a journal lies: beside it, in a directory of its own. */
 export function storeDir(journal: string): string {
@@ -46,7 +46,7 @@ export function dropOtherStores(journal: string): void {
 
 /** The tables: the name of each in the directory, the name it is bound to in the database, and its columns. */
 const TABLES = {
-  events: { bound: 'mem_events', columns: ['id', 'ts', 'type', 'source', 'off', 'next', 'chars', 'said', 'line'] },
+  events: { bound: 'mem_events', columns: ['seq', 'id', 'ts', 'type', 'source', 'off', 'next', 'chars', 'shown', 'calls', 'said', 'line'] },
   terms: { bound: 'mem_terms', columns: ['term', 'doc', 'kind', 'w'] },
 } as const;
 type TableName = keyof typeof TABLES;
@@ -137,6 +137,8 @@ export interface Store {
   read(off: number): JournalEvent | null;
   /** The events whose lines begin at byte `from` or after it and before byte `to`, in the journal's order. */
   stretch(from: number, to: number): JournalEvent[];
+  /** The newest event of this type, and of this source when one is given (for a stimulus where it came from, for a note its kind, for a call of a tool its name); null when there is none. */
+  latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in the journal's order: `kinds` are names written in this repository, never anything that arrived. */
   noted(kinds: readonly string[]): JournalEvent[];
   /** How many notes of these kinds there are: what changes when there is something new to read of them. */
@@ -264,10 +266,10 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
         batch.push({ line: lines[to]!, ns: next.ns });
         to += 1;
       }
-      const made = { events: rowsOf(batch), terms: termsOf(batch) };
+      const made = { events: rowsOf(batch, rows), terms: termsOf(batch) };
       if (!mounted) {
         // The first day there is: empty tables of the right columns are written for it, and they are what is mounted.
-        const none = { events: rowsOf([]), terms: termsOf([]) };
+        const none = { events: rowsOf([], 0), terms: termsOf([]) };
         for (const name of NAMES) {
           ray.bind(BATCH, none[name]);
           ray.run(`(.db.splayed.set ${partition(day, name)} ${BATCH} ${symbols} ${SAVED})`);
@@ -344,6 +346,14 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     stretch(from, to) {
       if (!mounted || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) return [];
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (>= off ${from}) (< off ${to})) asc: off line: line})`));
+    },
+    latest(type, source) {
+      if (!mounted) return null;
+      // The names go over as a column, never as part of the statement: a source is whatever a sensor called itself.
+      ray.bind(ASKED, { w: { type: 'sym', data: [type.slice(0, 64), (source ?? '').slice(0, 64)] } });
+      const is = (column: string, at: number): string => `(== ${column} (at (at ${ASKED} 'w) ${at}))`;
+      const [event] = eventsOf(ray.table(`(select {from: ${BOUND} where: ${source === undefined ? is('type', 0) : `(and ${is('type', 0)} ${is('source', 1)})`} desc: off take: 1 line: line})`));
+      return event ?? null;
     },
     noted,
     notedCount,
@@ -428,9 +438,21 @@ function termsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
   return { term: { type: 'sym', data: term }, doc: { type: 'i64', data: BigInt64Array.from(doc) }, kind: { type: 'sym', data: kind }, w: { type: 'f64', data: Float64Array.from(w) } };
 }
 
-/** Rows of the table of events for these lines, column by column. */
-function rowsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
+/** How many calls of tools a reply made; 0 for anything else. */
+function callsOf(e: JournalEvent): number {
+  const calls = e.type === 'assistant' ? (e as { toolCalls?: unknown }).toolCalls : undefined;
+  return Array.isArray(calls) ? calls.length : 0;
+}
+
+/**
+ * Rows of the table of events for these lines, column by column. `first` is the number of the
+ * first of them: events are numbered from 0 in the journal's order, and every other table names
+ * an event by that number, which is found without reading through (an id is a string, and a
+ * string is looked for by reading every row).
+ */
+function rowsOf(batch: { line: Line; ns: bigint }[], first: number): Record<string, Column> {
   return {
+    seq: { type: 'i64', data: BigInt64Array.from(batch, (_, i) => BigInt(first + i)) },
     id: { type: 'str', data: batch.map((b) => b.line.event.id) },
     ts: { type: 'timestamp', data: BigInt64Array.from(batch, (b) => b.ns) },
     type: { type: 'sym', data: batch.map((b) => b.line.event.type.slice(0, 64)) },
@@ -438,6 +460,9 @@ function rowsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
     off: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(b.line.off)) },
     next: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(b.line.next)) },
     chars: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(eventChars(b.line.event))) },
+    // What it counts for once it is old, and how many calls a reply made: what a request's cuts and its call ids are counted by (brain/memory.ts).
+    shown: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(shownChars(b.line.event))) },
+    calls: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(callsOf(b.line.event))) },
     // 1 for an event that has terms. Their sum is the number of documents, which the table can then say for itself.
     said: { type: 'i64', data: BigInt64Array.from(batch, (b) => (documentOf(b.line.event) === null ? 0n : 1n)) },
     // The event itself, as JSON: what the journal's line says, to be read back without the file.
