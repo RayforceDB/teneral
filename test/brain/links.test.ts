@@ -7,7 +7,7 @@ import { FACT_KIND } from '../../brain/known';
 import { LINK_NOTES, OUTDATED_KIND, links, outdatedStretches, tiesOf } from '../../brain/links';
 import { WITHDRAW_KIND } from '../../brain/owned';
 import { buildMessages } from '../../brain/memory';
-import { journalPast, sinceLines, storePast } from '../../brain/past';
+import { journalPast, projections, sinceLines, storePast } from '../../brain/past';
 import { EPISODE_KIND, MERGE_KIND } from '../../brain/remembered';
 import { openStore } from '../../brain/store';
 import { library, ray } from './rayforce';
@@ -104,7 +104,7 @@ real('the database walks the same ties to the same answers as the journal read t
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-links-')), 'journal.jsonl');
   writeFileSync(journal, events.map((e) => `${JSON.stringify(e)}\n`).join(''));
   const read = journalPast(journal);
-  const store = openStore(ray(), journal);
+  const store = openStore(ray(), journal, undefined, projections());
   const served = storePast(journal, ray(), store, false);
   let tied = 0;
   for (const e of events) {
