@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Code, LANGUAGES, languageOf, projectRoot, type Backend, type Hit, type Sym } from '../../body/code';
-import { astGrep, backends, ctags, find, text, type Ran, type Runner } from '../../body/code-backends';
+import { astGrep, backends, find, grammarConfig, text, type Ran, type Runner } from '../../body/code-backends';
 import { answer, parse } from '../../body/code-cli';
 import { runBash } from '../../body/tools';
 import { commandDirs, program, withCommands } from '../../body/path';
@@ -217,10 +217,10 @@ test('a search by shape needs a language, and reports each match by its first li
 });
 
 test('what is supported is one line for each language, with a dash where nothing answers', async () => {
-  const table = (await new Code(backends(async () => ({ code: 0, out: '', err: '' }), (program) => program === 'ctags' || program === 'grep')).supported()).text.split('\n');
+  const table = (await new Code(backends(async () => ({ code: 0, out: '', err: '' }), (program) => program === 'grep')).supported()).text.split('\n');
   expect(table[0]!.split(/\s+/)).toEqual(['language', 'files', 'outline', 'search', 'definition', 'references', 'diagnostics']);
   const row = (name: string): string => table.find((line) => line.startsWith(name))!.replace(/\s+/g, ' ');
-  expect(row('c ')).toBe('c .c .h .inc ctags (syntactic) - ctags (syntactic) grep (textual) -');
+  expect(row('c ')).toBe('c .c .h .inc - - - grep (textual) -');
   // Without ast-grep Rayfall has nothing that reads it; its uses are still found as text.
   expect(row('rayfall')).toBe('rayfall .rfl - - - grep (textual) -');
 });
@@ -235,32 +235,6 @@ function canned(replies: Record<string, Ran>): { runner: Runner; ran: { command:
   return { runner, ran };
 }
 const all = (): boolean => true;
-
-test('ctags is given the files on its input and its tags are read as symbols', async () => {
-  const tags = [
-    { _type: 'tag', name: 'ray_release', path: '/r/cow.c', line: 52, kind: 'function', signature: '(ray_t * v)', end: 54 },
-    { _type: 'tag', name: 'size', path: '/r/cow.c', line: 9, kind: 'member', scope: 'box', scopeKind: 'struct' },
-    { _type: 'tag', name: 'run', path: '/r/a.py', line: 3, kind: 'member', signature: '(self)', scope: 'Job', end: 4 },
-    { _type: 'ptag', name: 'JSON_OUTPUT_VERSION' },
-  ].map((tag) => JSON.stringify(tag)).join('\n') + '\nnot json\n';
-  const { runner, ran } = canned({ ctags: { code: 0, out: tags, err: '' } });
-  const backend = ctags(runner, all);
-  expect(await backend.serves('outline', C)).toBe(true);
-  expect(await backend.serves('outline', RAYFALL)).toBe(false);
-  expect(await backend.serves('search', C)).toBe(false);
-  expect(await ctags(runner, () => false).serves('outline', C)).toBe(false);
-  expect(await backend.outline!(['/r/cow.c', '/r/a.py'], C)).toEqual([
-    { name: 'ray_release', kind: 'function', path: '/r/cow.c', line: 52, end: 54, signature: '(ray_t * v)' },
-    { name: 'size', kind: 'member', path: '/r/cow.c', line: 9, end: 9, scope: 'box' },
-    // A member that takes arguments is a method, not a field.
-    { name: 'run', kind: 'method', path: '/r/a.py', line: 3, end: 4, signature: '(self)', scope: 'Job' },
-  ]);
-  expect(ran[0]!.input).toBe('/r/cow.c\n/r/a.py\n');
-  expect(ran[0]!.command).toContain('--language-force=C');
-  // The owner's own ctags configuration is not read.
-  expect(ran[0]!.command).toContain('--options=NONE');
-  await expect(ctags(async () => ({ code: 1, out: '', err: 'ctags: unknown option' }), all).outline!(['/r/a.c'], C)).rejects.toThrow('ctags failed (exit 1): ctags: unknown option');
-});
 
 const match = (file: string, text: string, start: number, end: number, more: Record<string, unknown> = {}): string =>
   JSON.stringify({ text, file, range: { start: { line: start }, end: { line: end } }, ...more });
@@ -282,7 +256,39 @@ test('ast-grep lists the definitions of a language by its rules, with lines coun
   expect(new Set(rules.map((rule) => rule.language))).toEqual(new Set(['typescript']));
 });
 
-test('a Rayfall name is read out of its `set`, and the grammar the image built is named to ast-grep', async () => {
+test('C definitions are listed with their parameters, and a function behind an attribute keeps its own name', async () => {
+  const out = [
+    match('/r/cow.c', 'void ray_release(ray_t* v) {\n}', 51, 53, { ruleId: 'd0', metaVariables: { single: { NAME: { text: 'ray_release' }, PARAMS: { text: '(ray_t*  v)' } } } }),
+    // tree-sitter takes the attribute for the function; the name is read from the text.
+    match('/r/cow.c', 'static __attribute__((noinline, section("x"))) ray_t* slow_path(ray_t* v,\n    int n) {\n}', 60, 63, { ruleId: 'd0', metaVariables: { single: { NAME: { text: '__attribute__' }, PARAMS: { text: '((noinline))' } } } }),
+    match('/r/cow.c', '#define LIMIT 4', 3, 3, { ruleId: `d${C.definitions!.findIndex((one) => one.kind === 'macro')}`, metaVariables: { single: { NAME: { text: 'LIMIT' } } } }),
+  ].join('\n');
+  const { runner, ran } = canned({ scan: { code: 0, out, err: '' } });
+  expect(await astGrep(runner, all).outline!(['/r/cow.c'], C)).toEqual([
+    { name: 'ray_release', kind: 'function', path: '/r/cow.c', line: 52, end: 54, signature: '(ray_t* v)' },
+    { name: 'slow_path', kind: 'function', path: '/r/cow.c', line: 61, end: 64, signature: '(ray_t* v, int n)' },
+    { name: 'LIMIT', kind: 'macro', path: '/r/cow.c', line: 4, end: 4 },
+  ]);
+  expect(ran[0]!.command.slice(0, 3)).toEqual(['ast-grep', 'scan', '--inline-rules']);
+  expect(C.definitions!.map((one) => one.kind)).toEqual(['function', 'macro', 'struct', 'union', 'enum', 'typedef', 'variable']);
+  expect(languageOf('a.py')!.definitions!.map((one) => one.kind)).toEqual(['function', 'class']);
+});
+
+test('what ast-grep prints is read match by match, so the functions of a large file are all there', async () => {
+  // A runner that hands lines over as they come and keeps none, as the real one does.
+  const streaming: Runner = async (_command, _input, each) => {
+    for (let n = 0; n < 500; n++) each!(match('/r/big.c', `void f${n}(void) {\n${'  x();\n'.repeat(2000)}}`, n * 10, n * 10 + 5, { ruleId: 'd0', metaVariables: { single: { NAME: { text: `f${n}` } } } }));
+    return { code: 0, out: '', err: '' };
+  };
+  const symbols = await astGrep(streaming, all).outline!(['/r/big.c'], C);
+  expect(symbols).toHaveLength(500);
+  expect(symbols.at(-1)).toMatchObject({ name: 'f499', line: 4991 });
+  // Of a match by shape only its first line is kept.
+  const hits = await astGrep(streaming, all).search!('$F()', languageOf('a.py')!, ['/r']);
+  expect(hits).toHaveLength(500); expect(hits[0]!.text).toBe('void f0(void) {');
+});
+
+test('a Rayfall name is read out of its `set`, and the grammar the body built is named to ast-grep', async () => {
   const config = join(mkdtempSync(join(tmpdir(), 'teneral-code-sg-')), 'sgconfig.yml'); writeFileSync(config, 'ruleDirs: []\n');
   const out = [
     match('/r/q.rfl', '(set n 100)', 1, 1, { ruleId: 'd0' }),
@@ -290,7 +296,7 @@ test('a Rayfall name is read out of its `set`, and the grammar the image built i
     match('/r/q.rfl', '(set)', 6, 6, { ruleId: 'd0' }),
   ].join('\n');
   const { runner, ran } = canned({ scan: { code: 0, out, err: '' } });
-  const backend = astGrep(runner, all, config);
+  const backend = astGrep(runner, all, async () => config);
   expect(await backend.serves('outline', RAYFALL)).toBe(true);
   expect(await backend.outline!(['/r/q.rfl'], RAYFALL)).toEqual([
     { name: 'n', kind: 'variable', path: '/r/q.rfl', line: 2, end: 2 },
@@ -298,12 +304,38 @@ test('a Rayfall name is read out of its `set`, and the grammar the image built i
   ]);
   expect(ran[0]!.command.slice(0, 6)).toEqual(['ast-grep', 'scan', '--custom-languages', 'allow', '-c', config]);
   // Without the grammar, Rayfall is not served; a language ast-grep carries still is.
-  const bare = astGrep(runner, all, join(config, 'missing'));
+  const bare = astGrep(runner, all, async () => null);
   expect(await bare.serves('outline', RAYFALL)).toBe(false);
   expect(await bare.serves('search', RAYFALL)).toBe(false);
   expect(await bare.serves('search', C)).toBe(true);
-  // C has no rules for definitions here: ctags lists them, with where each ends.
-  expect(await bare.serves('outline', C)).toBe(false);
+  expect(await bare.serves('outline', C)).toBe(true);
+  expect(await astGrep(runner, () => false).serves('outline', C)).toBe(false);
+});
+
+test('a grammar that is an organ is compiled once, outside every checkout, and named in a configuration of its own', async () => {
+  const organs = mkdtempSync(join(tmpdir(), 'teneral-code-organs-')), cache = mkdtempSync(join(tmpdir(), 'teneral-code-grammars-'));
+  mkdirSync(join(organs, 'tree-sitter-rayfall', 'src'), { recursive: true });
+  writeFileSync(join(organs, 'tree-sitter-rayfall', 'src', 'parser.c'), '/* a parser */\n');
+  const built: string[][] = [];
+  const compiler: Runner = async (command) => { built.push(command); writeFileSync(command[command.indexOf('-o') + 1]!, 'so'); return { code: 0, out: '', err: '' }; };
+  const config = (await grammarConfig(RAYFALL, compiler, (name) => name === 'cc', organs, cache))!;
+  expect(config.startsWith(join(cache, 'rayfall-'))).toBe(true);
+  expect(readFileSync(config, 'utf8')).toBe(`ruleDirs: []\ncustomLanguages:\n  rayfall:\n    libraryPath: ${join(config, '..', 'grammar.so')}\n    extensions: [rfl]\n    expandoChar: _\n`);
+  expect(built).toHaveLength(1);
+  expect(built[0]!.slice(0, 4)).toEqual(['cc', '-shared', '-fPIC', '-O2']);
+  expect(built[0]!.at(-1)).toBe(join(organs, 'tree-sitter-rayfall', 'src', 'parser.c'));
+  // Asked again, it is found; nothing is compiled twice.
+  expect(await grammarConfig(RAYFALL, compiler, () => true, organs, cache)).toBe(config);
+  expect(built).toHaveLength(1);
+  // Without the organ, without a compiler, or with a compiler that fails, there is no grammar, and nothing half built is left.
+  expect(await grammarConfig(RAYFALL, compiler, () => true, '', cache)).toBeNull();
+  expect(await grammarConfig(RAYFALL, compiler, () => true, join(organs, 'none'), cache)).toBeNull();
+  const fresh = mkdtempSync(join(tmpdir(), 'teneral-code-grammars-'));
+  expect(await grammarConfig(RAYFALL, compiler, () => false, organs, fresh)).toBeNull();
+  await expect(grammarConfig(RAYFALL, async () => ({ code: 1, out: '', err: 'parser.c:1: error' }), () => true, organs, fresh)).rejects.toThrow('cc failed (exit 1)');
+  expect(readdirSync(fresh)).toEqual([]);
+  // A language ast-grep carries has no grammar to build.
+  expect(await grammarConfig(C, compiler, () => true, organs, cache)).toBeNull();
 });
 
 test('a C pattern that matches nothing as written is asked again inside a function', async () => {
@@ -385,6 +417,10 @@ test('bash finds the command: the body puts its own directory of commands first 
   const body = mkdtempSync(join(tmpdir(), 'teneral-code-body-')), organs = mkdtempSync(join(tmpdir(), 'teneral-code-organs-'));
   for (const made of [join(body, 'bin'), join(body, 'node_modules', '.bin'), join(organs, 'clangd', 'bin'), join(organs, 'rg')]) mkdirSync(made, { recursive: true });
   expect(commandDirs({ TENERAL_ORGANS: organs }, body)).toEqual([join(body, 'bin'), join(body, 'node_modules', '.bin'), join(organs, 'clangd', 'bin'), join(organs, 'clangd'), join(organs, 'rg')]);
+  // A native program lies in the package made for this machine, which comes before the launchers that would need an install script.
+  for (const made of [join(body, 'node_modules', '@ast-grep', 'cli'), join(body, 'node_modules', '@ast-grep', 'cli-linux-x64-gnu')]) mkdirSync(made, { recursive: true });
+  expect(commandDirs({}, body)).toEqual([join(body, 'bin'), join(body, 'node_modules', '@ast-grep', 'cli-linux-x64-gnu'), join(body, 'node_modules', '.bin')]);
+  rmSync(join(body, 'node_modules', '@ast-grep'), { recursive: true });
   expect(commandDirs({}, body)).toEqual([join(body, 'bin'), join(body, 'node_modules', '.bin')]);
   expect(commandDirs({ TENERAL_ORGANS: join(organs, 'gone') }, join(body, 'gone'))).toEqual([]);
   // A program of the body's own is found before one of the same name in the image.
@@ -398,8 +434,8 @@ test('bash finds the command: the body puts its own directory of commands first 
   expect(out).toContain('code outline <file>');
 });
 
-// With the programs of the image present these run them for real; a checkout without them (the CI of the species) skips them.
-const real = find('ctags') && find('ast-grep') && find('rg');
+// With the body's package and organs at hand, as in the gates the stem runs, these run the programs for real; a bare `bun test` without them skips them.
+const real = find('ast-grep') && find('rg');
 test.skipIf(!real)('with the real programs: outline, body, definition, uses and a search by shape in C, TypeScript and shell', async () => {
   const root = project({
     'src/a.c': SOURCE,
@@ -409,7 +445,7 @@ test.skipIf(!real)('with the real programs: outline, body, definition, uses and 
   });
   const run = (...argv: string[]) => answer(argv, root);
   const outline = await run('outline', 'src/a.c');
-  expect(outline.text).toContain('syntactic (ctags)');
+  expect(outline.text).toContain('syntactic (ast-grep)');
   expect(outline.text).toMatch(/3-5\s+function\s+helper\(int a\)/);
   expect((await run('symbol', 'entry')).text).toContain('7    return helper(LIMIT);');
   expect((await run('definition', 'helper')).text).toContain('src/a.c:3-5  function  helper(int a)');
@@ -423,7 +459,7 @@ test.skipIf(!real)('with the real programs: outline, body, definition, uses and 
   expect((await run('symbol', 'start', 'run.sh')).text).toContain('2    echo started');
 });
 
-test.skipIf(!real || !find('ast-grep') || !Bun.file('/usr/local/lib/teneral/sgconfig.yml').size)('with the grammar of the image: a Rayfall file is outlined and searched', async () => {
+test.skipIf(!real || !find('cc') || !existsSync(join(process.env.TENERAL_ORGANS ?? '/nowhere', 'tree-sitter-rayfall')))('with the grammar the body pins and builds: a Rayfall file is outlined and searched', async () => {
   const root = project({ 'q.rfl': ';; totals\n(set n 100)\n(set total (fn [x y]\n  (+ x y)))\n(println (total n 2))\n(select {from: t where: (> price n)})\n' });
   const outline = await answer(['outline', 'q.rfl'], root);
   expect(outline.text).toMatch(/2\s+variable\s+n\n/); expect(outline.text).toMatch(/3-4\s+function\s+total \[x y\]/);

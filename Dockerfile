@@ -12,44 +12,16 @@ WORKDIR /teneral
 # pages a person would open by hand, such as signing in to an account its owner made for it. It has
 # no window, and is started with --no-sandbox: its own sandbox needs privileges this container is
 # run without, and the container is what confines it.
-# ripgrep, fd, jq and universal-ctags are for reading a codebase without reading it whole: the first
-# three are the agent's to call, and ctags, with ast-grep below, answers its `code` command
-# (body/code.ts). clangd answers it for C where a name has to be resolved: who uses a function, what
-# a use refers to, what a compiler says of a file (body/code-clangd.ts). unzip opens the ast-grep archive.
+# jq, because its releases are bare programs, which the agent can take neither as a package nor as an organ.
+# Everything else the agent reads a codebase with is not here: ast-grep is a package of its body
+# (body/package.json), ripgrep, fd, clangd and the Rayfall grammar are organs it pins
+# (body/organs.json), and it takes more of either by a mutation of its own. The C compiler above
+# also builds that grammar, once, where the body keeps it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates procps \
     curl tar gzip clang libclang-rt-dev libc6-dev make openssh-client gh \
-    chromium fonts-liberation \
-    ripgrep fd-find jq universal-ctags clangd unzip \
- && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    chromium fonts-liberation jq \
  && rm -rf /var/lib/apt/lists/*
-
-# ast-grep searches code by its shape, with a tree-sitter parser for each language. It is not in the
-# distribution, so its release archive is fetched and kept only with the pinned hash of its build
-# for this machine.
-ARG AST_GREP=0.51.3
-RUN case "$(dpkg --print-architecture)" in \
-      amd64) arch=x86_64 sum=22803eb0c5bf83164fb7fd76d4721d355ecf0c8466ef47342c1ec7d80897ca47 ;; \
-      arm64) arch=aarch64 sum=5b44fd68e78744934b359b07badce347d4197ed50b341d50f1f99d056ecedb08 ;; \
-      *) echo "no ast-grep build is pinned for $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac \
- && curl -fsSL -o /tmp/ast-grep.zip "https://github.com/ast-grep/ast-grep/releases/download/$AST_GREP/app-$arch-unknown-linux-gnu.zip" \
- && echo "$sum  /tmp/ast-grep.zip" | sha256sum -c - \
- && unzip -q /tmp/ast-grep.zip ast-grep -d /usr/local/bin && chmod 755 /usr/local/bin/ast-grep \
- && rm /tmp/ast-grep.zip
-
-# Rayfall is not a language ast-grep carries. Its grammar is built here from one pinned commit of
-# its source, and the configuration beside it tells ast-grep where the grammar is. body/code-backends.ts
-# names this configuration when the question is about a Rayfall file.
-ARG RAYFALL_GRAMMAR=230b850d422b4345911ca38b34028474b8bb7fe8
-RUN git clone -q https://github.com/vbmithr/tree-sitter-rayfall.git /tmp/rayfall \
- && git -C /tmp/rayfall -c advice.detachedHead=false checkout -q "$RAYFALL_GRAMMAR" \
- && mkdir -p /usr/local/lib/teneral \
- && clang -shared -fPIC -O2 -I /tmp/rayfall/src -o /usr/local/lib/teneral/rayfall.so /tmp/rayfall/src/parser.c \
- && rm -rf /tmp/rayfall \
- && printf '%s\n' 'ruleDirs: []' 'customLanguages:' '  rayfall:' \
-    '    libraryPath: /usr/local/lib/teneral/rayfall.so' '    extensions: [rfl]' '    expandoChar: _' \
-    > /usr/local/lib/teneral/sgconfig.yml
 
 # The agent's git and gh sign in to github.com with the token its owner stored (./one offer token):
 # git asks the first program below, and gh is started by the second. With no token stored, or in a

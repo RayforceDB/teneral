@@ -129,7 +129,7 @@ test('clangd is offered only where there is a clangd', async () => {
   expect(await clangd({ has: (program) => program === 'clangd' }).serves('diagnostics', C)).toBe(true);
 });
 
-const real = find('clangd') && find('ctags') && find('rg') && find('make');
+const real = find('clangd') && find('ast-grep') && find('rg') && find('make');
 test.skipIf(!real)('with the real clangd: uses across files are exact, a use is resolved, and an error is reported', async () => {
   const root = dir('real'); mkdirSync(join(root, '.git')); mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'Makefile'), 'all: a.o b.o\na.o: src/a.c\n\tcc -c -Isrc -o a.o src/a.c\nb.o: src/b.c\n\tcc -c -Isrc -o b.o src/b.c\n');
