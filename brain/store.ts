@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { JournalEvent } from './journal';
+import { BACK_KIND, wasSaid } from './owned';
 import { eventChars, shownChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
 import { CURRENT_NOTES, currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
@@ -135,9 +136,19 @@ export interface Projection {
   version: number;
   /** Starts from nothing. */
   reset(): void;
-  /** Takes one event in; true when its tables may have changed. `seq` is the event's number. */
-  step(e: JournalEvent, seq: number): boolean;
-  /** Its tables as they stand, column by column. */
+  /**
+   * Whether it is made from the conversation as it stands: without what the owner took back
+   * (brain/owned.ts). Such a projection is not handed what was said in a stretch taken back, and
+   * is made again from the first event when a conversation is taken back, since that changes what
+   * came before.
+   */
+  standing?: boolean;
+  /**
+   * Takes one event in; true when its tables may have changed. `seq` is the event's number.
+   * `'again'` says it cannot go on from where it is and must be made again from the first event.
+   */
+  step(e: JournalEvent, seq: number): boolean | 'again';
+  /** Its tables as they stand, column by column. The same object for a table that has not changed since it was last asked: the store then does not send it again. */
   tables(): Record<string, Record<string, Column>>;
   /** Its state again, from its tables as they were last written. */
   restore(tables: Record<string, Table>): void;
@@ -262,13 +273,56 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
   /** Projections whose tables in the database, or on disk, are behind their state. */
   const unbound = new Set<Projection>();
   const unwritten = new Set<Projection>();
+  /** What each table was last bound from: a projection that hands back the very same columns for a table has not changed it, and it is not sent again. */
+  const boundFrom = new Map<string, Record<string, Column>>();
   const bindTables = (projection: Projection): void => {
-    for (const [table, columns] of Object.entries(projection.tables())) ray.bind(boundAs(projection.name, table), columns);
+    for (const [table, columns] of Object.entries(projection.tables())) {
+      const name = boundAs(projection.name, table);
+      if (boundFrom.get(name) === columns) continue;
+      ray.bind(name, columns);
+      boundFrom.set(name, columns);
+    }
+  };
+  /** Stretches of the conversation the owner took back, as numbers of events: from the message a note names up to the note. */
+  const aside: [number, number][] = [];
+  const setAside = (seq: number, e: JournalEvent): boolean => wasSaid(e) && aside.some(([from, to]) => seq >= from && seq < to);
+  /** Notes a taking back when `e` is one; true when it set a stretch aside. */
+  const takenBack = (e: JournalEvent, seq: number): boolean => {
+    if (e.type !== 'note' || e.kind !== BACK_KIND) return false;
+    const to = (e.data as { to?: unknown } | null)?.to;
+    if (typeof to !== 'string') return false;
+    ray.bind(ASKED, { ids: { type: 'str', data: [to] } });
+    const found = ray.table(`(select {from: ${BOUND} where: (in id (at ${ASKED} 'ids)) seq: seq})`).columns.seq as BigInt64Array | undefined;
+    const from = found === undefined || found.length === 0 ? undefined : Number(found[0]);
+    if (from === undefined || from >= seq) return false;
+    aside.push([from, seq]);
+    return true;
+  };
+  /** Projections to make again from the first event, once the events at hand are all laid out. */
+  const again = new Set<Projection>();
+  const stepOne = (projection: Projection, e: JournalEvent, seq: number): void => {
+    if (again.has(projection) || (projection.standing === true && setAside(seq, e))) return;
+    const changed = projection.step(e, seq);
+    if (changed === 'again') again.add(projection);
+    else if (changed) { unbound.add(projection); unwritten.add(projection); }
   };
   const stepAll = (e: JournalEvent, seq: number): void => {
-    for (const projection of projections) if (projection.step(e, seq)) { unbound.add(projection); unwritten.add(projection); }
+    if (takenBack(e, seq)) for (const projection of projections) if (projection.standing === true) again.add(projection);
+    for (const projection of projections) stepOne(projection, e, seq);
   };
   const bindChanged = (): void => {
+    // At most twice: one made again may ask for it once more only by a fault of its own, which is not looped on.
+    for (let round = 0; round < 2 && again.size > 0; round++) {
+      const todo = [...again];
+      again.clear();
+      for (const projection of todo) {
+        projection.reset();
+        replay(0, (e, seq) => stepOne(projection, e, seq));
+        unbound.add(projection);
+        unwritten.add(projection);
+      }
+    }
+    again.clear();
     for (const projection of unbound) bindTables(projection);
     unbound.clear();
   };
@@ -283,6 +337,12 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       }
     }
   };
+  // What was taken back before now: every such note, in order, so that the stretches are known before anything is made from the events.
+  if (mounted && projections.some((projection) => projection.standing === true)) {
+    const t = ray.table(`(select {from: ${BOUND} where: ${ofKinds([BACK_KIND])} asc: seq seq: seq line: line})`);
+    const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+    eventsOf(t).forEach((e, i) => { takenBack(e, Number(seqs[i])); });
+  }
   for (const projection of projections) {
     let reaches = 0;
     projection.reset();
@@ -301,11 +361,15 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       projection.reset();
       reaches = 0;
     }
-    let changed = reaches === 0;
-    if (mounted) replay(reaches, (e, seq) => { if (projection.step(e, seq)) changed = true; });
-    bindTables(projection);
-    if (changed) unwritten.add(projection);
+    if (reaches === 0) unwritten.add(projection);
+    if (mounted) replay(reaches, (e, seq) => {
+      // A taking back among what is new changes what came before it: `stepAll` is not used here, the stretches are known already.
+      if (e.type === 'note' && e.kind === BACK_KIND && projection.standing === true && seq >= reaches && reaches > 0) again.add(projection);
+      stepOne(projection, e, seq);
+    });
+    unbound.add(projection);
   }
+  bindChanged();
 
   function persist(): void {
     if (!mounted) return;

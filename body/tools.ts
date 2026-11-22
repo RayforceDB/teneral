@@ -475,7 +475,7 @@ const timeline: Tool = {
     },
   },
   async run(args, ctx) {
-    const entries = timelineOf(ctx.journal, optional(args, 'from'), optional(args, 'to'));
+    const entries = timelineOf(pastOf(ctx), optional(args, 'from'), optional(args, 'to'));
     if (entries.length === 0) return 'No episode of yours falls in that time.';
     return cap(entries.map(({ episode, title, outcome }) => {
       const what = title !== null ? `${outcome}: ${title}` : outcome ?? (episode.closed ? `not remembered yet, ${episode.chars} characters` : 'going on now');

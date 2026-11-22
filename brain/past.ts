@@ -8,7 +8,8 @@ import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from '
 import { LINE_MAX, LINK_NOTES, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { knownFrom, knownProjection } from './known-table';
-import { remembered } from './remembered';
+import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
+import { remembered, type Remembered } from './remembered';
 import { openStore, readLine, scan, type Line, type Projection, type Store } from './store';
 import { clip } from '../body/text';
 
@@ -35,6 +36,10 @@ export interface Past {
   notes(kinds: readonly string[]): JournalEvent[];
   /** What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts). */
   known(): Known;
+  /** What is remembered: the memories, the stretches no memory could be formed of, and the wider memories (brain/remembered.ts). */
+  remembered(): Remembered;
+  /** The conversation as it stands, cut into episodes, each with the numbers of its events in the database (the place after the last for `toSeq`). */
+  episodes(): Placed[];
   /** What became of a memory or a fact since it was written: what made it outdated, and what stands now in its place (brain/links.ts). Null when nothing did. */
   since(id: string): Since | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
@@ -76,7 +81,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -145,6 +150,14 @@ export function journalPast(journal: string): Past {
   let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
   return {
     by: 'journal',
+    remembered: () => remembered(lines().map((line) => line.event)),
+    episodes() {
+      const standing = lines();
+      const events = standing.map((line) => line.event);
+      // A journal read through has no numbers but the places of its lines: the place of each event among all the journal holds.
+      const place = new Map(lines.all().map((line, i) => [line.event.id, i]));
+      return episodes(events, remembered(events).spans).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
+    },
     // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
     known: () => known(lines.all().map((line) => line.event)),
     latest(type, source) {
@@ -251,6 +264,14 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   return {
     ray,
     by: 'store',
+    remembered() {
+      store.sync();
+      return rememberedFrom(ray);
+    },
+    episodes() {
+      store.sync();
+      return episodesFrom(ray);
+    },
     known() {
       store.sync();
       return knownFrom(ray);
@@ -439,6 +460,8 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     find: (question, options) => through((past) => past.find(question, options)),
     since: (id) => through((past) => past.since(id)),
     known: () => through((past) => past.known()),
+    remembered: () => through((past) => past.remembered()),
+    episodes: () => through((past) => past.episodes()),
     latest: (type, source) => through((past) => past.latest(type, source)),
     notes: (kinds) => through((past) => past.notes(kinds)),
     asked: () => through((past) => past.asked()),
@@ -517,16 +540,20 @@ export interface TimelineEntry {
   outcome: string | null;
 }
 
-/** The episodes of `journal` whose time overlaps `from`..`to` (ISO times, either may be left out), in order, with what is remembered of each. */
-export function timeline(journal: string, from?: string, to?: string): TimelineEntry[] {
-  const events = standing(readEvents(journal));
-  const { memories, quarantined, spans } = remembered(events);
+/**
+ * The episodes whose time overlaps `from`..`to` (ISO times, either may be left out), in order, with
+ * what is remembered of each. Asked of `past`, which asks the tables of the database where it has
+ * them; a journal's path is read through, as before there were tables.
+ */
+export function timeline(past: Pick<Past, 'episodes' | 'remembered'> | string, from?: string, to?: string): TimelineEntry[] {
+  const asked = typeof past === 'string' ? journalPast(past) : past;
   const lo = from === undefined ? Number.NEGATIVE_INFINITY : Date.parse(from);
   const hi = to === undefined ? Number.POSITIVE_INFINITY : Date.parse(to);
   if (Number.isNaN(lo) || Number.isNaN(hi)) throw new Error('`from` and `to` must be times such as 2026-11-14 or 2026-11-14T09:30:00Z');
-  return episodes(events, spans)
+  const { memories, quarantined } = asked.remembered();
+  return asked.episodes()
     .filter((e) => Date.parse(e.end) >= lo && Date.parse(e.start) <= hi)
-    .map((episode) => {
+    .map(({ fromSeq: _from, toSeq: _to, ...episode }) => {
       const memory = memories.get(episode.first);
       return {
         episode,

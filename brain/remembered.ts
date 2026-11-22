@@ -150,8 +150,13 @@ export function remembered(events: JournalEvent[]): Remembered {
       if (memories.has(at.from)) continue;
       quarantined.set(at.from, { ...at, reason: text(d.reason) ? d.reason : 'unknown' });
     }
-    if (!seen.has(at.from)) order.push(at.from);
-    seen.set(at.from, { from: at.from, to: at.to });
+    // A stretch stays the stretch it was first recorded as: a later record of it, which names the same
+    // first event, cannot move where it ends. So the stretches only ever gain one at their end, and what
+    // is cut by them (brain/episodes.ts) never has to be cut again.
+    if (!seen.has(at.from)) {
+      order.push(at.from);
+      seen.set(at.from, { from: at.from, to: at.to });
+    }
   }
   return { memories, quarantined, spans: order.map((from) => seen.get(from)!), merges };
 }
