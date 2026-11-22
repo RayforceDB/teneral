@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Backend, Diagnostic, Hit, Language, Op, Sym } from './code';
 import { find, run, type Finder, type Runner } from './code-backends';
 import { LspSession } from './lsp';
+import { program } from './path';
 
 /**
  * clangd as a backend of body/code.ts: the one that resolves names in C, so its answers are exact.
@@ -99,7 +100,7 @@ export function clangd(options: ClangdOptions = {}): Backend {
   const cache = options.cache ?? process.env.TENERAL_CODE_CACHE ?? join(homedir(), '.cache', 'teneral-code');
   const indexMs = options.indexMs ?? 90_000, beginMs = options.beginMs ?? 3_000;
   const command = options.command ?? ((database: string) => [
-    Bun.which('clangd') ?? 'clangd', `--compile-commands-dir=${database}`, '--background-index',
+    program('clangd') ?? 'clangd', `--compile-commands-dir=${database}`, '--background-index',
     // Its usual limits (a thousand references, a hundred results) would cut an answer without saying so.
     '--limit-references=0', '--limit-results=0', '--log=error', `-j=${Math.max(1, Math.min(4, cpus().length))}`,
   ]);

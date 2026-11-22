@@ -234,6 +234,7 @@ test('it says what an organ is, how one is pinned, where its archive goes, and h
   expect(flat).toContain('`TENERAL_ORGANS`: a directory with one entry per organ you pin');
   expect(flat).toContain('`bun immune/organs.ts`');
   expect(flat).toContain('Gate `organs`');
+  expect(flat).toContain('Gate `packages`: what `body/package.json` takes from the npm registry is installed from `body/bun.lock`, with no package\'s script run.');
   expect(flat).toContain('a rollback returns you to the old pin');
   expect(flat).toContain('never on a binary you built');
   // The fields it names are the ones the stem takes, and no others.

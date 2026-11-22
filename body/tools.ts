@@ -1,4 +1,5 @@
 import { work } from './work';
+import { withCommands } from './path';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { CHAT_TOOLS } from './chat-tools';
 import type { Community } from './community';
@@ -186,11 +187,6 @@ function drain(pipe: ReadableStream<Uint8Array>, into: Clipped): { done: Promise
 export function bashEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const { TENERAL_API_KEY: _key, ...rest } = env;
   return rest;
-}
-
-/** The body's own commands (body/bin: `code`, questions about source code) come first on the PATH of what bash runs, so each generation runs its own. */
-export function withCommands(env: Record<string, string | undefined>, bin: string = join(import.meta.dir, 'bin')): Record<string, string | undefined> {
-  return { ...env, PATH: env.PATH === undefined || env.PATH === '' ? bin : `${bin}:${env.PATH}` };
 }
 
 /**

@@ -336,7 +336,7 @@ export interface Report {
 export const SECTIONS = ['What it changes:', 'Why:', 'Evidence:', 'Not verified:'] as const;
 
 /** The gates of a mutation, in the order they run, as a fresh seed meets them. */
-const GATES = ['body', 'organs', 'types', 'tests-stem', 'tests-body', 'smoke'] as const;
+const GATES = ['body', 'organs', 'packages', 'types', 'tests-stem', 'tests-body', 'smoke'] as const;
 
 /**
  * The full gates on `commit` as if it were a fresh seed: its organs as it pins them, the

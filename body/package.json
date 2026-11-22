@@ -1,0 +1,6 @@
+{
+  "name": "body",
+  "private": true,
+  "type": "module",
+  "dependencies": {}
+}

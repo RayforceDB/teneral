@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { SUBAGENT_KIND } from '../brain/agenda';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
@@ -177,6 +177,10 @@ export function copyWorkspace(workspace: string, into: string, branch: string): 
   // What the checks need and git does not hold.
   if (existsSync(join(workspace, 'node_modules')) && !existsSync(join(into, 'node_modules'))) {
     try { symlinkSync(join(workspace, 'node_modules'), join(into, 'node_modules')); } catch { /* it installs its own if it needs them */ }
+  }
+  // The body's own packages likewise (immune/packages.ts): the copy runs the same tools the agent does.
+  if (existsSync(join(workspace, 'body', 'node_modules')) && existsSync(join(into, 'body')) && !existsSync(join(into, 'body', 'node_modules'))) {
+    try { symlinkSync(realpathSync(join(workspace, 'body', 'node_modules')), join(into, 'body', 'node_modules')); } catch { /* as above */ }
   }
   git(into, 'add', '-A');
   git(into, 'commit', '--quiet', '--allow-empty', '-m', COPY_COMMIT);
