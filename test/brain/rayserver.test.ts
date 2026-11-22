@@ -110,7 +110,7 @@ console.log(JSON.stringify(out, (_, v) => typeof v === 'bigint' ? Number(v) : v)
   expect(answers.transport).toBe('shm');
 }, 60_000);
 
-test.skipIf(!real)('a running agent\'s past is asked of the server, and of the journal from the moment the server is gone', async () => {
+test.skipIf(!real)('a running agent\'s past is asked of the server, of the journal from the moment the server is gone, and of a new server a while later', async () => {
   const root = dir('install');
   const journal = join(root, 'memory', 'journal.jsonl');
   appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'what about the parted average over symbols?' });
@@ -121,7 +121,7 @@ import { openServedPast } from ${JSON.stringify(join(BRAIN, 'past.ts'))};
 import { readFileSync, existsSync } from 'node:fs';
 const organs = ${JSON.stringify(dirname(dirname(library!)))};
 const logs: string[] = [];
-const past = await openServedPast(${JSON.stringify(journal)}, organs, (line) => logs.push(line));
+const past = await openServedPast(${JSON.stringify(journal)}, organs, (line) => logs.push(line), { againMs: 300 });
 const found = () => past.find('parted average symbol', { kinds: ['memory'], limit: 3 }).map((hit) => hit.event.type);
 const out: Record<string, unknown> = { by: past.by, found: found(), ray: past.ray !== undefined };
 const pid = Number(readFileSync(${JSON.stringify(pidFile(journal))}, 'utf8'));
@@ -129,7 +129,16 @@ out.server = readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\\0')[0];
 process.kill(pid, 'SIGKILL'); await Bun.sleep(200);
 out.after = { found: found(), by: past.by, ray: past.ray !== undefined };
 past.sync(); past.persist();
+// Too soon: the journal is still read through. A while later a body's next sync starts the database again.
+out.soon = past.by;
+await Bun.sleep(400); past.sync();
+for (let i = 0; i < 100 && past.by !== 'store'; i++) await Bun.sleep(50);
+out.again = { found: found(), by: past.by, ray: past.ray !== undefined };
+const pid2 = Number(readFileSync(${JSON.stringify(pidFile(journal))}, 'utf8'));
+out.another = pid2 !== pid && existsSync('/proc/' + pid2);
 past.close();
+await Bun.sleep(100);
+out.ended = !existsSync('/proc/' + pid2);
 out.pidFile = existsSync(${JSON.stringify(pidFile(journal))});
 out.logs = logs.map((line) => line.replace(/\\(\\d+\\), on port \\d+/, '(N), on port P'));
 console.log(JSON.stringify(out));
@@ -138,10 +147,15 @@ console.log(JSON.stringify(out));
     by: 'store', found: ['note'], ray: true, server: program,
     // The same answer, by another road; the handle to the database is no longer handed out.
     after: { found: ['note'], by: 'journal', ray: false },
+    soon: 'journal',
+    // And by the first road again, with another process, which ends with the body like the first.
+    again: { found: ['note'], by: 'store', ray: true }, another: true, ended: true,
     pidFile: false,
     logs: [
       '[memory] the database runs in a process of its own (N), on port P',
       '[memory] the database is gone, the journal is read through from here on: rayforce: io: connection closed',
+      '[memory] the database runs in a process of its own (N), on port P',
+      '[memory] the database runs again, and is asked from here on',
     ],
   });
   // What the server kept is beside the journal, to be found by the next body.
