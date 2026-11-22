@@ -87,7 +87,7 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
       // This test is about interruption, not trimming. Keep enough room after the real composed
       // prompt and tool specifications to show the interrupted exchange on the next request.
-      TENERAL_CONTEXT_CHARS: '100000',
+      TENERAL_CONTEXT_CHARS: '140000',
     },
     // Keep the foreground terminal channel available: these tests also type /quit into it.
     stdin: process.env.MICA_TEST_BACKGROUND === '1' ? 'ignore' : 'pipe', stdout: 'ignore', stderr: 'pipe',
