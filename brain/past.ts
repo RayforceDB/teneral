@@ -317,43 +317,85 @@ export function openPast(journal: string, library: string | null, log: (line: st
  *
  * The database is a help and never a condition. When its process dies, or answers with something
  * that is not an answer, what was asked is asked of the journal instead, and so is everything
- * after it for as long as this body runs: the next body starts the database afresh, and the store
- * is brought up to the journal then. Nothing is lost by that; it is only slower.
+ * after it until the database runs again: it is started afresh a while later, a few times at
+ * growing intervals, and the store is brought up to the journal then. Nothing is lost by any of
+ * that; it is only slower in between.
  */
-export async function openServedPast(journal: string, organsDir: string | null, log: (line: string) => void = () => {}): Promise<Past> {
+export async function openServedPast(journal: string, organsDir: string | null, log: (line: string) => void = () => {}, o: { againMs?: number } = {}): Promise<Past> {
   if (organsDir === null || !existsSync(libraryAt(organsDir)) || !existsSync(serverAt(organsDir))) return journalPast(journal);
-  let server: RayServer | null = null;
-  try {
-    server = await startRayServer(serverAt(organsDir), journal, { log });
-    const ray = openRay({ library: libraryAt(organsDir), server: { port: server.port } });
+  const serve = async (): Promise<{ served: Past; server: RayServer }> => {
+    let server: RayServer | null = null;
     try {
-      const store = openStore(ray, journal);
-      if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
-      return guarded(storePast(journal, ray, store, true), server, journal, log);
+      server = await startRayServer(serverAt(organsDir), journal, { log });
+      const ray = openRay({ library: libraryAt(organsDir), server: { port: server.port } });
+      try {
+        const store = openStore(ray, journal);
+        if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
+        return { served: storePast(journal, ray, store, true), server };
+      } catch (err) {
+        ray.close();
+        throw err;
+      }
     } catch (err) {
-      ray.close();
+      server?.stop();
       throw err;
     }
+  };
+  try {
+    return guarded(await serve(), serve, journal, log, o.againMs ?? AGAIN_MS);
   } catch (err) {
-    server?.stop();
     log(`[memory] the database could not be used, the journal is read through instead: ${err instanceof Error ? err.message : String(err)}`);
     return journalPast(journal);
   }
 }
 
-/** `served`, with the journal read through in its place from the first time it fails. See `openServedPast`. */
-function guarded(served: Past, server: RayServer, journal: string, log: (line: string) => void): Past {
+/** How long after the database failed it is started again, the first time; each later time after twice as long. */
+export const AGAIN_MS = 60_000;
+/** How many times. A database that fails this often in one body's life is left alone until the next body. */
+export const AGAIN_TIMES = 4;
+
+/**
+ * A served past, with the journal read through in its place from the moment it fails, and the
+ * database started again a while later. See `openServedPast`. The new start is asked for by
+ * `sync`, which a body calls between turns, so nothing is started in the middle of a question.
+ */
+function guarded(first: { served: Past; server: RayServer }, serve: () => Promise<{ served: Past; server: RayServer }>, journal: string, log: (line: string) => void, againMs: number): Past {
+  let { served, server } = first;
   let now: Past = served;
   let fell = false;
+  let failures = 0;
+  let notBefore = 0;
+  let starting = false;
+  let closed = false;
   const fall = (err: unknown): Past => {
     if (!fell) {
       fell = true;
+      failures += 1;
+      notBefore = Date.now() + againMs * 2 ** (failures - 1);
       log(`[memory] the database ${server.alive() ? 'failed' : 'is gone'}, the journal is read through from here on: ${err instanceof Error ? err.message : String(err)}`);
       try { served.close(); } catch { /* it was the one that failed */ }
       server.stop();
       now = journalPast(journal);
     }
     return now;
+  };
+  const again = (): void => {
+    if (!fell || starting || closed || failures > AGAIN_TIMES || Date.now() < notBefore) return;
+    starting = true;
+    void serve().then((next) => {
+      if (closed) {
+        try { next.served.close(); } finally { next.server.stop(); }
+        return;
+      }
+      ({ served, server } = next);
+      now = served;
+      fell = false;
+      log('[memory] the database runs again, and is asked from here on');
+    }, (err) => {
+      failures += 1;
+      notBefore = Date.now() + againMs * 2 ** (failures - 1);
+      log(`[memory] the database could not be started again${failures > AGAIN_TIMES ? '; it is left until the next start of the body' : ''}: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => { starting = false; });
   };
   const through = <T>(asked: (past: Past) => T): T => {
     if (fell) return asked(now);
@@ -366,9 +408,9 @@ function guarded(served: Past, server: RayServer, journal: string, log: (line: s
     since: (id) => through((past) => past.since(id)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
-    sync: () => through((past) => past.sync()),
+    sync: () => { again(); through((past) => past.sync()); },
     persist: () => through((past) => past.persist()),
-    close: () => { try { now.close(); } finally { server.stop(); } },
+    close: () => { closed = true; try { now.close(); } finally { server.stop(); } },
   };
 }
 
