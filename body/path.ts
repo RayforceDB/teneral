@@ -2,19 +2,28 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
+ * Packages that carry a native program in a package made for one kind of machine, beside a
+ * launcher that only works after an install script has replaced it. The stem runs no such script
+ * (immune/packages.ts), so the directory of the package that was installed for this machine goes on
+ * the PATH itself, before the launchers: `[scope, the beginning of the platform package's name]`.
+ */
+const NATIVE_PACKAGES: readonly (readonly [string, string])[] = [['@ast-grep', 'cli-']];
+
+/**
  * Where the body's own programs are, for anything it starts: the commands it carries (body/bin),
- * the programs of the packages it takes (body/node_modules/.bin, immune/packages.ts) and those of
- * its organs (immune/organs.ts), each organ's directory and its `bin`. They come before the
- * image's, so a generation runs what it pins and was gated with.
+ * the programs of the packages it takes (immune/packages.ts: the native ones above, then
+ * body/node_modules/.bin) and those of its organs (immune/organs.ts), each organ's `bin` and its
+ * directory. They come before the image's, so a generation runs what it pins and was gated with.
  */
 export function commandDirs(env: Record<string, string | undefined> = process.env, body: string = import.meta.dir): string[] {
-  const dirs = [join(body, 'bin'), join(body, 'node_modules', '.bin')];
-  const organs = env.TENERAL_ORGANS;
-  if (organs !== undefined && organs !== '') {
-    let names: string[] = [];
-    try { names = readdirSync(organs).sort(); } catch { /* no organs to find */ }
-    for (const name of names) dirs.push(join(organs, name, 'bin'), join(organs, name));
+  const list = (dir: string): string[] => { try { return readdirSync(dir).sort(); } catch { return []; } };
+  const dirs = [join(body, 'bin')];
+  for (const [scope, prefix] of NATIVE_PACKAGES) {
+    for (const name of list(join(body, 'node_modules', scope))) if (name.startsWith(prefix)) dirs.push(join(body, 'node_modules', scope, name));
   }
+  dirs.push(join(body, 'node_modules', '.bin'));
+  const organs = env.TENERAL_ORGANS;
+  if (organs !== undefined && organs !== '') for (const name of list(organs)) dirs.push(join(organs, name, 'bin'), join(organs, name));
   return dirs.filter((dir) => existsSync(dir));
 }
 

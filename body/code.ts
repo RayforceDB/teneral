@@ -21,14 +21,16 @@ export interface Language {
   name: string;
   /** With the dot, lower case. */
   extensions: string[];
-  /** What universal-ctags calls it, when ctags can list its symbols. */
-  ctags?: string;
   /** What ast-grep calls it. */
   astGrep?: string;
   /** The language server that resolves its names, when there is one (body/code-clangd.ts). */
   server?: string;
-  /** The grammar is not one ast-grep carries: it is loaded from the file the image built (SGCONFIG). */
-  custom?: boolean;
+  /**
+   * The grammar is not one ast-grep carries. Its source is an organ the body pins (immune/organs.ts):
+   * `organ` is the organ's name and `source` the generated parser in it, which the body compiles
+   * once with the image's C compiler (body/code-backends.ts).
+   */
+  grammar?: { organ: string; source: string };
   /**
    * For a language where a statement or an expression is not code unless it stands in a function
    * (C: a bare `f($X)` parses as a declaration): how to put a pattern in one, and the kind of the
@@ -36,9 +38,9 @@ export interface Language {
    */
   inFunction?: { wrap: (pattern: string) => string; block: string };
   /**
-   * How ast-grep finds what a file of this language defines, where ctags cannot or does not know
-   * where a body ends. Each entry is one ast-grep rule and the kind its matches are listed as. The
-   * name is what the rule binds to `$NAME`, or what `read` makes of the matched text.
+   * How ast-grep finds what a file of this language defines. Each entry is one ast-grep rule and
+   * the kind its matches are listed as. The name is what the rule binds to `$NAME`, or what `read`
+   * makes of the matched text when it knows better; what the rule binds to `$PARAMS` is shown after the name.
    */
   definitions?: readonly Definition[];
 }
@@ -54,6 +56,45 @@ function rayfallSet(text: string): { name: string; kind: string; signature?: str
   if (match === null) return null;
   return match[2] === undefined ? { name: match[1]!, kind: 'variable' } : { name: match[1]!, kind: 'function', signature: ' ' + match[3]!.replace(/\s+/g, ' ') };
 }
+
+/**
+ * tree-sitter reads `static __attribute__((x)) int f(void) {` as a function named `__attribute__`.
+ * The name is then the first word before a parenthesis once the attributes are taken out.
+ */
+function cFunction(text: string): { name: string; signature?: string } | null {
+  const brace = text.indexOf('{');
+  const head = brace === -1 ? text : text.slice(0, brace);
+  if (!head.includes('__attribute__')) return null;
+  const plain = head.replace(/__attribute__\s*\(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\)/g, ' ');
+  const match = /([A-Za-z_]\w*)\s*(\((?:[^()]|\([^()]*\))*\))/.exec(plain);
+  return match === null ? null : { name: match[1]!, signature: match[2]!.replace(/\s+/g, ' ') };
+}
+
+const withBody = (kind: string, body: string): Record<string, unknown> => ({ kind, all: [{ has: { field: 'name', pattern: '$NAME' } }, { has: { field: 'body', kind: body } }] });
+/** C. A name is found under its declarator however it is wrapped: a pointer, an array, an initial value. */
+const C: readonly Definition[] = [
+  {
+    kind: 'function', read: cFunction,
+    rule: { kind: 'function_definition', has: { stopBy: 'end', kind: 'function_declarator', all: [{ has: { field: 'declarator', kind: 'identifier', pattern: '$NAME' } }, { has: { field: 'parameters', pattern: '$PARAMS' } }] } },
+  },
+  { kind: 'macro', rule: { any: [{ kind: 'preproc_def' }, { kind: 'preproc_function_def' }], has: { field: 'name', pattern: '$NAME' } } },
+  { kind: 'struct', rule: withBody('struct_specifier', 'field_declaration_list') },
+  { kind: 'union', rule: withBody('union_specifier', 'field_declaration_list') },
+  { kind: 'enum', rule: withBody('enum_specifier', 'enumerator_list') },
+  { kind: 'typedef', rule: { kind: 'type_definition', has: { field: 'declarator', any: [{ kind: 'type_identifier', pattern: '$NAME' }, { has: { stopBy: 'end', kind: 'type_identifier', pattern: '$NAME' } }] } } },
+  {
+    kind: 'variable',
+    rule: {
+      // At the top of the file, and not the declaration of a function.
+      kind: 'declaration', inside: { kind: 'translation_unit' }, not: { has: { stopBy: 'end', kind: 'function_declarator' } },
+      has: { field: 'declarator', any: [{ kind: 'identifier', pattern: '$NAME' }, { has: { stopBy: 'end', kind: 'identifier', pattern: '$NAME' } }] },
+    },
+  },
+];
+const PYTHON: readonly Definition[] = [
+  { kind: 'function', rule: { kind: 'function_definition', all: [{ has: { field: 'name', pattern: '$NAME' } }, { has: { field: 'parameters', pattern: '$PARAMS' } }] } },
+  { kind: 'class', rule: { kind: 'class_definition', has: { field: 'name', pattern: '$NAME' } } },
+];
 
 const named = (...kinds: string[]): Record<string, unknown> => ({ any: kinds.map((kind) => ({ kind })), has: { field: 'name', pattern: '$NAME' } });
 const FUNCTION_VALUE = { has: { field: 'value', any: [{ kind: 'arrow_function' }, { kind: 'function_expression' }] } };
@@ -72,22 +113,22 @@ const SCRIPT: readonly Definition[] = [
 ];
 
 export const LANGUAGES: readonly Language[] = [
-  { name: 'c', extensions: ['.c', '.h', '.inc'], ctags: 'C', astGrep: 'c', server: 'clangd', inFunction: { wrap: (pattern) => `void f__() { ${pattern}; }`, block: 'compound_statement' } },
-  { name: 'python', extensions: ['.py'], ctags: 'Python', astGrep: 'python' },
-  { name: 'bash', extensions: ['.sh', '.bash'], ctags: 'Sh', astGrep: 'bash', definitions: [{ kind: 'function', rule: named('function_definition') }] },
+  { name: 'c', extensions: ['.c', '.h', '.inc'], astGrep: 'c', server: 'clangd', definitions: C, inFunction: { wrap: (pattern) => `void f__() { ${pattern}; }`, block: 'compound_statement' } },
+  { name: 'python', extensions: ['.py'], astGrep: 'python', definitions: PYTHON },
+  { name: 'bash', extensions: ['.sh', '.bash'], astGrep: 'bash', definitions: [{ kind: 'function', rule: named('function_definition') }] },
   {
-    name: 'javascript', extensions: ['.js', '.mjs', '.cjs', '.jsx'], ctags: 'JavaScript', astGrep: 'javascript',
+    name: 'javascript', extensions: ['.js', '.mjs', '.cjs', '.jsx'], astGrep: 'javascript',
     definitions: [...SCRIPT, { kind: 'class', rule: named('class_declaration') }],
   },
   {
-    name: 'typescript', extensions: ['.ts', '.mts', '.cts'], ctags: 'TypeScript', astGrep: 'typescript',
+    name: 'typescript', extensions: ['.ts', '.mts', '.cts'], astGrep: 'typescript',
     definitions: [
       ...SCRIPT, { kind: 'class', rule: named('class_declaration', 'abstract_class_declaration') },
       { kind: 'interface', rule: named('interface_declaration') }, { kind: 'type', rule: named('type_alias_declaration') }, { kind: 'enum', rule: named('enum_declaration') },
     ],
   },
   {
-    name: 'rayfall', extensions: ['.rfl'], astGrep: 'rayfall', custom: true,
+    name: 'rayfall', extensions: ['.rfl'], astGrep: 'rayfall', grammar: { organ: 'tree-sitter-rayfall', source: 'src/parser.c' },
     definitions: [{ kind: 'variable', rule: { kind: 'call', inside: { kind: 'source_file' }, has: { field: 'function', regex: '^set$' } }, read: rayfallSet }],
   },
 ];
@@ -427,7 +468,7 @@ export class Code {
         await cell('outline'), await cell('search'), await cell('outline'), await cell('references', 'grep'), await cell('diagnostics'),
       ].join(' ').trimEnd());
     }
-    lines.push('A dash means nothing in this container answers that: the program is missing from the image.');
+    lines.push('A dash means nothing here answers that: the program is not among the body\'s packages and organs, nor in the image.');
     return { status: 0, text: lines.join('\n') + '\n' };
   }
 }
