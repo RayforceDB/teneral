@@ -1,5 +1,5 @@
 import type { JournalEvent } from './journal';
-import { fromOwner, withdrawn } from './owned';
+import { WITHDRAW_KIND, fromOwner } from './owned';
 
 // What the agent knows and what it means to do, as they lie in the journal. Beside the memory of
 // an episode (brain/remembered.ts) there are two smaller things that outlive it.
@@ -164,81 +164,118 @@ function workState(d: Record<string, unknown>): WorkState | undefined {
   return state;
 }
 
-/** Everything known in `events`, as it holds after the last of them. Notes are the body's to write, so none is taken on trust. */
-export function known(events: JournalEvent[]): Known {
-  const facts = new Map<string, Fact>();
-  const intentions = new Map<string, Intention>();
+/**
+ * What is known, while it is being read from a journal: every fact and intention ever set down,
+ * as each stands after the events read so far, and the ids of what no longer holds. It is what
+ * `known` folds over a journal, and what a table of the database holds between two events
+ * (brain/known-table.ts): the same step makes both, so they cannot come to differ.
+ */
+export interface KnownState {
+  facts: Map<string, Fact>;
+  intentions: Map<string, Intention>;
+  /** Replaced, forgotten, closed or withdrawn by the owner. */
+  gone: Set<string>;
+}
+
+export const knownStart = (): KnownState => ({ facts: new Map(), intentions: new Map(), gone: new Set() });
+
+/** The kinds of notes `knownStep` reads; beside them it reads every reply, for the marks of what waits. */
+export const KNOWN_NOTES: readonly string[] = [FACT_KIND, INTENTION_KIND, DONE_KIND, FORGET_KIND, ALLOWED_KIND, WORK_KIND, WITHDRAW_KIND];
+
+/** Takes one more event into `state`. Returns whether anything in it may have changed. Notes are the body's to write, so none is taken on trust. */
+export const knownStep = (state: KnownState, e: JournalEvent): boolean => step(state, e);
+
+function step(state: KnownState, e: JournalEvent): boolean {
+  const { facts, intentions, gone } = state;
   // What the owner withdrew is gone like what was replaced or forgotten.
-  const gone = withdrawn(events);
-  for (const e of events) {
-    if (e.type === 'assistant') {
-      // What waits for the owner has been put to them once the agent has said it, with its mark.
-      // In a reply, or in what it gave a tool: an agent that can write to its owner elsewhere asks there.
-      const r = e as { text?: unknown; toolCalls?: unknown };
-      const said = `${typeof r.text === 'string' ? r.text : ''}\n${Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? JSON.stringify(r.toolCalls) : ''}`;
-      if (said.length > 1) {
-        for (const i of intentions.values()) {
-          if (!i.waits || i.ended !== undefined || !said.includes(i.mark)) continue;
-          if (!i.put || Date.parse(e.ts) - Date.parse(i.putAt ?? '') >= SAME_ASKING_MS) i.puts += 1;
-          i.put = true;
-          i.putAt = e.ts;
-        }
-      }
-      continue;
-    }
-    if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) continue;
-    const d = e.data as Record<string, unknown>;
-    if (e.kind === FACT_KIND) {
-      if (!text(d.text) || !SOURCES.includes(d.source as Source) || !text(d.episode)) continue;
-      const replaces = Array.isArray(d.replaces) ? d.replaces.filter((id): id is string => typeof id === 'string') : [];
-      for (const id of replaces) gone.add(id);
-      facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}), ...(text(d.about) ? { about: d.about.trim().slice(0, 80) } : {}) });
-    } else if (e.kind === INTENTION_KIND) {
-      if (!text(d.text)) continue;
-      const origin = ORIGINS.includes(d.origin as Origin) ? (d.origin as Origin) : undefined;
-      const unsure = origin === 'own' && d.unsure === true;
-      intentions.set(e.id, {
-        id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text, waits: origin === 'ask' || unsure, put: false, puts: 0,
-        ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
-        ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
-        ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
-        ...(workState(d) === undefined ? {} : { work: { ...workState(d)!, at: e.ts } }),
-      });
-    } else if (e.kind === WORK_KIND) {
-      const item = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
-      const work = workState(d);
-      // A late progress note must not reopen a commitment after `done` (including a same-tick
-      // scheduler checkpoint). Its evidence remains in the journal, but it is no longer runnable.
-      if (item !== undefined && work !== undefined && item.ended === undefined) item.work = { ...work, at: e.ts };
-    } else if (e.kind === ALLOWED_KIND) {
-      const idea = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
-      if (idea !== undefined && idea.unsure === true && text(d.words)) {
-        idea.waits = false;
-        idea.allowed = d.words;
-        if (text(d.source)) idea.allowedIn = d.source;
-      }
-    } else if (e.kind === DONE_KIND) {
-      if (typeof d.intention !== 'string') continue;
-      const ended = intentions.get(d.intention);
-      // What waited for a word ends by that word; anything else ends as the record says, done unless it says dropped.
-      if (ended !== undefined && ended.ended === undefined) {
-        ended.ended = ended.waits ? (ended.unsure === true ? 'refused' : 'answered') : d.ended === 'dropped' ? 'dropped' : 'done';
-        ended.endedAt = e.ts;
-        ended.endedGen = e.gen;
-        // Closed commitments no longer have an executable state. Keeping the checkpoint as
-        // `queued` made a late scheduler note resurrect work after the done record.
-        delete ended.work;
-      }
-      gone.add(d.intention);
-    } else if (e.kind === FORGET_KIND) {
-      if (Array.isArray(d.ids)) for (const id of d.ids) if (typeof id === 'string') gone.add(id);
-    }
+  if (e.type === 'note' && e.kind === WITHDRAW_KIND) {
+    const ids = (e.data as { ids?: unknown } | null)?.ids;
+    if (Array.isArray(ids)) for (const one of ids) if (typeof one === 'string') gone.add(one);
+    return true;
   }
+  if (e.type === 'assistant') {
+    // What waits for the owner has been put to them once the agent has said it, with its mark.
+    // In a reply, or in what it gave a tool: an agent that can write to its owner elsewhere asks there.
+    const r = e as { text?: unknown; toolCalls?: unknown };
+    const said = `${typeof r.text === 'string' ? r.text : ''}\n${Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? JSON.stringify(r.toolCalls) : ''}`;
+    let put = false;
+    if (said.length > 1) {
+      for (const i of intentions.values()) {
+        if (!i.waits || i.ended !== undefined || !said.includes(i.mark)) continue;
+        if (!i.put || Date.parse(e.ts) - Date.parse(i.putAt ?? '') >= SAME_ASKING_MS) i.puts += 1;
+        i.put = true;
+        i.putAt = e.ts;
+        put = true;
+      }
+    }
+    return put;
+  }
+  if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) return false;
+  const d = e.data as Record<string, unknown>;
+  if (e.kind === FACT_KIND) {
+    if (!text(d.text) || !SOURCES.includes(d.source as Source) || !text(d.episode)) return false;
+    const replaces = Array.isArray(d.replaces) ? d.replaces.filter((id): id is string => typeof id === 'string') : [];
+    for (const id of replaces) gone.add(id);
+    facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}), ...(text(d.about) ? { about: d.about.trim().slice(0, 80) } : {}) });
+  } else if (e.kind === INTENTION_KIND) {
+    if (!text(d.text)) return false;
+    const origin = ORIGINS.includes(d.origin as Origin) ? (d.origin as Origin) : undefined;
+    const unsure = origin === 'own' && d.unsure === true;
+    intentions.set(e.id, {
+      id: e.id, mark: markOf('I', e.id), at: e.ts, text: d.text, waits: origin === 'ask' || unsure, put: false, puts: 0,
+      ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
+      ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
+      ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
+      ...(workState(d) === undefined ? {} : { work: { ...workState(d)!, at: e.ts } }),
+    });
+  } else if (e.kind === WORK_KIND) {
+    const item = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
+    const work = workState(d);
+    // A late progress note must not reopen a commitment after `done` (including a same-tick
+    // scheduler checkpoint). Its evidence remains in the journal, but it is no longer runnable.
+    if (item !== undefined && work !== undefined && item.ended === undefined) item.work = { ...work, at: e.ts };
+  } else if (e.kind === ALLOWED_KIND) {
+    const idea = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
+    if (idea !== undefined && idea.unsure === true && text(d.words)) {
+      idea.waits = false;
+      idea.allowed = d.words;
+      if (text(d.source)) idea.allowedIn = d.source;
+    }
+  } else if (e.kind === DONE_KIND) {
+    if (typeof d.intention !== 'string') return false;
+    const ended = intentions.get(d.intention);
+    // What waited for a word ends by that word; anything else ends as the record says, done unless it says dropped.
+    if (ended !== undefined && ended.ended === undefined) {
+      ended.ended = ended.waits ? (ended.unsure === true ? 'refused' : 'answered') : d.ended === 'dropped' ? 'dropped' : 'done';
+      ended.endedAt = e.ts;
+      ended.endedGen = e.gen;
+      // Closed commitments no longer have an executable state. Keeping the checkpoint as
+      // `queued` made a late scheduler note resurrect work after the done record.
+      delete ended.work;
+    }
+    gone.add(d.intention);
+  } else if (e.kind === FORGET_KIND) {
+    if (Array.isArray(d.ids)) for (const id of d.ids) if (typeof id === 'string') gone.add(id);
+  }
+  // A note of a kind this reads: whether it changed anything is for the reader of the tables to find out.
+  return KNOWN_NOTES.includes((e as { kind: string }).kind);
+}
+
+/** What holds in `state`: see `Known`. */
+export function knownOf(state: KnownState): Known {
+  const { facts, intentions, gone } = state;
   return {
     facts: [...facts.values()].filter((fact) => !gone.has(fact.id)),
     intentions: [...intentions.values()].filter((intention) => !gone.has(intention.id)),
     closed: [...intentions.values()].filter((intention) => intention.ended !== undefined),
   };
+}
+
+/** Everything known in `events`, as it holds after the last of them. */
+export function known(events: JournalEvent[]): Known {
+  const state = knownStart();
+  for (const e of events) step(state, e);
+  return knownOf(state);
 }
 
 /** The fact or intention the agent means by `mark`, among what holds now; null when there is none, or more than one. */

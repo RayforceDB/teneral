@@ -6,8 +6,10 @@ import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { LINE_MAX, LINK_NOTES, links, tiesOf, type Since } from './links';
+import { known, type Known } from './known';
+import { knownFrom, knownProjection } from './known-table';
 import { remembered } from './remembered';
-import { openStore, readLine, scan, type Line, type Store } from './store';
+import { openStore, readLine, scan, type Line, type Projection, type Store } from './store';
 import { clip } from '../body/text';
 
 // The past as the agent can ask for it: found by words, opened where something happened, and
@@ -31,6 +33,8 @@ export interface Past {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in order. */
   notes(kinds: readonly string[]): JournalEvent[];
+  /** What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts). */
+  known(): Known;
   /** What became of a memory or a fact since it was written: what made it outdated, and what stands now in its place (brain/links.ts). Null when nothing did. */
   since(id: string): Since | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
@@ -70,6 +74,9 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
   // Everything the journal holds, also what the owner took back: for what asks after a record, not after the conversation.
   return Object.assign(read, { all: (): Line[] => { read(); return all; } });
 }
+
+/** What is made from the events and kept in tables of the store, for everything that asks the database. */
+export const projections = (): Projection[] => [knownProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -138,6 +145,8 @@ export function journalPast(journal: string): Past {
   let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
   return {
     by: 'journal',
+    // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
+    known: () => known(lines.all().map((line) => line.event)),
     latest(type, source) {
       const named = (e: JournalEvent): unknown => (e.type === 'stimulus' ? (e as { source?: unknown }).source : e.type === 'tool.intent' ? (e as { name?: unknown }).name : e.type === 'note' ? e.kind : '');
       return lines.all().findLast((line) => line.event.type === type && (source === undefined || named(line.event) === source))?.event ?? null;
@@ -242,6 +251,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   return {
     ray,
     by: 'store',
+    known() {
+      store.sync();
+      return knownFrom(ray);
+    },
     latest(type, source) {
       store.sync();
       return store.latest(type, source);
@@ -314,7 +327,7 @@ export function openPast(journal: string, library: string | null, log: (line: st
     try {
       const ray = openRay({ library });
       try {
-        const store = openStore(ray, journal);
+        const store = openStore(ray, journal, undefined, projections());
         if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
         return storePast(journal, ray, store, true);
       } catch (err) {
@@ -348,7 +361,7 @@ export async function openServedPast(journal: string, organsDir: string | null, 
       server = await startRayServer(serverAt(organsDir), journal, { log });
       const ray = openRay({ library: libraryAt(organsDir), server: { port: server.port } });
       try {
-        const store = openStore(ray, journal);
+        const store = openStore(ray, journal, undefined, projections());
         if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
         return { served: storePast(journal, ray, store, true), server };
       } catch (err) {
@@ -425,6 +438,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     get ray() { return fell ? undefined : served.ray; },
     find: (question, options) => through((past) => past.find(question, options)),
     since: (id) => through((past) => past.since(id)),
+    known: () => through((past) => past.known()),
     latest: (type, source) => through((past) => past.latest(type, source)),
     notes: (kinds) => through((past) => past.notes(kinds)),
     asked: () => through((past) => past.asked()),

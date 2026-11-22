@@ -518,7 +518,7 @@ const intend: Tool = {
     if (mine.waits) {
       // What is known of whom it is for, so that it is asked of the right person in the right place.
       const whom = (mine.to ?? '').toLowerCase();
-      const of = whom === '' ? [] : known(standing(readEvents(ctx.journal))).facts.filter((f) => f.about !== undefined && f.about.length >= 3 && whom.includes(f.about.toLowerCase()));
+      const of = whom === '' ? [] : pastOf(ctx).known().facts.filter((f) => f.about !== undefined && f.about.length >= 3 && whom.includes(f.about.toLowerCase()));
       const told = of.length === 0 ? '' : `\nWhat you know of them:\n${of.slice(-8).map((f) => `${f.mark} [${f.source}] ${f.text}`).join('\n')}`;
       return `Kept as ${mine.mark}. It waits for an answer: put it, with its mark, to ${mine.unsure === true ? 'your owner' : mine.to ?? 'your owner'}, where you judge they will see it.${told}`;
     }
@@ -561,14 +561,13 @@ const done: Tool = {
   },
   async run(args, ctx) {
     const mark = str(args, 'intention');
-    const events = standing(readEvents(ctx.journal));
-    const held = known(events);
+    const held = pastOf(ctx).known();
     const found = byMark({ facts: [], intentions: held.intentions }, mark);
     if (found === null) throw new Error(`no open intention has the mark ${mark}. Open: ${held.intentions.map((i) => i.mark).join(', ') || 'none'}`);
     const ended = optional(args, 'ended');
     if (ended !== undefined && ended !== 'done' && ended !== 'dropped') throw new Error('ended must be done or dropped');
     const words = optional(args, 'words')?.trim() ?? '';
-    const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaid(events, found as Intention, words));
+    const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaid(standing(readEvents(ctx.journal)), found as Intention, words));
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how'), ...(ended === 'dropped' ? { ended } : {}) } });
     // A step that is done is where the larger thing it belonged to is most easily lost: nothing else asks what follows.
     const after = ended === 'dropped' ? '' : ' If it was one step of something larger, or whoever asked named something to go on to after it, that is not closed with it: unless it already stands on your agenda, set it down now with `work`, or nothing will take it up. (What you had set down as coming after this one is ready now, and you are woken for it.)';
@@ -598,7 +597,7 @@ const allowed: Tool = {
   async run(args, ctx) {
     const mark = str(args, 'intention');
     const events = standing(readEvents(ctx.journal));
-    const idea = known(events).intentions.find((i) => i.mark === mark || i.id === mark);
+    const idea = pastOf(ctx).known().intentions.find((i) => i.mark === mark || i.id === mark);
     if (idea === undefined) throw new Error(`no open intention has the mark ${mark}`);
     if (idea.unsure !== true || !idea.waits) throw new Error(`${idea.mark} does not wait for your owner's word`);
     const words = str(args, 'words').trim();
@@ -635,14 +634,13 @@ const know: Tool = {
     const source = str(args, 'source');
     if (source !== 'seen' && source !== 'read' && source !== 'inferred') throw new Error('source must be one of seen, read, inferred: your owner\'s word is not set down with this tool');
     const about = optional(args, 'about')?.trim().slice(0, 80);
-    const events = standing(readEvents(ctx.journal));
-    const held = known(events);
+    const held = pastOf(ctx).known();
     if (held.facts.some((f) => f.text === text)) return 'You hold that already, word for word.';
     const replaced = optional(args, 'replaces');
     const old = replaced === undefined ? null : byMark({ facts: held.facts, intentions: [] }, replaced);
     if (replaced !== undefined && old === null) throw new Error(`no fact you hold has the mark ${replaced}`);
     // Where it was learned: the message that began what the agent is answering now.
-    const from = events.findLast((e) => e.type === 'stimulus');
+    const from = pastOf(ctx).latest('stimulus');
     const note = appendEvent(ctx.journal, ctx.gen, {
       type: 'note', kind: FACT_KIND,
       data: { text, source, episode: from?.id ?? 'unknown', ...(about ? { about } : {}), ...(old === null ? {} : { replaces: [old.id] }) } satisfies FactData,
@@ -662,7 +660,7 @@ const forget: Tool = {
   },
   async run(args, ctx) {
     const mark = str(args, 'fact');
-    const held = known(readEvents(ctx.journal));
+    const held = pastOf(ctx).known();
     const found = byMark({ facts: held.facts, intentions: [] }, mark);
     if (found === null) throw new Error(`no fact you hold has the mark ${mark}`);
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: FORGET_KIND, data: { ids: [found.id], why: str(args, 'why') } });
