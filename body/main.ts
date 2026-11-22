@@ -1,5 +1,5 @@
 import { watchJournal } from "./acceptance";
-import { decideBudget } from './adaptive-budget';
+import { decideBudget, shares } from './adaptive-budget';
 import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
 import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
@@ -86,9 +86,13 @@ const budgetCeiling = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 // Characters of the conversation shown as it happened. Not a positive number, or not set: the default in brain/logbook.ts.
 const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
-const tailChars = tailSet > 0 ? Math.floor(tailSet) : undefined;
+// Characters the memories of older episodes may take. As above.
+const logbookSet = Number(process.env.TENERAL_LOGBOOK_CHARS);
 // The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
 const budgetChoice = decideBudget(journalNow(), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? DEFAULT_BUDGET);
+// How much of the past a request shows: the owner's word where it is given, else a share of that budget (body/adaptive-budget.ts).
+const tailChars = tailSet > 0 ? Math.floor(tailSet) : shares(budgetChoice.budgetChars).tailChars;
+const logbookChars = logbookSet > 0 ? Math.floor(logbookSet) : shares(budgetChoice.budgetChars).logbookChars;
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
@@ -466,7 +470,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
+      journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, logbookChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
@@ -529,7 +533,7 @@ async function rest(): Promise<boolean> {
     if (Date.now() < restNotBefore) return false;
     const stop = new AbortController();
     const done = sleep({
-      journal, gen, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
+      journal, gen, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars,
       // While a turn runs, the pulse file says what the turn is doing, not this.
       provider: (messages, specs, options) => provider(messages, specs, { ...options, mayPulse: () => !working }),
       system: () => composeSystem(prompt, soulDir, journal),
@@ -621,7 +625,7 @@ const heart = new Heart({
     resting = true;
     try {
       const events = standing(journalNow());
-      const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events);
+      const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events);
       if (settled === 'reflected') console.error('[agenda] settled what the turn left');
       return settled;
     } finally { wake = null; resting = false; }

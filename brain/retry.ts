@@ -81,7 +81,7 @@ export function refusalNote(err: ProviderError, kind: FailureKind): string {
   if (kind === 'long') {
     return `[not from the model] The provider refused the request as too long in ${PATIENCE} turns in a row, with status ${err.status}: ${said}\n` +
       'The conversation no longer fits the model, even at half the budget for a request. The messages before this one could not be answered. ' +
-      'Owner, please lower TENERAL_CONTEXT_CHARS and start the agent again.';
+      'Owner, please lower TENERAL_TAIL_CHARS or TENERAL_CONTEXT_CHARS and start the agent again.';
   }
   return `[not from the model] The provider refused the request ${PATIENCE} times in a row with status ${err.status}: ${said}\n` +
     'The messages before this one could not be answered. Owner, please look: something in the journal or in how the request is built is not accepted.';

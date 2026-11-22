@@ -809,3 +809,71 @@ test('steps since the newest stimulus that outgrow the room leave from the first
   const calls = new Set(last.flatMap((m) => m.tool_calls?.map((c) => c.id) ?? []));
   for (const m of last) if (m.role === 'tool') expect(calls.has(m.tool_call_id!)).toBe(true);
 });
+
+// --- older outputs of tools ---
+
+/** A step: a call and its output, `chars` long, that begins and ends in a way a test can recognise. */
+function step(id: string, chars: number): JournalEvent[] {
+  const head = `BEGIN-${id} `, tail = ` END-${id}`;
+  const output = `${head}${'x'.repeat(chars - head.length - tail.length)}${tail}`;
+  return [called(id), intent(id), result(id, output)];
+}
+const outputs = (events: JournalEvent[], view: Parameters<typeof buildMessages>[4] = {}) =>
+  buildMessages(events, 'S', 10_000_000, undefined, { tailChars: 10_000_000, ...view }).filter((m) => m.role === 'tool').map((m) => m.content ?? '');
+
+test('an older output of a tool is shown by its beginning and its end, with how to see the rest; a recent one is whole', () => {
+  const events = [said('go'), ...step('a', 30_000), ...step('b', 30_000), ...step('c', 30_000), replied('done'), said('next')];
+  const [a, b, c] = outputs(events, { resultsChars: 30_000 });
+  // The newest 30,000 characters hold the last output whole.
+  expect(c).toHaveLength(30_000);
+  for (const [id, text] of [['a', a!], ['b', b!]] as const) {
+    expect(text.length).toBeLessThan(1_400);
+    expect(text.startsWith(`BEGIN-${id} xxx`)).toBe(true);
+    expect(text.endsWith(`xxx END-${id}`)).toBe(true);
+    expect(text).toContain('29000 characters of this output are not shown here: it is from an earlier step.');
+  }
+  // The line names the journal event that holds the output, which `open` reads.
+  const held = events.find((e) => e.type === 'tool.result' && e.callId === 'a')!;
+  expect(a).toContain(`\`open\` with id ${held.id} shows it as it was; run the call again if you need what it gives now.]`);
+});
+
+test('a short output, what the agent said and what it was told are never shortened', () => {
+  const long = 'w'.repeat(30_000);
+  const events = [said(long), replied(long), ...step('a', 1_900), ...step('b', 60_000), said('next')];
+  const messages = buildMessages(events, 'S', 10_000_000, undefined, { tailChars: 10_000_000, resultsChars: 10_000 });
+  expect(messages[1]!.content).toBe(long);
+  expect(messages[2]!.content).toBe(long);
+  const tools = messages.filter((m) => m.role === 'tool').map((m) => m.content!);
+  expect(tools[0]).toHaveLength(1_900);
+  // Everything that shows the call is still there: its id pairs it with its result.
+  expect(messages.filter((m) => m.tool_calls !== undefined)).toHaveLength(2);
+});
+
+test('which outputs are old moves in steps: while the journal grows by less than a step, nothing already sent changes', () => {
+  const base = [said('go'), ...step('a', 20_000), ...step('b', 20_000), ...step('c', 20_000)];
+  const sent = (events: JournalEvent[]) => JSON.stringify(buildMessages(events, 'S', 10_000_000, undefined, { tailChars: 10_000_000, resultsChars: 40_000 }).slice(0, 8));
+  const before = sent(base);
+  let grown = [...base];
+  let same = 0;
+  // A step is a fifth of 40,000: 8,000 characters. Small replies add up to less than that.
+  for (let i = 0; i < 6; i++) {
+    grown = [...grown, said(`q${i} ${'.'.repeat(500)}`), replied(`r${i} ${'.'.repeat(500)}`)];
+    if (sent([...grown, said('now')]) === before) same += 1;
+  }
+  expect(same).toBe(6);
+  // Past a step, the next output goes, and stays gone.
+  grown = [...grown, said('big'), replied('.'.repeat(17_000)), said('now')];
+  expect(sent(grown)).not.toBe(before);
+  expect(outputs(grown, { resultsChars: 40_000 }).map((text) => text.length < 2_000)).toEqual([true, true, false]);
+});
+
+test('with room for everything, or when asked for all of it, no output is shortened; a cut never splits a character', () => {
+  const events = [said('go'), ...step('a', 30_000), ...step('b', 30_000), said('next')];
+  expect(outputs(events, { resultsChars: Number.MAX_SAFE_INTEGER }).map((text) => text.length)).toEqual([30_000, 30_000]);
+  expect(outputs([said('go'), ...step('a', 30_000), said('next')]).map((text) => text.length)).toEqual([30_000]);
+  // An emoji lies across both places where the output is cut.
+  const emoji = `${'a'.repeat(599)}😀${'b'.repeat(20_000)}😀${'c'.repeat(399)}`;
+  const [cut] = outputs([said('go'), called('e'), intent('e'), result('e', emoji), ...step('z', 50_000), said('next')], { resultsChars: 10_000 });
+  expect(cut!.isWellFormed()).toBe(true);
+  expect(cut!.length).toBeLessThan(1_400);
+});

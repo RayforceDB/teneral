@@ -56,6 +56,31 @@ export interface BudgetDecision {
   report: BudgetReport;
 }
 
+/** What of a request shows the past, sized from the budget. */
+export interface Shares {
+  /** Characters of the conversation shown as it happened (brain/logbook.ts). */
+  tailChars: number;
+  /** Characters the memories of older episodes may take. */
+  logbookChars: number;
+}
+
+const TAIL_SHARE = 0.25, TAIL_MIN = 100_000, TAIL_MAX = 250_000;
+const LOGBOOK_SHARE = 0.12, LOGBOOK_MIN = 50_000, LOGBOOK_MAX = 100_000;
+
+/**
+ * How much of the past a request shows, for a budget the chooser picked. The two sizes were
+ * constants, 100,000 and 50,000 characters, chosen when a model's window was a fifth of what it is
+ * now: an agent on a large model saw as little of its own work as one on a small model, and used
+ * a sixth of what it was given. They are now a share of the budget, between the old constants,
+ * which a small or unknown window still gets, and a ceiling. The ceiling is there because every
+ * character is paid for in every request: at the ceilings a request is about 450,000 characters
+ * where it was about 250,000. The owner's TENERAL_TAIL_CHARS and TENERAL_LOGBOOK_CHARS say otherwise.
+ */
+export function shares(budgetChars: number): Shares {
+  const between = (value: number, least: number, most: number): number => Math.max(least, Math.min(most, Math.round(value)));
+  return { tailChars: between(budgetChars * TAIL_SHARE, TAIL_MIN, TAIL_MAX), logbookChars: between(budgetChars * LOGBOOK_SHARE, LOGBOOK_MIN, LOGBOOK_MAX) };
+}
+
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
 }
