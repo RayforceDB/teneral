@@ -266,14 +266,17 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     by: 'store',
     remembered() {
       store.sync();
+      store.settle();
       return rememberedFrom(ray);
     },
     episodes() {
       store.sync();
+      store.settle();
       return episodesFrom(ray);
     },
     known() {
       store.sync();
+      store.settle();
       return knownFrom(ray);
     },
     latest(type, source) {

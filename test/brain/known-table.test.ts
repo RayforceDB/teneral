@@ -80,6 +80,7 @@ real('the tables of the database hold what is known, as the journal read whole g
     appendFileSync(journal, events.slice(had, upTo).map(line).join(''));
     had = upTo;
     store.sync();
+    store.settle();
     expect(knownFrom(ray())).toEqual(known(events.slice(0, upTo)));
   }
   // What can be asked of the columns: the facts about one person that stand, and what waits for the owner.
@@ -97,4 +98,33 @@ real('the tables of the database hold what is known, as the journal read whole g
   expect(knownFrom(ray())).toEqual(known([...events, later]));
   // Only the one new event was taken in: the rest came back from the tables as they were written.
   expect(stepped).toBe(1);
+}, 30_000);
+
+real('laying out an event does not pay for the tables made from it: they are made when read, and written only when they changed', () => {
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-known-')), 'journal.jsonl');
+  const first = ev(0, { type: 'stimulus', source: 'terminal', text: 'hello' });
+  writeFileSync(journal, line(first));
+  const inner = knownProjection();
+  let made = 0;
+  const counting = { ...inner, tables: () => { made += 1; return inner.tables(); } };
+  const store = openStore(ray(), journal, undefined, [counting]);
+  const afterOpen = made;
+  for (let i = 0; i < 5; i++) {
+    appendFileSync(journal, line(ev(1, { type: 'stimulus', source: 'terminal', text: `more ${i}` })));
+    store.sync();
+  }
+  // Five events laid out, and nothing was asked of the tables.
+  expect(made).toBe(afterOpen);
+  appendFileSync(journal, line(note(2, 'memory.fact.v1', { text: 'The office is in Lisbon.', source: 'owner', episode: first.id })));
+  store.sync();
+  expect(made).toBe(afterOpen);
+  store.settle();
+  expect(knownFrom(ray()).facts.map((f) => f.text)).toEqual(['The office is in Lisbon.']);
+  // The very same columns until something changes: that is how the store knows not to send or write them again.
+  expect(inner.tables().facts).toBe(inner.tables().facts);
+  const before = inner.tables().facts;
+  appendFileSync(journal, line(ev(3, { type: 'stimulus', source: 'terminal', text: 'nothing that is known changes' })));
+  store.sync();
+  store.settle();
+  expect(inner.tables().facts).toBe(before);
 }, 30_000);

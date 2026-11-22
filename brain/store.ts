@@ -162,6 +162,8 @@ export interface Store {
   sync(): number;
   /** Writes the days that have changed to disk. What is not written is only made again after a restart. */
   persist(): void;
+  /** Brings the tables made from the events up to date in the database. Asked for by whatever reads them, just before it does: laying out an event does not pay for it. */
+  settle(): void;
   /** How many events are laid out, and the byte of the journal up to which they reach. */
   count(): number;
   mark(): number;
@@ -275,6 +277,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
   const unwritten = new Set<Projection>();
   /** What each table was last bound from: a projection that hands back the very same columns for a table has not changed it, and it is not sent again. */
   const boundFrom = new Map<string, Record<string, Column>>();
+  const writtenFrom = new Map<string, Record<string, Column>>();
   const bindTables = (projection: Projection): void => {
     for (const [table, columns] of Object.entries(projection.tables())) {
       const name = boundAs(projection.name, table);
@@ -371,9 +374,8 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
   }
   bindChanged();
 
-  function persist(): void {
-    if (!mounted) return;
-    if (dirty.size === 0) { writeDerived(); return; }
+  function persistDays(): void {
+    if (!mounted || dirty.size === 0) return;
     for (const day of [...dirty].sort((a, b) => a - b)) {
       for (const name of NAMES) {
         const { bound, columns } = TABLES[name];
@@ -385,15 +387,25 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
     dirty.clear();
     // Mounted again, the days just written are read from disk like any other, and the memory they took is given back.
     mount();
+  }
+
+  /** Everything that has changed, written out: the days, then what is made from the events. */
+  function persist(): void {
+    if (!mounted) return;
+    persistDays();
     writeDerived();
   }
 
   /** Writes out what is made from the events, after the events it was made from: a table that reaches further than the events on disk is made again at the next start. */
   function writeDerived(): void {
+    bindChanged();
     for (const projection of unwritten) {
-      bindTables(projection);
-      for (const table of Object.keys(projection.tables())) {
-        ray.run(`(.db.splayed.set ${derived(projection, table)} ${boundAs(projection.name, table)} ${symbols})`);
+      for (const [table, columns] of Object.entries(projection.tables())) {
+        // A table that is as it was last written is not written again: most of what is made from the events changes rarely.
+        const name = boundAs(projection.name, table);
+        if (writtenFrom.get(name) === columns) continue;
+        ray.run(`(.db.splayed.set ${derived(projection, table)} ${name} ${symbols})`);
+        writtenFrom.set(name, columns);
       }
       ray.bind(BATCH, { version: { type: 'i64', data: BigInt64Array.from([BigInt(projection.version)]) }, seq: { type: 'i64', data: BigInt64Array.from([BigInt(rows)]) } });
       ray.run(`(.db.splayed.set ${derived(projection, 'mark')} ${BATCH} ${symbols})`);
@@ -432,7 +444,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
         mount();
       } else if (Number.isFinite(last) && day !== last) {
         // A day that is over is written out before the next one begins, so memory holds one day's rows and no more.
-        persist();
+        persistDays();
       }
       for (const name of NAMES) {
         ray.bind(BATCH, made[name]);
@@ -447,7 +459,6 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       from = to;
     }
     lastDay = last;
-    bindChanged();
     return lines.length;
   }
 
@@ -456,6 +467,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
 
   return {
     sync,
+    settle: bindChanged,
     persist,
     count: () => rows,
     mark: () => reached,

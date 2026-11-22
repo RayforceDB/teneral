@@ -99,6 +99,7 @@ real('the tables of the database hold the episodes and what is remembered, as th
     appendFileSync(journal, events.slice(had, upTo).map(line).join(''));
     had = upTo;
     store.sync();
+    store.settle();
     same(journal, events, upTo);
   }
   store.persist();
