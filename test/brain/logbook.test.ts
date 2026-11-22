@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { GAP_MS } from '../../brain/episodes';
+import { GAP_MS, RESULT_END, RESULT_HEAD, shownChars } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { DEFAULT_TAIL_CHARS } from '../../brain/logbook';
 import { buildMessages, needsTurn } from '../../brain/memory';
@@ -195,4 +195,38 @@ test('of a stretch in which the owner said nothing, the memory system says so, a
   const usual = buildMessages([...a, ...b, ...c.slice(0, 2), ...plain, c[2]!], 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content);
   expect(usual[1]).toEndWith('What do you remember of it?');
   expect(usual[3]).toEndWith('What do you remember of it?');
+});
+
+/** Six remembered episodes of the same words, each said by `source`, and one still going on. */
+function sixBy(source: string): JournalEvent[] {
+  clock = Date.parse('2026-11-11T00:00:00.000Z');
+  const events: JournalEvent[] = [];
+  const notes: JournalEvent[] = [];
+  for (let i = 0; i < 6; i++) {
+    const asked = ev({ type: 'stimulus', source, text: `matter ${i} ${'m'.repeat(300)}` }, LONG);
+    const done = replied(`settled matter ${i}`);
+    events.push(asked, done);
+    notes.push(memoryOf(asked, done, `Matter ${i}`, `I settled matter ${i}.`));
+  }
+  return [...events, ...notes, ev({ type: 'stimulus', source, text: 'and now?' }, LONG)];
+}
+
+test('which episodes are shown as memories is decided by the events alone, not by how they are laid out in a request', () => {
+  // The same journal twice; in the second every message carries a long label of where it came from,
+  // so each takes far more room in a request while the events count for the same.
+  const plain = sixBy('terminal');
+  const labelled = sixBy(`owner:${'z'.repeat(150)}`);
+  const memories = (events: JournalEvent[], tailChars: number): number =>
+    buildMessages(events, 'S', 100_000, undefined, { tailChars }).filter((m) => m.role === 'user' && (m.content ?? '').includes('What do you remember of it?')).length;
+  const counts = [200, 500, 800, 1100, 1400, 1700, 2000].map((tail) => [memories(plain, tail), memories(labelled, tail)]);
+  for (const [a, b] of counts) expect(b).toBe(a);
+  // And the choice does move with what is wanted: less shown as it happened, more as memories.
+  expect(counts[0]![0]!).toBeGreaterThan(counts.at(-1)![0]!);
+});
+
+test('a long output of a tool counts, once it is old, for what is still shown of it', () => {
+  const result = (output: string): JournalEvent => ev({ type: 'tool.result', callId: 'c', ok: true, output });
+  expect(shownChars(result('x'.repeat(1500)))).toBe(1500);
+  expect(shownChars(result('x'.repeat(50_000)))).toBe(RESULT_HEAD + RESULT_END + 180);
+  expect(shownChars(said('hello'))).toBe(5);
 });
