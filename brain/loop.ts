@@ -29,6 +29,8 @@ export interface TurnDeps {
   budgetChars?: number;
   /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
   tailChars?: number;
+  /** Characters the memories of older episodes may take. Default: the one in brain/logbook.ts. */
+  logbookChars?: number;
   /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
   budget?: BudgetDecision;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
@@ -174,7 +176,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     let reply: Reply;
     let streamed = false;
     for (let attempt = 0; ; attempt++) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
       if (attempt === 0) {
         const request = JSON.stringify(messages);
         sameRequests = round > 0 && request === lastRequest ? sameRequests + 1 : 0;

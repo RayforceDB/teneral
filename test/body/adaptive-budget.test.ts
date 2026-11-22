@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { decideBudget, SENT_KIND, REFUSED_KIND } from '../../body/adaptive-budget';
+import { decideBudget, SENT_KIND, REFUSED_KIND, shares } from '../../body/adaptive-budget';
 import { buildMessages, DEFAULT_BUDGET } from '../../brain/memory';
 import type { JournalEvent } from '../../brain/journal';
 
@@ -86,4 +86,15 @@ test('a refusal caps only while what it refused is still recent', () => {
   // chars/token is measured (~3.03 here), so compare against the window-scaled budget, not a fixed 3.0.
   expect(aged.budgetChars).toBeGreaterThan(Math.round(262_144 * 3 * 0.75) - 10_000);
   expect(aged.budgetChars).toBeLessThan(Math.round(262_144 * 3 * 0.75) + 10_000);
+});
+
+test('how much of the past a request shows is a share of the budget, between the old constants and a ceiling', () => {
+  // An unknown or small window keeps what every request had before.
+  expect(shares(250_000)).toEqual({ tailChars: 100_000, logbookChars: 50_000 });
+  expect(shares(50_000)).toEqual({ tailChars: 100_000, logbookChars: 50_000 });
+  // A window of 272,000 tokens at 3.3 characters a token and three quarters of it used.
+  expect(shares(673_000)).toEqual({ tailChars: 168_250, logbookChars: 80_760 });
+  // A larger one stops at the ceilings: every character is paid for in every request.
+  expect(shares(1_190_000)).toEqual({ tailChars: 250_000, logbookChars: 100_000 });
+  expect(shares(10_000_000)).toEqual({ tailChars: 250_000, logbookChars: 100_000 });
 });

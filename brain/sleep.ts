@@ -300,7 +300,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     return (e.kind === FACT_KIND || e.kind === INTENTION_KIND || e.kind === DONE_KIND) && before(about.episode);
   });
   const asOf = [...events.slice(0, episode.to), ...earlier];
-  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
+  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER });
   let usage: Usage | undefined;
   let problem = '';
   let halved = false;
@@ -314,7 +314,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       // Characters are only an estimate of tokens: once more with half, as a turn does.
       halved = true;
       budget = Math.floor(budget / 2);
-      messages = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0 });
+      messages = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER });
       attempt -= 1;
       continue;
     }
@@ -474,7 +474,7 @@ async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
     // One step deeper than memories of episodes are the episodes.
     for (const cut of CUTS) {
       const again = buildMessages(cutShort(events.slice(first.from, last.to), cut), system, Number.MAX_SAFE_INTEGER, undefined, {
-        ask: mergeQuestion(true, parts.length, span.start, span.end, chars), tailChars: Number.MAX_SAFE_INTEGER,
+        ask: mergeQuestion(true, parts.length, span.start, span.end, chars), tailChars: Number.MAX_SAFE_INTEGER, resultsChars: Number.MAX_SAFE_INTEGER,
       });
       if (sizeOfAll(again) <= room) {
         messages = again;

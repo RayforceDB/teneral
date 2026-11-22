@@ -310,3 +310,15 @@ test('the agent is told of its `code` command, which is in no list of tools', ()
     expect(prompt).toContain(form);
   }
 });
+
+test('what is in every request whatever is said stays within its room: the prompt and the tools', async () => {
+  // The prompt and the list of tools are sent with every request and are never cut to fit: what they
+  // take, the conversation does not get. They were 70,000 and 24,500 characters when this was written,
+  // three eighths of a request of the usual size. This test is the question asked of every addition:
+  // is it needed in every request? What is needed only now and then belongs in a skill, which is read
+  // when it is called for, or behind a command that explains itself (`code --help`).
+  // To add here, take something of the same size out, or raise a number below and say why in the commit.
+  const { TOOLS } = await import('../../body/tools');
+  expect(prompt.length).toBeLessThanOrEqual(72_000);
+  expect(JSON.stringify(TOOLS.map((tool) => tool.spec)).length).toBeLessThanOrEqual(26_000);
+});

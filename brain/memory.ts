@@ -242,14 +242,14 @@ function stimulusText(source: unknown, text: unknown): string {
  * Call ids are the model's and may repeat, in a later reply or within one, so an id alone does
  * not say which call a result belongs to. Calls run in order: the nth call with an id gets the nth result.
  */
-function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean }[]>; started: Map<unknown, number> } {
-  const results = new Map<unknown, { output: string; ok: boolean }[]>();
+function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean; id: string }[]>; started: Map<unknown, number> } {
+  const results = new Map<unknown, { output: string; ok: boolean; id: string }[]>();
   const started = new Map<unknown, number>();
   for (let j = at + 1; j < events.length; j++) {
     const e = events[j]!;
     if (e.type === 'assistant') break;
     if (e.type === 'tool.intent') started.set(e.callId, (started.get(e.callId) ?? 0) + 1);
-    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true }]);
+    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true, id: e.id }]);
   }
   return { results, started };
 }
@@ -257,11 +257,62 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
 /** How a request is laid out, beyond its budget: how much is shown as it happened (brain/logbook.ts), and a closing question. */
 export interface View extends Sizes {
   /**
+   * Characters of the newest conversation in which a tool's output is shown whole; an older output
+   * is shown by its beginning and its end (see `shortenResults`). Default: DEFAULT_RESULTS_CHARS.
+   */
+  resultsChars?: number;
+  /**
    * Said to the agent after everything in the journal. It is how the agent is asked something
    * that is no part of its conversation and is not journaled as one, such as to form a memory
    * (brain/sleep.ts).
    */
   ask?: string;
+}
+
+/** Characters of the newest conversation in which a tool's output is shown whole. About 12 thousand tokens. */
+export const DEFAULT_RESULTS_CHARS = 40_000;
+/** An output no longer than this is never shortened: there is too little to gain. */
+const RESULT_WHOLE = 2_000;
+/** Of an older output, this much of its beginning and this much of its end stay. */
+const RESULT_HEAD = 600;
+const RESULT_END = 400;
+
+/**
+ * Shows the older outputs of tools by their beginning and their end.
+ *
+ * What tools print is close to half of everything in a journal, and most of it matters only while
+ * the agent is acting on it: the file it read, the log it searched. Shown whole for as long as the
+ * conversation around it, it pushes the agent's own steps and what it was told out of the request
+ * long before they would otherwise leave. So an output is whole while it is among the newest
+ * `fullChars` characters of the conversation, and after that keeps its first and last lines, with a
+ * line between saying how much is not shown and how to see it: the call is still there to be run
+ * again, and the journal holds the output under the id the line gives. Nothing the agent said or
+ * was told is touched.
+ *
+ * Which outputs are old moves in steps, as the front of a request does in `fit` and for the same
+ * reason: measured from the start of the whole conversation, the amount that counts as old is a
+ * multiple of one step, so between two steps nothing that was already sent changes.
+ */
+function shortenResults(messages: ChatMessage[], ids: Map<ChatMessage, string>, fullChars: number): void {
+  const sizes = messages.map((m) => size(m));
+  const total = sizes.reduce((sum, n) => sum + n, 0);
+  if (total <= fullChars) return;
+  const step = Math.max(1, Math.floor(fullChars * STEP));
+  const old = Math.ceil((total - fullChars) / step) * step;
+  let end = 0;
+  for (const [i, m] of messages.entries()) {
+    end += sizes[i]!;
+    if (end > old) return;
+    const text = m.content ?? '';
+    if (m.role !== 'tool' || m.images !== undefined || text.length <= RESULT_WHOLE) continue;
+    // A cut never falls inside a surrogate pair.
+    let head = RESULT_HEAD, tail = text.length - RESULT_END;
+    if (text.charCodeAt(head - 1) >= 0xd800 && text.charCodeAt(head - 1) <= 0xdbff) head -= 1;
+    if (text.charCodeAt(tail) >= 0xdc00 && text.charCodeAt(tail) <= 0xdfff) tail += 1;
+    const id = ids.get(m);
+    m.content = `${text.slice(0, head)}\n[${tail - head} characters of this output are not shown here: it is from an earlier step. `
+      + `${id === undefined ? '' : `\`open\` with id ${id} shows it as it was; `}run the call again if you need what it gives now.]\n${text.slice(tail)}`;
+  }
 }
 
 /**
@@ -282,6 +333,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
   const origin: number[] = [];
   const slots: Slot[] = [];
+  // For the result of a tool's call, the id of the journal event that holds its output.
+  const resultIds = new Map<ChatMessage, string>();
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
   const used = new Set<string>();
@@ -359,6 +412,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
         const answer: ChatMessage = { role: 'tool', tool_call_id: id, content: result?.output ?? (began ? INTERRUPTED : NOT_STARTED) };
         // What `look` kept for the agent to see (body/tools.ts). The same line in any other tool's output is only text.
         if (sight && c.name === 'look' && result?.ok) takeMarkers(answer, slots);
+        if (result !== undefined) resultIds.set(answer, result.id);
         answered.push(answer);
       }
       // Results are placed here, right after their call, whatever was journaled in between.
@@ -388,6 +442,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   if (sight) fillSlots(slots, sight);
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
+  // Before anything is measured for the cut: an older output counts for what is shown of it.
+  shortenResults(out, resultIds, Math.max(0, view.resultsChars ?? DEFAULT_RESULTS_CHARS));
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
