@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { fromRayNs } from '../../brain/ray';
+import { CURRENT_NOTES, currentMemoryIds } from '../../brain/recall';
 import { STORE_VERSION, dropOtherStores, openStore, scan, storeDir } from '../../brain/store';
 import { library, ray } from './rayforce';
 
@@ -214,4 +215,46 @@ real('an event is whole in its row: it is read from the table, with the journal\
   expect(store.stretch(lines[2]!.off, lines[2]!.next)).toEqual([events[2]!]);
   expect(store.stretch(lines[3]!.next, lines[3]!.next + 100)).toEqual([]);
   expect(store.stretch(50, 50)).toEqual([]);
+});
+
+/** A journal in which facts were replaced, forgotten and withdrawn, a memory was withdrawn and formed again, and much was said in between. */
+function knownAndForgotten(): JournalEvent[] {
+  const note = (ts: string, kind: string, data: Record<string, unknown>) => ev(ts, { type: 'note', kind, data });
+  const t = (minute: number): string => `2026-11-13T10:${String(minute).padStart(2, '0')}:00.000Z`;
+  const a = said(t(0), 'where is the office?'), b = replied(t(1), 'In Lisbon.');
+  const m1 = note(t(2), 'memory.episode.v1', { from: a.id, to: b.id, start: a.ts, end: b.ts, title: 'The office', text: 'The office is in Lisbon.', outcome: 'done' });
+  const f1 = note(t(3), 'memory.fact.v1', { text: 'The office is in Lisbon.', source: 'owner', episode: a.id });
+  const f2 = note(t(4), 'memory.fact.v1', { text: 'The office is in Porto now.', source: 'owner', episode: a.id, replaces: [f1.id] });
+  const f3 = note(t(5), 'memory.fact.v1', { text: 'The door code is 4711.', source: 'seen', episode: a.id });
+  const f4 = note(t(6), 'memory.fact.v1', { text: 'The lift is out of order.', source: 'seen', episode: a.id });
+  const m2 = note(t(9), 'memory.episode.v1', { from: a.id, to: b.id, start: a.ts, end: b.ts, title: 'The office, again', text: 'The office was in Lisbon then.', outcome: 'done' });
+  return [a, b, m1, f1, said(t(3), 'we moved'), replied(t(3), 'Noted.'), f2, f3, f4,
+    note(t(7), 'memory.forget.v1', { ids: [f3.id] }), note(t(8), 'memory.withdraw.v1', { ids: [f4.id, m1.id] }), m2, said(t(10), 'thanks')];
+}
+
+test('which memories and facts stand is the same from the notes alone as from the whole journal', () => {
+  const events = knownAndForgotten();
+  const kinds: readonly string[] = CURRENT_NOTES;
+  const all = currentMemoryIds(events);
+  expect(currentMemoryIds(events.filter((e) => e.type === 'note' && kinds.includes(e.kind)))).toEqual(all);
+  // The fact that replaced another and the memory formed again stand; nothing replaced, forgotten or withdrawn does.
+  expect(all.size).toBe(2);
+});
+
+real('the store reads what stands from its own table, and again only when a note of that kind was written', () => {
+  const events = knownAndForgotten();
+  const journal = journalOf(events);
+  const store = openStore(ray(), journal);
+  const lines = scan(journal, 0).lines;
+  const standing = currentMemoryIds(events);
+  expect(store.index.current!()).toEqual(new Set(lines.filter((l) => standing.has(l.event.id)).map((l) => l.off)));
+  const before = store.index.current!();
+  appendFileSync(journal, line(said('2026-11-13T11:00:00.000Z', 'and one thing more')));
+  store.sync();
+  // Something said changes nothing about what stands: the same answer, not read again.
+  expect(store.index.current!()).toBe(before);
+  const fact = ev('2026-11-13T11:01:00.000Z', { type: 'note', kind: 'memory.fact.v1', data: { text: 'The kitchen is on the second floor.', source: 'seen', episode: events[0]!.id } });
+  appendFileSync(journal, line(fact));
+  store.sync();
+  expect(store.index.current!().size).toBe(before.size + 1);
 });

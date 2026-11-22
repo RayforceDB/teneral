@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import type { JournalEvent } from './journal';
 import { eventChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
-import { currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
+import { CURRENT_NOTES, currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
 
 // The store is the journal laid out for asking questions of, in two tables of the database that
 // are partitioned by day: one row an event, with the event itself in it, whole, as the line the
@@ -169,7 +169,16 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
   /** How many of the events say something, and so have terms: the number of documents recall counts with. */
   let documents = 0;
   const dirty = new Set<number>();
-  let currentCache: { mark: number; offsets: Set<number> } | null = null;
+  let currentCache: { notes: number; offsets: Set<number> } | null = null;
+  const noted = (kinds: readonly string[]): JournalEvent[] => {
+    if (!mounted || kinds.length === 0) return [];
+    return eventsOf(ray.table(`(select {from: ${BOUND} where: ${ofKinds(kinds)} asc: off line: line})`));
+  };
+  const notedCount = (kinds: readonly string[]): number => {
+    if (!mounted || kinds.length === 0) return 0;
+    const n = ray.query(`(count (select {from: ${BOUND} where: ${ofKinds(kinds)} off: off}))`);
+    return typeof n === 'bigint' || typeof n === 'number' ? Number(n) : 0;
+  };
 
   const mount = (): void => {
     for (const name of NAMES) ray.run(`(set ${TABLES[name].bound} (.db.parted.get ${root} '${name}))`);
@@ -298,14 +307,16 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     index: {
       documents: () => documents,
       current() {
-        if (currentCache?.mark === reached) return currentCache.offsets;
-        // Currentness is computed from the whole journal. The indexed table below limits the
-        // result to this store's watermark if the journal grew during this query.
-        const ids = [...currentMemoryIds(scan(journal, 0).lines.map((line) => line.event))];
+        // Which memories and facts stand is decided by notes alone (`CURRENT_NOTES` in brain/recall.ts), so only
+        // those are read, from the table, and only when one of them has been written since: the journal
+        // itself is not read through for a question, however long it is.
+        const notes = notedCount(CURRENT_NOTES);
+        if (currentCache?.notes === notes) return currentCache.offsets;
+        const ids = [...currentMemoryIds(noted(CURRENT_NOTES))];
         ray.bind(ASKED, { ids: { type: 'str', data: ids } });
         const table = ray.table(`(select {from: ${BOUND} where: (in id (at ${ASKED} 'ids)) off: off})`);
         const offsets = new Set([...(table.columns.off as BigInt64Array | undefined ?? [])].map(Number));
-        currentCache = { mark: reached, offsets };
+        currentCache = { notes, offsets };
         return offsets;
       },
       matches(asked) {
@@ -334,15 +345,8 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
       if (!mounted || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) return [];
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (>= off ${from}) (< off ${to})) asc: off line: line})`));
     },
-    noted(kinds) {
-      if (!mounted || kinds.length === 0) return [];
-      return eventsOf(ray.table(`(select {from: ${BOUND} where: ${ofKinds(kinds)} asc: off line: line})`));
-    },
-    notedCount(kinds) {
-      if (!mounted || kinds.length === 0) return 0;
-      const n = ray.query(`(count (select {from: ${BOUND} where: ${ofKinds(kinds)} off: off}))`);
-      return typeof n === 'bigint' || typeof n === 'number' ? Number(n) : 0;
-    },
+    noted,
+    notedCount,
     rebuilt,
   };
 }
