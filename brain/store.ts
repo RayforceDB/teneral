@@ -6,8 +6,11 @@ import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from '.
 import { currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
 
 // The store is the journal laid out for asking questions of, in two tables of the database that
-// are partitioned by day: one row an event, and one row for each term of each event that says
-// something, which is what recall looks things up in (brain/recall.ts). Days that are over lie on disk and are mapped into memory
+// are partitioned by day: one row an event, with the event itself in it, whole, as the line the
+// journal holds; and one row for each term of each event that says something, which is what recall
+// looks things up in (brain/recall.ts). An event is therefore read from the table, by where its
+// line begins in the journal or as one of a stretch, and the file is read only to lay out what it
+// has gained. Days that are over lie on disk and are mapped into memory
 // when the store is opened, which takes the same short time however long the agent has lived;
 // the day that is going on is held in memory and written out now and then.
 //
@@ -23,7 +26,7 @@ import { currentMemoryIds, documentOf, postings, type Index, type Kind, type Mat
 // generation that is rolled back to finds a store it understands.
 
 /** The version of the layout below. It is in the directory's name: see `storeDir`. */
-export const STORE_VERSION = 1;
+export const STORE_VERSION = 2;
 
 /** Where the store of a journal lies: beside it, in a directory of its own. */
 export function storeDir(journal: string): string {
@@ -32,7 +35,7 @@ export function storeDir(journal: string): string {
 
 /** The tables: the name of each in the directory, the name it is bound to in the database, and its columns. */
 const TABLES = {
-  events: { bound: 'mem_events', columns: ['id', 'ts', 'type', 'source', 'off', 'next', 'chars', 'said'] },
+  events: { bound: 'mem_events', columns: ['id', 'ts', 'type', 'source', 'off', 'next', 'chars', 'said', 'line'] },
   terms: { bound: 'mem_terms', columns: ['term', 'doc', 'kind', 'w'] },
 } as const;
 type TableName = keyof typeof TABLES;
@@ -119,6 +122,8 @@ export interface Store {
   index: Index;
   /** The event whose line begins at byte `off` of the journal, or null when no event's line begins there. */
   read(off: number): JournalEvent | null;
+  /** The events whose lines begin at byte `from` or after it and before byte `to`, in the journal's order. */
+  stretch(from: number, to: number): JournalEvent[];
   /** Whether the store was thrown away and built again when it was opened, and why. */
   rebuilt: string | null;
 }
@@ -302,9 +307,29 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
         return out;
       },
     },
-    read: (off) => readLine(journal, off),
+    read(off) {
+      if (!mounted || !Number.isSafeInteger(off) || off < 0) return null;
+      const [event] = eventsOf(ray.table(`(select {from: ${BOUND} where: (== off ${off}) line: line})`));
+      return event ?? null;
+    },
+    stretch(from, to) {
+      if (!mounted || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) return [];
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (>= off ${from}) (< off ${to})) asc: off line: line})`));
+    },
     rebuilt,
   };
+}
+
+/** The events a table's `line` column holds, in its order. A cell that is not an event is passed over, as a line of the journal that is not one is. */
+function eventsOf(table: Table): JournalEvent[] {
+  const events: JournalEvent[] = [];
+  for (const line of (table.columns.line as string[] | undefined) ?? []) {
+    try {
+      const parsed = JSON.parse(line) as JournalEvent;
+      if (typeof parsed === 'object' && parsed !== null && typeof parsed.type === 'string') events.push(parsed);
+    } catch { /* not an event */ }
+  }
+  return events;
 }
 
 /** The time of an event as the database counts it, and its day. A time that cannot be read is the time of the event before. */
@@ -376,5 +401,7 @@ function rowsOf(batch: { line: Line; ns: bigint }[]): Record<string, Column> {
     chars: { type: 'i64', data: BigInt64Array.from(batch, (b) => BigInt(eventChars(b.line.event))) },
     // 1 for an event that has terms. Their sum is the number of documents, which the table can then say for itself.
     said: { type: 'i64', data: BigInt64Array.from(batch, (b) => (documentOf(b.line.event) === null ? 0n : 1n)) },
+    // The event itself, as JSON: what the journal's line says, to be read back without the file.
+    line: { type: 'str', data: batch.map((b) => JSON.stringify(b.line.event)) },
   };
 }

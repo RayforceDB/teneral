@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, rmSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBody, JournalEvent } from '../../brain/journal';
@@ -170,4 +170,30 @@ real('a long journal is laid out in portions, and is all there', () => {
 
 real('a store cannot lie at a path that a statement would read as something else', () => {
   expect(() => openStore(ray(), journalOf([]), '/tmp/a"b')).toThrow('cannot lie at a path');
+});
+
+real('an event is whole in its row: it is read from the table, with the journal\'s file gone, one by its place or a stretch in order', () => {
+  const events = [
+    said('2026-11-13T09:00:00.000Z', 'a "quoted" line\nwith a break, a back\\slash and 😀'),
+    ev('2026-11-13T09:00:01.000Z', { type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: { command: 'ls -la' } }] }),
+    ev('2026-11-13T09:00:02.000Z', { type: 'tool.result', callId: 'c1', ok: true, output: 'x'.repeat(30_000) }),
+    replied('2026-11-14T10:00:00.000Z', 'done'),
+  ];
+  const path = journalOf(events);
+  const lines = scan(path, 0).lines;
+  const store = openStore(ray(), path);
+  // Nothing below can come from the file.
+  rmSync(path);
+  for (const [i, at] of lines.entries()) expect(store.read(at.off)).toEqual(events[i]!);
+  // A byte where no line begins, and one past the end, hold no event.
+  expect(store.read(lines[1]!.off + 1)).toBeNull();
+  expect(store.read(lines.at(-1)!.next)).toBeNull();
+  expect(store.read(-1)).toBeNull();
+  expect(store.read(Number.NaN)).toBeNull();
+  // A stretch is from a byte up to another, across the day's boundary, in the journal's order.
+  expect(store.stretch(0, lines.at(-1)!.next)).toEqual(events);
+  expect(store.stretch(lines[1]!.off, lines[3]!.off)).toEqual(events.slice(1, 3));
+  expect(store.stretch(lines[2]!.off, lines[2]!.next)).toEqual([events[2]!]);
+  expect(store.stretch(lines[3]!.next, lines[3]!.next + 100)).toEqual([]);
+  expect(store.stretch(50, 50)).toEqual([]);
 });
