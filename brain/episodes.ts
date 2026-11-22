@@ -64,6 +64,24 @@ export function eventChars(e: JournalEvent): number {
   }
 }
 
+/** An output of a tool no longer than this is shown whole for as long as it is shown; a longer one, once it is old, by its beginning and its end (brain/memory.ts). */
+export const RESULT_WHOLE = 2_000;
+export const RESULT_HEAD = 600;
+export const RESULT_END = 400;
+/** What an old output counts for where it is shown by its beginning and its end: those, and the line between them. */
+const RESULT_SHORT = RESULT_HEAD + RESULT_END + 180;
+
+/**
+ * What one event counts for once it is old: as `eventChars`, but a long output of a tool counts
+ * for what is still shown of it. It is a property of the event alone, so how much of a journal
+ * lies before any point of it is a sum that never changes as the journal grows: what the places
+ * where a request is cut are measured by (brain/logbook.ts).
+ */
+export function shownChars(e: JournalEvent): number {
+  const chars = eventChars(e);
+  return e.type === 'tool.result' && chars > RESULT_WHOLE ? RESULT_SHORT : chars;
+}
+
 /** Whether `e` asks for a turn: the only kind of event an episode may begin with. */
 const asks = (e: JournalEvent): boolean => e.type === 'stimulus' || stemNote(e) !== null;
 

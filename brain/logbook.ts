@@ -1,7 +1,7 @@
 import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { imageChars } from '../body/images';
-import { episodes, type Episode } from './episodes';
+import { episodes, shownChars, type Episode } from './episodes';
 import { health, healthNote } from './health';
 import { known, knownText } from './known';
 import { pinned } from './owned';
@@ -243,14 +243,19 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
-  // What is wanted is the chosen size; the room is only the most that can be sent.
+  // It is measured in what the events themselves count for once they are old (`shownChars`): a sum over the journal that is the same
+  // however a request is laid out, so where an episode ends in it is known without building the conversation before it.
+  // What is wanted is the chosen size; the room is only the most that can be sent, and `fits` below holds to it by the messages themselves.
   const want = Math.min(room, Math.max(0, chosen.tailChars ?? DEFAULT_TAIL_CHARS));
   const step = Math.max(1, Math.floor(want * STEP));
-  const toSwap = total > want ? Math.ceil((total - want) / step) * step : 0;
+  const lies: number[] = [];
+  let whole = 0;
+  for (const e of events) lies.push(whole += shownChars(e));
+  const toSwap = whole > want ? Math.ceil((whole - want) / step) * step : 0;
   let count = 0;
   if (toSwap > 0) {
     count = 1;
-    while (count < kept.length && before[count - 1]! < toSwap) count += 1;
+    while (count < kept.length && lies[kept[count - 1]!.to - 1]! < toSwap) count += 1;
   }
   // The memories take room themselves; one more episode at a time until it all fits or there is none left to swap.
   while (count > 0 && count < kept.length && !fits(count)) count += 1;

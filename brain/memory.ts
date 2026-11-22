@@ -1,4 +1,5 @@
 import { acceptanceNotes } from '../body/acceptance';
+import { RESULT_END, RESULT_HEAD, RESULT_WHOLE, eventChars } from './episodes';
 import type { JournalEvent } from './journal';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
@@ -243,14 +244,14 @@ function stimulusText(source: unknown, text: unknown): string {
  * Call ids are the model's and may repeat, in a later reply or within one, so an id alone does
  * not say which call a result belongs to. Calls run in order: the nth call with an id gets the nth result.
  */
-function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean; id: string }[]>; started: Map<unknown, number> } {
-  const results = new Map<unknown, { output: string; ok: boolean; id: string }[]>();
+function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean; id: string; at: number }[]>; started: Map<unknown, number> } {
+  const results = new Map<unknown, { output: string; ok: boolean; id: string; at: number }[]>();
   const started = new Map<unknown, number>();
   for (let j = at + 1; j < events.length; j++) {
     const e = events[j]!;
     if (e.type === 'assistant') break;
     if (e.type === 'tool.intent') started.set(e.callId, (started.get(e.callId) ?? 0) + 1);
-    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true, id: e.id }]);
+    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true, id: e.id, at: j }]);
   }
   return { results, started };
 }
@@ -272,11 +273,6 @@ export interface View extends Sizes {
 
 /** Characters of the newest conversation in which a tool's output is shown whole. About 12 thousand tokens. */
 export const DEFAULT_RESULTS_CHARS = 40_000;
-/** An output no longer than this is never shortened: there is too little to gain. */
-const RESULT_WHOLE = 2_000;
-/** Of an older output, this much of its beginning and this much of its end stay. */
-const RESULT_HEAD = 600;
-const RESULT_END = 400;
 
 /**
  * Shows the older outputs of tools by their beginning and their end.
@@ -291,19 +287,18 @@ const RESULT_END = 400;
  * was told is touched.
  *
  * Which outputs are old moves in steps, as the front of a request does in `fit` and for the same
- * reason: measured from the start of the whole conversation, the amount that counts as old is a
- * multiple of one step, so between two steps nothing that was already sent changes.
+ * reason: measured from the start of the journal, the amount that counts as old is a multiple of
+ * one step, so between two steps nothing that was already sent changes. It is measured in what
+ * the events themselves count for (`eventChars`), which is a sum over the journal that does not
+ * depend on how a request is laid out: `places[i]` is that sum up to and including the event
+ * `messages[i]` holds, and `total` the sum over all of it.
  */
-function shortenResults(messages: ChatMessage[], ids: Map<ChatMessage, string>, fullChars: number): void {
-  const sizes = messages.map((m) => size(m));
-  const total = sizes.reduce((sum, n) => sum + n, 0);
+function shortenResults(messages: ChatMessage[], ids: Map<ChatMessage, string>, fullChars: number, places: number[], total: number): void {
   if (total <= fullChars) return;
   const step = Math.max(1, Math.floor(fullChars * STEP));
   const old = Math.ceil((total - fullChars) / step) * step;
-  let end = 0;
   for (const [i, m] of messages.entries()) {
-    end += sizes[i]!;
-    if (end > old) return;
+    if (places[i]! > old) return;
     const text = m.content ?? '';
     if (m.role !== 'tool' || m.images !== undefined || text.length <= RESULT_WHOLE) continue;
     // A cut never falls inside a surrogate pair.
@@ -336,6 +331,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   const slots: Slot[] = [];
   // For the result of a tool's call, the id of the journal event that holds its output.
   const resultIds = new Map<ChatMessage, string>();
+  // And where that event lies in `events`: an output is old by its own place, not by its call's.
+  const resultAt = new Map<ChatMessage, number>();
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
   const used = new Set<string>();
@@ -413,7 +410,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
         const answer: ChatMessage = { role: 'tool', tool_call_id: id, content: result?.output ?? (began ? INTERRUPTED : NOT_STARTED) };
         // What `look` kept for the agent to see (body/tools.ts). The same line in any other tool's output is only text.
         if (sight && c.name === 'look' && result?.ok) takeMarkers(answer, slots);
-        if (result !== undefined) resultIds.set(answer, result.id);
+        if (result !== undefined) { resultIds.set(answer, result.id); resultAt.set(answer, result.at); }
         answered.push(answer);
       }
       // Results are placed here, right after their call, whatever was journaled in between.
@@ -444,7 +441,11 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   // Before anything is measured for the cut: an older output counts for what is shown of it.
-  shortenResults(out, resultIds, Math.max(0, view.resultsChars ?? DEFAULT_RESULTS_CHARS));
+  // What lies before each event, in what events count for by themselves: `sums[i]` up to and including `events[i]`.
+  const sums: number[] = [];
+  let sum = 0;
+  for (const e of events) sums.push(sum += eventChars(e));
+  shortenResults(out, resultIds, Math.max(0, view.resultsChars ?? DEFAULT_RESULTS_CHARS), out.map((m, i) => sums[Math.min(resultAt.get(m) ?? origin[i]!, events.length - 1)] ?? 0), sum);
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
