@@ -87,6 +87,8 @@ export function memoryProjection(): Projection {
   let state = start();
   /** The tables made from the notes, made again only when a note was added. */
   let fromNotes: Record<string, Record<string, Column>> | null = null;
+  /** The tables that change with every event, as they were last made: the same objects until the next event. */
+  let fromEvents: Record<string, Record<string, Column>> | null = null;
   const noteTables = (): Record<string, Record<string, Column>> => {
     if (fromNotes !== null) return fromNotes;
     const memories = [...state.told.memories.entries()];
@@ -104,9 +106,10 @@ export function memoryProjection(): Projection {
     name: MEMORY,
     version: MEMORY_VERSION,
     standing: true,
-    reset() { state = start(); fromNotes = null; },
+    reset() { state = start(); fromNotes = null; fromEvents = null; },
     step(e: JournalEvent, seq: number): boolean {
       state.open.push({ slim: slimOf(e), seq });
+      fromEvents = null;
       if (e.type === 'note' && NOTES.includes(e.kind)) {
         state.notes.push({ seq, event: e });
         state.told = remembered(state.notes.map((note) => note.event));
@@ -117,9 +120,9 @@ export function memoryProjection(): Projection {
       return true;
     },
     tables() {
+      if (fromEvents !== null) return { ...noteTables(), ...fromEvents };
       const all = placed(state);
-      return {
-        ...noteTables(),
+      fromEvents = {
         episodes: {
           ord: nums(all.map((_, i) => i)), from: nums(all.map((e) => e.from)), to: nums(all.map((e) => e.to)), from_seq: nums(all.map((e) => e.fromSeq)), to_seq: nums(all.map((e) => e.toSeq)),
           first: strs(all.map((e) => e.first)), last: strs(all.map((e) => e.last)), start: strs(all.map((e) => e.start)), end: strs(all.map((e) => e.end)),
@@ -130,10 +133,12 @@ export function memoryProjection(): Projection {
           chars: nums(state.open.map((one) => one.slim.chars)), calls: nums(state.open.map((one) => one.slim.calls)), asks: bools(state.open.map((one) => one.slim.asks)),
         },
       };
+      return { ...noteTables(), ...fromEvents };
     },
     restore(tables: Record<string, Table>) {
       state = start();
       fromNotes = null;
+      fromEvents = null;
       const notes = rows(tables.notes, ['seq', 'data']).sort((a, b) => Number(a.seq) - Number(b.seq));
       state.notes = notes.map((row) => ({ seq: Number(row.seq), event: JSON.parse(String(row.data)) as JournalEvent }));
       state.told = remembered(state.notes.map((note) => note.event));

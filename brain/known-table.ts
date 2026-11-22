@@ -30,25 +30,30 @@ export function knownProjection(): Projection {
   let state: KnownState = knownStart();
   /** The number of the note each fact and intention was set down in: the order they are given out in. */
   let seqs = new Map<string, number>();
+  /** The tables as they were last made: the same objects until something changes, so that they are not sent or written again for nothing. */
+  let made: Record<string, Record<string, Column>> | null = null;
   return {
     name: KNOWN,
     version: KNOWN_VERSION,
     reset() {
       state = knownStart();
       seqs = new Map();
+      made = null;
     },
     step(e: JournalEvent, seq: number): boolean {
       const [facts, intentions] = [state.facts.size, state.intentions.size];
       const changed = knownStep(state, e);
       // A fact or an intention is set down by the note that has its id.
       if (state.facts.size !== facts || state.intentions.size !== intentions) seqs.set(e.id, seq);
+      if (changed) made = null;
       return changed;
     },
     tables() {
+      if (made !== null) return made;
       const facts = [...state.facts.values()];
       const intentions = [...state.intentions.values()];
       const seq = (id: string): number => seqs.get(id) ?? -1;
-      return {
+      made = {
         facts: {
           seq: nums(facts.map((f) => seq(f.id))), id: strs(facts.map((f) => f.id)), at: strs(facts.map((f) => f.at)), text: strs(facts.map((f) => f.text)),
           source: syms(facts.map((f) => f.source)), about: strs(facts.map((f) => f.about ?? '')), episode: strs(facts.map((f) => f.episode)),
@@ -62,8 +67,10 @@ export function knownProjection(): Projection {
         },
         gone: { id: strs([...state.gone]) },
       };
+      return made;
     },
     restore(tables: Record<string, Table>) {
+      made = null;
       state = knownStart();
       seqs = new Map();
       const rows = <T extends { id: string }>(table: Table | undefined): { item: T; seq: number }[] => {

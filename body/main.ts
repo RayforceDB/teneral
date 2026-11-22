@@ -611,6 +611,9 @@ function tickAgenda(events: JournalEvent[], now: number): string {
 }
 /** The length of the journal when the store was last written out before a sleep. */
 let tidiedAt = -1;
+/** The store is written out at most this often while the body runs, and once more when it ends. */
+const STORE_WRITE_MS = 5 * 60_000;
+let storeWrittenAt = Date.now();
 /** How often a job the agent left running is looked at, while there is one: its end sends no signal of its own. */
 const JOB_LOOK_MS = 2000;
 const heart = new Heart({
@@ -790,10 +793,15 @@ for (;;) {
     } catch (err) {
       console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
     }
-    // And what the store gained is written out, so that the next start finds it on disk.
+    // And what the store gained is written out, so that the next start finds it on disk. Not after every turn:
+    // writing rewrites the whole day, a second of work on a long one, while what is not written is only laid
+    // out again from the journal at the next start, which costs far less than writing it every time.
     try {
       past.sync();
-      past.persist();
+      if (Date.now() - storeWrittenAt >= STORE_WRITE_MS) {
+        past.persist();
+        storeWrittenAt = Date.now();
+      }
     } catch (err) {
       console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -807,5 +815,7 @@ for (;;) {
 
 stopBackground();
 journalFormed();
+// What was laid out since the store was last written: a body that ends in good order leaves nothing for the next to lay out again.
+try { past.sync(); past.persist(); } catch (err) { console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`); }
 for (const stop of stops) stop();
 process.exit(0);
