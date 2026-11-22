@@ -238,6 +238,10 @@ export function dropLeftoverGateTrees(root: string): string[] {
 
 /** Never throws: whatever is at `tree` is gone afterwards, or was never there. */
 function dropGateTree(root: string, tree: string): void {
+  // What a check left closed to writing would stay, and the checkout with it, and the next gate run
+  // on this commit would find its place taken: a test of a tree that is closed on purpose
+  // (immune/packages.ts) leaves just that. So everything here is opened first. Links are not followed.
+  if (existsSync(tree)) sh(['chmod', '-R', 'u+rwX', tree], root);
   // The checks' temp files first: they can hold whole repositories, which git would not remove.
   for (const inner of [GATE_TMP, GATE_SMOKE]) {
     try { rmSync(join(tree, inner), { recursive: true, force: true }); } catch { /* the removal below says more */ }

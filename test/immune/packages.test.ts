@@ -210,3 +210,15 @@ test('a commit that takes nothing passes the gate without an install, and a body
   expect(await runGates(none.dir, none.seed, none.next, [{ gate: 'imports', cmd: ['bun', 'body/uses.ts'] }], { install: never })).toMatchObject({ ok: true });
   expect(existsSync(packagesCache(none.dir))).toBe(false);
 });
+
+test('a check that leaves something closed to writing does not leave the gate\'s checkout behind', async () => {
+  const repo = makeRepo({ 'body/main.ts': '// a body\n' });
+  writeFiles(repo.dir, { 'body/next.ts': '// next\n' });
+  const next = commitAll(repo.dir, 'next');
+  // As a test of an installed tree does: a directory with a file in it, both closed, in the check's temp directory.
+  const closes: Check[] = [{ gate: 'closes', cmd: ['sh', '-c', 'mkdir -p "$TMPDIR/tree/inner" && touch "$TMPDIR/tree/inner/file" && chmod -R a-w "$TMPDIR/tree"'] }];
+  expect(await runGates(repo.dir, repo.seed, next, closes)).toMatchObject({ ok: true });
+  expect(readdirSync(join(repo.dir, '.teneral')).filter((name) => name.startsWith('gate-'))).toEqual([]);
+  // The same commit can be gated again at once.
+  expect(await runGates(repo.dir, repo.seed, next, closes)).toMatchObject({ ok: true });
+});
