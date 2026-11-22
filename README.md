@@ -106,11 +106,12 @@ An organ is a native dependency the agent adopts for its body: a program or a li
       }
     }
 
-A name (`a-z`, `0-9`, `-`) maps to the `https` address of a `.tar.gz` archive and the archive's SHA-256. `dir` is optional: the directory inside the archive that is the organ's root, for an archive that wraps everything in one. `check` is optional: a command run in the organ's root that must exit with 0 within 60 seconds; its first word is a file of the organ. At most 16 organs. Nothing else is accepted in the file, and a field nobody defined is refused. No file, or `{}`, means no organs, and then nothing described here happens at all.
+A name (`a-z`, `0-9`, `-`) maps to the `https` address of a `.tar.gz` or `.zip` archive and the archive's SHA-256. `dir` is optional: the directory inside the archive that is the organ's root, for an archive that wraps everything in one. `check` is optional: a command run in the organ's root that must exit with 0 within 60 seconds; its first word is a file of the organ. At most 16 organs. Nothing else is accepted in the file, and a field nobody defined is refused. No file, or `{}`, means no organs, and then nothing described here happens at all.
 
 **The cache** is `.teneral/organs/`, outside git, with everything named by the archive's hash:
 
     .teneral/organs/archives/<sha256>.tar.gz    the archive, put there by the agent
+    .teneral/organs/archives/<sha256>.zip       the same, for an organ published as a zip archive
     .teneral/organs/trees/<sha256>/             the archive unpacked, by the stem
     .teneral/organs/sets/<id>/<name>            one link per pinned organ, to its root
 
