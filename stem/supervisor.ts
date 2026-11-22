@@ -4,12 +4,13 @@ import {
 import { dirname, join } from 'node:path';
 import { identity } from '../body/envelope';
 import {
-  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, pinsAt, protectedDiff, runGates, sh, type GateResult,
+  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, packagesAt, pinsAt, protectedDiff, runGates, sh, type GateResult,
 } from '../immune/gates';
 import {
   appendEvent, isMutationRejection, isMutationRequest, journalSize, readEvents, readEventsFrom, rejectionFor, type JournalEvent,
 } from '../brain/journal';
 import { parsePins, provideOrgans } from '../immune/organs';
+import { linkPackages, providePackages } from '../immune/packages';
 import { authDir, providerFor } from '../brain/providers';
 import { cageNotice, takeApprovals } from '../immune/approval';
 import { isInert } from '../immune/protected';
@@ -684,6 +685,13 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         const provided = await provideOrgans(p.root, parsePins(pinsAt(p.root, gen)), { verify: false });
         if (provided.problem !== undefined) throw new Error(provided.problem);
         organs = provided.dir;
+        // Its packages likewise: the tree it was gated with is in the cache, and one that is gone is
+        // installed again from the lock, which needs the registry. The workspace gets the same link
+        // unless the agent has an install of its own there.
+        const packages = await providePackages(p.root, packagesAt(p.root, gen));
+        if (packages.problem !== undefined) throw new Error(packages.problem);
+        linkPackages(p.live, packages.dir);
+        linkPackages(p.candidate, packages.dir);
       } catch (err) {
         log(`cannot start generation ${gen}: ${reasonOf(err)}`);
         log('nothing was changed, and no generation was given up: it starts once that is mended');

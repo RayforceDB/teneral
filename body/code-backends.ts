@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { program } from './path';
 import { CodeError, type Backend, type Hit, type Language, type Op, type Sym } from './code';
 
 /**
@@ -28,7 +29,8 @@ async function gather(stream: ReadableStream<Uint8Array>, stop: () => void): Pro
 }
 
 export const run: Runner = async (command, input) => {
-  const child = Bun.spawn(command, { stdin: input === undefined ? 'ignore' : new TextEncoder().encode(input), stdout: 'pipe', stderr: 'pipe' });
+  // The program is the body's own where it has one: a package's or an organ's, before the image's.
+  const child = Bun.spawn([program(command[0]!) ?? command[0]!, ...command.slice(1)], { stdin: input === undefined ? 'ignore' : new TextEncoder().encode(input), stdout: 'pipe', stderr: 'pipe' });
   const stop = (): void => { child.kill('SIGKILL'); };
   const timer = setTimeout(stop, TIME_MAX_MS);
   try {
@@ -36,7 +38,7 @@ export const run: Runner = async (command, input) => {
     return { code: await child.exited, out, err };
   } finally { clearTimeout(timer); }
 };
-export const find: Finder = (program) => Bun.which(program) !== null;
+export const find: Finder = (name) => program(name) !== null;
 
 /** Where the image keeps the ast-grep configuration that names the grammars it built (the Dockerfile writes it). */
 export const SGCONFIG = '/usr/local/lib/teneral/sgconfig.yml';

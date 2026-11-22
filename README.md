@@ -33,6 +33,7 @@ One commit of the agent's code is a *generation*. Asking the stem to switch to a
    - compared with the running generation, a commit that changes only `body/`, `brain/`, `heart/`, their tests (`test/body/`, `test/brain/`, `test/heart/`) and `BACKLOG.md` goes on at once. This is an allowlist: a commit that changes any other path, the stem's own files and any new file included, waits here for [your approval](#outside-the-body) and goes on when it has it;
    - `body/`, `brain/` and `heart/` may hold only regular files;
    - every organ the commit pins (see [Organs](#organs)) is in the cache with exactly the pinned hash, unpacks safely, and passes its own check. A body that pins none skips this;
+   - what the commit takes from the npm registry (see [Packages](#packages)) is installed from its lock, with no package's script run. A body that takes nothing skips this;
    - in a fresh checkout the stem makes of exactly that commit, the type check, the tests of everything outside the body (`test/stem`, `test/immune`, `test/species`, `test/keeper`) and the agent's own tests, of its body, its brain and its heart, must pass. A test run counts only if it ends with bun's summary showing at least one passing test and no failures. The checks run with almost none of the stem's environment (only `PATH`, `HOME`, `LANG` and `BUN_INSTALL` are passed on), so code under test does not see the API key, and with a temp directory of their own inside that checkout, which goes when the checkout does;
    - last, the smoke run: in the same checkout the stem starts the candidate the way it starts a generation, on an empty throwaway install with one message waiting and a stand-in for the model that the stem serves on a local port. The stand-in speaks both wire protocols, and the candidate is run as the provider you configured, with a dummy key: never with your key or your sign-in. Its environment is the checks' with the variables a generation is started with added, the model's pointing at the stand-in and the clock off; nothing else from `.env` is there. The candidate has 30 seconds to report that it is ready and to answer the message. Code that passes its tests but does not start, or starts and never takes a turn, stops here.
 4. If a check fails, the same generation starts again and is told which check and what it printed. If all pass, the stem switches to the new commit and starts it.
@@ -124,6 +125,23 @@ The agent downloads an archive itself, with its own tools. The stem never reache
 **An upgrade**, as the agent does it: download the new archive and the hash its publisher gives; verify one against the other; move the archive to `archives/<sha256>.tar.gz`; change the pin in the workspace; run `bun immune/organs.ts` there, which does for the workspace's pins exactly what the gate will do and prints the directory to use as `TENERAL_ORGANS` for its own test run; then mutate. If the new version turns out worse, the stem's rollback or `./one back` returns to the old pin with the old code.
 
 **Improving the dependency itself** does not go through the stem. The image has `git`, `curl`, `clang` and `make`: the agent clones the dependency's source, builds and tests a patch locally, and proposes it upstream. Only a published release is pinned; when one holds the fix, it is installed as any upgrade. A locally built binary is for trying the patch, not for the body to depend on.
+
+## Packages
+
+What is published on the npm registry the agent takes by itself: a tool it runs, a module its code imports. No step of the owner's is involved, and the image does not change.
+
+**The declaration** is two files of the body, so it mutates and rolls back with the code that uses it: `body/package.json`, which names the packages, and `body/bun.lock`, which Bun writes and which pins every package, direct or not, with the hash of its archive. The agent runs `bun add <name>@<version>` in `body/` of its workspace, tries the result, commits the two files and mutates.
+
+**The cache** is `.teneral/packages/`, outside git:
+
+    .teneral/packages/<id>/node_modules/    installed by the stem, once; <id> is the hash of the two files
+    <checkout>/body/node_modules            a link to it, made by the stem in each checkout
+
+**The gate** `packages` runs after `organs` and before anything of the candidate's is executed. The stem installs the candidate's packages itself, with `bun install --frozen-lockfile --ignore-scripts`: from the lock as written, each archive checked by Bun against its hash, and no install script of any package run. This is the one place where the stem reaches the network on its own, and a mutation that takes a new package is rejected while the registry cannot be reached. A lock that does not match its manifest is rejected, and so is one that holds a package from a path, a git repository or an address: nothing would pin such a package. The tree is then closed to writing and shared by every generation that has the same two files.
+
+**The body finds its packages** as any Bun program does: its code imports them by name, and their programs are on the PATH of the commands it runs, before the image's, together with those of its organs.
+
+**What this does not cover**: a package that works only after its install script has run, and anything not on npm. A native program published as a release archive is an [organ](#organs).
 
 ## Notes, and what the body keeps outside the journal
 

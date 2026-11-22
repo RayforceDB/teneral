@@ -6,6 +6,7 @@ import {
 import { basename, dirname, join } from 'node:path';
 import { appendEvent, readEvents } from '../brain/journal';
 import { ENGINES_FILE, ORGANS_FILE, ORGAN_CHECK_TIMEOUT_MS, organRoot, parsePins, provideOrgans, type Organ, type Pins } from './organs';
+import { PACKAGES_FILE, PACKAGES_LOCK, linkPackages, providePackages, type Installer, type Packages } from './packages';
 import { protectedChanges } from './protected';
 import { judgeApproval, type ApprovalOptions } from './approval';
 import { QUESTIONS_MIN, cloze, examine, lastResult, questionsOf, rate } from '../brain/exam';
@@ -204,6 +205,12 @@ export function linkModules(root: string, dir: string): void {
 export function organsAt(dir: string, commit: string, file: string = ORGANS_FILE): string | null {
   if (gitPaths(dir, 'ls-tree', '-z', '--name-only', commit, '--', file).length === 0) return null;
   return gitRaw(dir, 'show', `${commit}:${file}`);
+}
+
+/** What `commit` takes from the registry: the text of its body/package.json and of the lock, or null when it has no such manifest (immune/packages.ts). */
+export function packagesAt(dir: string, commit: string): Packages | null {
+  const manifest = organsAt(dir, commit, PACKAGES_FILE);
+  return manifest === null ? null : { manifest, lock: organsAt(dir, commit, PACKAGES_LOCK) };
 }
 
 /** Everything `commit` pins: its body's organs and its brain's engines (immune/organs.ts). */
@@ -555,6 +562,8 @@ export interface GateOptions {
   provider?: string;
   /** How long the check of one organ may run. Default ORGAN_CHECK_TIMEOUT_MS. */
   organTimeoutMs?: number;
+  /** In place of bun's install, for tests of the `packages` gate. */
+  install?: Installer;
   /** What the owner allows outside the free paths, and the launcher this supervisor runs under (immune/approval.ts). */
   approval?: ApprovalOptions;
   /** The individual's journal. With it, a candidate that changes the memory sits the exam the running generation last sat (see `memoryExam`). */
@@ -658,6 +667,7 @@ export async function runGates(
   const graceMs = opts.killGraceMs ?? 5_000;
   let root: string;
   let pins: Pins;
+  let packages: Packages | null;
   try {
     // These two say early, in the agent's own terms, why its worktree is not what it asked for.
     if (git(dir, 'rev-parse', 'HEAD') !== to) return fail('head', `the candidate is not at ${to}`);
@@ -675,6 +685,7 @@ export async function runGates(
       return fail('body', `body/, brain/ and heart/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
     }
     pins = pinsAt(dir, to);
+    packages = packagesAt(dir, to);
   } catch (err) {
     return fail('git', err instanceof Error ? err.message : String(err));
   }
@@ -684,7 +695,7 @@ export async function runGates(
   } catch (err) {
     return fail('organs', err instanceof Error ? err.message : String(err));
   }
-  if (checks.length === 0 && !smoke && organs.length === 0 && opts.journal === undefined) return { ok: true, gate: 'all', output: '' };
+  if (checks.length === 0 && !smoke && organs.length === 0 && packages === null && opts.journal === undefined) return { ok: true, gate: 'all', output: '' };
   if (opts.signal?.aborted) return interrupted();
 
   let tree: string;
@@ -701,6 +712,11 @@ export async function runGates(
     if (tried.interrupted) return interrupted();
     if (tried.problem !== undefined) return fail('organs', tried.problem);
     if (tried.dir !== null) env = { ...env, TENERAL_ORGANS: tried.dir };
+    // The packages the candidate takes, installed from its lock and linked into this checkout, so its
+    // tests and its smoke run import and run exactly what it will have when it is live.
+    const provided = await providePackages(root, packages, { install: opts.install, signal: opts.signal });
+    if (provided.problem !== undefined) return provided.interrupted ? interrupted() : fail('packages', provided.problem);
+    if (!linkPackages(tree, provided.dir)) return fail('packages', 'body/node_modules is in the commit; it must be a directory the stem links, never a tracked one');
     for (const check of checks) {
       const r = await runCheck(check.cmd, tree, env, { signal: opts.signal, graceMs, timeoutMs: opts.checkTimeoutMs ?? 600_000 });
       if (r.interrupted) return interrupted();

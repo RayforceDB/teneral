@@ -1483,3 +1483,41 @@ setInterval(() => {}, 1000);
   expect(said.filter((line) => /second/.test(line))).toEqual(['the owner changed the model to second (OpenAI API key); starting the agent again with it']);
   expect(said.join('\n')).not.toMatch(/restarting in|crash|api\.test/);
 });
+
+test('a generation is started with the packages its own commit takes, linked for its body and for the workspace', async () => {
+  const { PACKAGES_FILE, PACKAGES_LOCK, packagesCache, packagesId } = await import('../../immune/packages');
+  const { readlinkSync } = await import('node:fs');
+  const manifest = JSON.stringify({ name: 'body', private: true, type: 'module', dependencies: { 'hello-tool': '1.0.0' } });
+  const lock = '{\n  "lockfileVersion": 2,\n  "packages": {\n    "hello-tool": ["hello-tool@1.0.0", "", {}, "sha512-abc=="],\n  }\n}\n';
+  const body = `${HEAD}
+import { version } from 'hello-tool';
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'note', kind: 'took', data: { version } });
+process.exit(0);
+`;
+  const { dir } = makeRepo({ 'body/main.ts': body, [PACKAGES_FILE]: manifest, [PACKAGES_LOCK]: lock });
+  // The tree the gate would have installed for these two files; found, it is taken as it is.
+  const tree = join(packagesCache(dir), packagesId({ manifest, lock }));
+  writeFiles(join(tree, 'node_modules', 'hello-tool'), { 'package.json': JSON.stringify({ name: 'hello-tool', version: '1.0.0', exports: './index.js' }), 'index.js': "export const version = '1.0.0';\n" });
+  const logs: string[] = [];
+  const outcome = await supervise({ root: dir, gates: () => PASS, readyTimeoutMs: 5000, restartDelayMs: 0, log: (line) => { logs.push(line); } });
+  const p = paths(dir);
+  expect(logs.filter((line) => line.includes('cannot'))).toEqual([]);
+  expect(outcome).toBe('stopped');
+  expect(readEvents(p.journal).find((e) => e.type === 'note')).toMatchObject({ kind: 'took', data: { version: '1.0.0' } });
+  for (const worktree of [p.live, p.candidate]) {
+    expect(readlinkSync(join(worktree, 'body', 'node_modules'))).toBe(`../../packages/${packagesId({ manifest, lock })}/node_modules`);
+  }
+  // The link is not something git sees in either checkout.
+  expect(git(p.candidate, 'status', '--porcelain')).toBe('');
+});
+
+test('a generation whose packages cannot be had is not started, and none is given up for it', async () => {
+  const { PACKAGES_FILE } = await import('../../immune/packages');
+  const { dir } = makeRepo({ 'body/main.ts': readyThenExit(0), [PACKAGES_FILE]: JSON.stringify({ dependencies: { 'hello-tool': '1.0.0' } }) });
+  const logs: string[] = [];
+  const outcome = await supervise({ root: dir, gates: () => PASS, readyTimeoutMs: 5000, restartDelayMs: 0, log: (line) => { logs.push(line); } });
+  expect(outcome).toBe('halted');
+  expect(logs.join('\n')).toContain('body/bun.lock is missing');
+  expect(readEvents(paths(dir).journal).map((e) => e.type)).not.toContain('generation.started');
+});

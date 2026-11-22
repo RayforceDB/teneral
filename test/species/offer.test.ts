@@ -229,7 +229,7 @@ t('a branch on the species\' head, signed and described, passes: the report says
   ]);
   expect(out.report.outside).toEqual(['stem/k.ts']);
   expect(out.report.steps.map((s) => `${s.name} ${s.ok}`)).toEqual([
-    'descends true', 'signed true', 'description true', 'scan true', 'body true', 'organs true', 'types true', 'tests-stem true', 'tests-body true', 'smoke true',
+    'descends true', 'signed true', 'description true', 'scan true', 'body true', 'organs true', 'packages true', 'types true', 'tests-stem true', 'tests-body true', 'smoke true',
   ]);
   for (const part of ['body: a greeting', 'What it changes:', 'body/greeting.ts', 'It changes 1 path a mutation could not', `contrib/${install(w.root).id}/greeting`, 'approve it first']) expect(out.text).toContain(part);
   expect(readReport(w.root, commit)).toEqual(JSON.parse(JSON.stringify(out.report)));

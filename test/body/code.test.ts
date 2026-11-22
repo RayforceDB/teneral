@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { Code, LANGUAGES, languageOf, projectRoot, type Backend, type Hit, type Sym } from '../../body/code';
 import { astGrep, backends, ctags, find, text, type Ran, type Runner } from '../../body/code-backends';
 import { answer, parse } from '../../body/code-cli';
-import { runBash, withCommands } from '../../body/tools';
+import { runBash } from '../../body/tools';
+import { commandDirs, program, withCommands } from '../../body/path';
 
 const C = languageOf('a.c')!;
 const RAYFALL = languageOf('a.rfl')!;
@@ -377,8 +378,19 @@ test('the command answers with a status: found, nothing found, or a question tha
 });
 
 test('bash finds the command: the body puts its own directory of commands first on the PATH', async () => {
-  expect(withCommands({ PATH: '/usr/bin', HOME: '/h' }, '/body/bin')).toEqual({ PATH: '/body/bin:/usr/bin', HOME: '/h' });
-  expect(withCommands({}, '/body/bin')).toEqual({ PATH: '/body/bin' });
+  expect(withCommands({ PATH: '/usr/bin', HOME: '/h' }, ['/body/bin', '/pkg/.bin'])).toEqual({ PATH: '/body/bin:/pkg/.bin:/usr/bin', HOME: '/h' });
+  expect(withCommands({}, ['/body/bin'])).toEqual({ PATH: '/body/bin' });
+  expect(withCommands({ HOME: '/h' }, [])).toEqual({ HOME: '/h' });
+  // After its own commands come the programs of its packages, then those of its organs: an organ's `bin`, then its root.
+  const body = mkdtempSync(join(tmpdir(), 'teneral-code-body-')), organs = mkdtempSync(join(tmpdir(), 'teneral-code-organs-'));
+  for (const made of [join(body, 'bin'), join(body, 'node_modules', '.bin'), join(organs, 'clangd', 'bin'), join(organs, 'rg')]) mkdirSync(made, { recursive: true });
+  expect(commandDirs({ TENERAL_ORGANS: organs }, body)).toEqual([join(body, 'bin'), join(body, 'node_modules', '.bin'), join(organs, 'clangd', 'bin'), join(organs, 'clangd'), join(organs, 'rg')]);
+  expect(commandDirs({}, body)).toEqual([join(body, 'bin'), join(body, 'node_modules', '.bin')]);
+  expect(commandDirs({ TENERAL_ORGANS: join(organs, 'gone') }, join(body, 'gone'))).toEqual([]);
+  // A program of the body's own is found before one of the same name in the image.
+  writeFileSync(join(organs, 'rg', 'grep'), '#!/bin/sh\n', { mode: 0o755 });
+  expect(program('grep', { PATH: process.env.PATH, TENERAL_ORGANS: organs })).toBe(join(organs, 'rg', 'grep'));
+  expect(program('no-such-program-anywhere', { PATH: process.env.PATH })).toBeNull();
   const launcher = join(import.meta.dir, '..', '..', 'body', 'bin', 'code');
   expect(statSync(launcher).mode & 0o111).not.toBe(0);
   const out = await runBash('command -v code && code --help', mkdtempSync(join(tmpdir(), 'teneral-code-bash-')));
