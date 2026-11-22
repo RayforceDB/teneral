@@ -7,6 +7,7 @@ import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Imag
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
 import { arrivals, replyIsCurrent } from './shown';
+import { remindedNote } from './reminded';
 
 // How the stem's events read is in brain/stemnote.ts; it is given out from here as well, where it always was.
 export { stemNote };
@@ -422,7 +423,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
       out.push({ role: 'user', content: STOPPED });
       origin.push(i);
     } else {
-      const note = stemNote(e) ?? accepted.get(e.id) ?? backNote(e, MEMORY_MARK);
+      const note = stemNote(e) ?? accepted.get(e.id) ?? backNote(e, MEMORY_MARK) ?? remindedNote(e);
       if (after.has(i)) held.push(i);
       else if (note !== null) {
         // A note of the stem's that follows a tool, as every answer to `mutate` does, is no interruption of the work: only one a reply was written without is moved and marked.

@@ -1,3 +1,4 @@
+import { QUESTION_MAX, QUESTION_MIN, REMINDED_KIND, type Reminder } from './reminded';
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
@@ -29,6 +30,12 @@ export interface TurnDeps {
   budgetChars?: number;
   /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
   tailChars?: number;
+  /**
+   * Asked once, at the start of a turn: what of the agent's older memories the thing just said
+   * brings back (brain/reminded.ts). `inFront` is the request as it would be sent without it.
+   * Null when nothing does. Omitted in tests of everything else.
+   */
+  remind?: (question: string, inFront: string, events: JournalEvent[]) => Reminder | null;
   /** Characters the memories of older episodes may take. Default: the one in brain/logbook.ts. */
   logbookChars?: number;
   /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
@@ -166,7 +173,28 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     if (d.signal?.aborted) return interrupted();
     // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
     journal.refresh();
-    const events = journal.read();
+    let events = journal.read();
+    if (round === 0 && d.remind !== undefined) {
+      // Before the first request of the turn, and only for something said that is a question to look by.
+      const asked = events.findLast((e) => e.type === 'stimulus');
+      const question = asked?.type === 'stimulus' && !mayStayQuiet(asked.source) ? asked.text.slice(0, QUESTION_MAX) : '';
+      const answered = asked === undefined || events.slice(events.indexOf(asked) + 1).some((e) => e.type === 'assistant' || (e.type === 'note' && e.kind === REMINDED_KIND));
+      if (question.length >= QUESTION_MIN && !answered) {
+        let reminder: Reminder | null = null;
+        try {
+          const inFront = buildMessages(events, d.system(), budget - specsSize, undefined, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
+          reminder = d.remind(question, inFront.map((m) => m.content ?? '').join('\n'), events);
+        } catch (err) {
+          // Remembering is a help, not a condition: the turn goes on without it.
+          console.error(`[memory] nothing was brought back for this turn: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (reminder !== null) {
+          appendEvent(d.journal, d.gen, { type: 'note', kind: REMINDED_KIND, data: reminder });
+          journal.refresh();
+          events = journal.read();
+        }
+      }
+    }
     shown = events.length;
     // Durable request boundary: a late stimulus before a finished reply must remain owed
     // even if this process dies before the extra round. Older readers ignore this note.

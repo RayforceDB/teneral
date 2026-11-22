@@ -30,6 +30,7 @@ import { clockText } from './sensors';
 import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast } from '../brain/past';
+import { chooseReminder, lately } from '../brain/reminded';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
@@ -470,7 +471,10 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, logbookChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
+      journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, logbookChars, sight,
+      // Older memories the thing just said brings back: the search `recall` makes, asked once before the turn's first request. One a later memory made outdated is left out.
+      remind: (question, inFront, events) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12 }), inFront, lately(events), past); },
+      imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
