@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
-import { createGunzip } from 'node:zlib';
+import { crc32, createGunzip, inflateRawSync } from 'node:zlib';
 
 // An organ is a native dependency the body adopts: a release archive somebody else published,
 // pinned in the body by its hash. The pin is in git and mutates with the body; the bytes are not.
@@ -13,6 +13,7 @@ import { createGunzip } from 'node:zlib';
 // the organ it was gated with, and the one before it finds its own again after a rollback.
 //
 //   .teneral/organs/archives/<sha256>.tar.gz   put there by the agent, never trusted: the stem hashes it itself
+//   .teneral/organs/archives/<sha256>.zip      the same, for an organ published as a zip archive
 //   .teneral/organs/trees/<sha256>/            unpacked by the stem, once
 //   .teneral/organs/sets/<id>/<name>           a link per pinned organ: what TENERAL_ORGANS names
 //
@@ -107,7 +108,7 @@ export function parseOrgans(text: string | null, file: string = ORGANS_FILE): Or
     if (typeof url !== 'string' || url.length > 2000 || !/^https:\/\/[^\s/]+\/\S+$/.test(url) || !URL.canParse(url)) {
       bad(`${at}: "url" must be an https address of the archive`);
     }
-    if (!new URL(url as string).pathname.endsWith('.tar.gz')) bad(`${at}: "url" must name a .tar.gz archive; no other kind is unpacked`);
+    if (!/\.(tar\.gz|zip)$/.test(new URL(url as string).pathname)) bad(`${at}: "url" must name a .tar.gz or .zip archive; no other kind is unpacked`);
     if (typeof sha256 !== 'string' || !SHA256.test(sha256)) bad(`${at}: "sha256" must be the archive's SHA-256 as 64 lowercase hex characters`);
     let root = '';
     if (dir !== undefined) {
@@ -134,8 +135,13 @@ export function organCache(root: string): { archives: string; trees: string; set
   return { archives: join(home, 'archives'), trees: join(home, 'trees'), sets: join(home, 'sets') };
 }
 
+/** The two kinds of archive that are unpacked, told by the end of the address a pin gives. */
+export type ArchiveKind = 'tar.gz' | 'zip';
+export const archiveKind = (organ: Pick<Organ, 'url'>): ArchiveKind => (new URL(organ.url).pathname.endsWith('.zip') ? 'zip' : 'tar.gz');
 /** Where the archive with this hash has to lie. */
-export const archivePath = (root: string, sha256: string): string => join(organCache(root).archives, `${sha256}.tar.gz`);
+export const archivePath = (root: string, sha256: string, kind: ArchiveKind = 'tar.gz'): string => join(organCache(root).archives, `${sha256}.${kind}`);
+/** Where the archive of this organ has to lie. */
+export const archiveOf = (root: string, organ: Organ): string => archivePath(root, organ.sha256, archiveKind(organ));
 /** Where the archive with this hash is unpacked. */
 export const treePath = (root: string, sha256: string): string => join(organCache(root).trees, sha256);
 
@@ -160,7 +166,7 @@ function hashFile(path: string): string {
 
 /** Why the cached archive of `organ` cannot be used, or null when it is there and is the bytes that were pinned. */
 export function archiveProblem(root: string, organ: Organ): string | null {
-  const path = archivePath(root, organ.sha256);
+  const path = archiveOf(root, organ);
   let stat: ReturnType<typeof lstatSync> | null = null;
   try { stat = lstatSync(path); } catch { /* not there */ }
   if (stat === null) {
@@ -252,6 +258,41 @@ function paxRecords(data: Buffer): Map<string, string> {
   return records;
 }
 
+/** Makes the directories `parts` name under `dest`, one by one, and refuses to pass through anything that is not one. */
+function enterDir(dest: string, parts: string[], entry: string): string {
+  let dir = dest;
+  for (const part of parts) {
+    dir = join(dir, part);
+    let stat: ReturnType<typeof lstatSync> | null = null;
+    try { stat = lstatSync(dir); } catch { /* to be made */ }
+    if (stat === null) mkdirSync(dir, { mode: 0o755 });
+    else if (!stat.isDirectory()) throw new Error(`entry ${JSON.stringify(entry)} would be written through ${JSON.stringify(parts.join('/'))}, which is not a directory`);
+  }
+  return dir;
+}
+function isTaken(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+/** Throws unless the link `name`, at `parts`, to `target` stays inside: it may only climb first and then descend, and not above the top. */
+function checkLink(name: string, parts: string[], target: string): void {
+  const steps = target.includes('\0') || target.startsWith('/') ? null : target.split('/').filter((step) => step !== '' && step !== '.');
+  const up = steps?.findIndex((step) => step !== '..') ?? 0;
+  const climbs = steps === null ? 0 : (up === -1 ? steps.length : up);
+  if (steps === null || steps.length === 0 || steps.slice(climbs).includes('..') || climbs > parts.length - 1) {
+    throw new Error(`entry ${JSON.stringify(name)} is a link to ${JSON.stringify(target)}, which is absolute, or leads outside the organ's directory, `
+      + 'or climbs after descending');
+  }
+}
+/** Said again by the file system itself: no link that leads anywhere leads out. */
+function sealLinks(dest: string, links: string[]): void {
+  const top = realpathSync(dest);
+  for (const link of links) {
+    let real: string;
+    try { real = realpathSync(link); } catch { continue; /* it leads nowhere */ }
+    if (real !== top && !real.startsWith(top + sep)) throw new Error(`the link ${JSON.stringify(link.slice(dest.length + 1))} leads outside the organ's directory`);
+  }
+}
+
 /** A long name or an extended header is itself an entry; one larger than this is not a name. */
 const MAX_META_BYTES = 1024 * 1024;
 
@@ -280,21 +321,8 @@ async function unpackInto(archive: string, dest: string): Promise<void> {
   let pax: Map<string, string> | null = null;
   const links: string[] = [];
 
-  /** Makes the directories `parts` name, one by one, and refuses to pass through anything that is not one. */
-  const enter = (parts: string[], entry: string): string => {
-    let dir = dest;
-    for (const part of parts) {
-      dir = join(dir, part);
-      let stat: ReturnType<typeof lstatSync> | null = null;
-      try { stat = lstatSync(dir); } catch { /* to be made */ }
-      if (stat === null) mkdirSync(dir, { mode: 0o755 });
-      else if (!stat.isDirectory()) throw new Error(`entry ${JSON.stringify(entry)} would be written through ${JSON.stringify(parts.join('/'))}, which is not a directory`);
-    }
-    return dir;
-  };
-  const taken = (path: string): boolean => {
-    try { lstatSync(path); return true; } catch { return false; }
-  };
+  const enter = (parts: string[], entry: string): string => enterDir(dest, parts, entry);
+  const taken = isTaken;
 
   try {
     for (;;) {
@@ -367,13 +395,7 @@ async function unpackInto(archive: string, dest: string): Promise<void> {
           closeSync(fd);
         }
       } else if (type === '2') {
-        const steps = target.includes('\0') || target.startsWith('/') ? null : target.split('/').filter((step) => step !== '' && step !== '.');
-        const up = steps?.findIndex((step) => step !== '..') ?? 0;
-        const climbs = steps === null ? 0 : (up === -1 ? steps.length : up);
-        if (steps === null || steps.length === 0 || steps.slice(climbs).includes('..') || climbs > parts.length - 1) {
-          throw new Error(`entry ${JSON.stringify(name)} is a link to ${JSON.stringify(target)}, which is absolute, or leads outside the organ's directory, `
-            + 'or climbs after descending');
-        }
+        checkLink(name, parts, target);
         symlinkSync(target, path);
         links.push(path);
       } else if (type === '1') {
@@ -395,12 +417,104 @@ async function unpackInto(archive: string, dest: string): Promise<void> {
     gunzip.destroy();
   }
   if (entries === 0) throw new Error('it holds nothing');
-  // Said again by the file system itself: no link that leads anywhere leads out.
-  const top = realpathSync(dest);
-  for (const link of links) {
-    let real: string;
-    try { real = realpathSync(link); } catch { continue; /* it leads nowhere */ }
-    if (real !== top && !real.startsWith(top + sep)) throw new Error(`the link ${JSON.stringify(link.slice(dest.length + 1))} leads outside the organ's directory`);
+  sealLinks(dest, links);
+}
+
+/**
+ * Unpacks a zip archive into `dest`, an empty directory, by the rules `unpackInto` keeps for a
+ * tar: only plain files, directories and links that stay inside, no name twice, nothing written
+ * through what is not a directory, and the same limits on entries and bytes. The entries are read
+ * from the archive's directory at its end, as every unzip does. What a zip can hold beyond that is
+ * refused, not guessed at: an encrypted entry, a compression other than deflate, an archive in
+ * parts or of the 64-bit form. Each file's bytes are checked against the checksum the archive gives.
+ */
+function unzipInto(archive: string, dest: string): void {
+  const fd = openSync(archive, 'r');
+  try {
+    const total = lstatSync(archive).size;
+    const read = (at: number, length: number): Buffer => {
+      if (at < 0 || length < 0 || at + length > total) throw new Error('it is not a zip archive, or it is damaged: it points past its own end');
+      const out = Buffer.alloc(length);
+      for (let got = 0; got < length;) {
+        const n = readSync(fd, out, got, length - got, at + got);
+        if (n === 0) throw new Error('it ends in the middle of an entry');
+        got += n;
+      }
+      return out;
+    };
+    // The record that ends the archive: 22 bytes and a comment of at most 65535.
+    const tail = read(Math.max(0, total - 65_557), Math.min(total, 65_557));
+    let end = -1;
+    for (let at = tail.length - 22; at >= 0; at--) {
+      if (tail.readUInt32LE(at) === 0x06054b50 && at + 22 + tail.readUInt16LE(at + 20) === tail.length) { end = at; break; }
+    }
+    if (end === -1) throw new Error('it is not a zip archive: the record that ends one is not there');
+    const count = tail.readUInt16LE(end + 10);
+    const directoryBytes = tail.readUInt32LE(end + 12), directoryAt = tail.readUInt32LE(end + 16);
+    if (tail.readUInt16LE(end + 4) !== 0 || tail.readUInt16LE(end + 8) !== count) throw new Error('it is a zip archive in several parts; only one in a single file is unpacked');
+    if (count === 0xffff || directoryBytes === 0xffffffff || directoryAt === 0xffffffff) throw new Error('it is a zip archive of the 64-bit form, which is not unpacked');
+    if (count === 0) throw new Error('it holds nothing');
+    if (count > MAX_ENTRIES) throw new Error(`it holds more than ${MAX_ENTRIES} entries`);
+    const directory = read(directoryAt, directoryBytes);
+    let unpacked = 0;
+    const links: string[] = [];
+    for (let at = 0, seen = 0; seen < count; seen++) {
+      if (at + 46 > directory.length || directory.readUInt32LE(at) !== 0x02014b50) throw new Error('it is not a zip archive, or it is damaged: its directory cannot be read');
+      const flags = directory.readUInt16LE(at + 8), method = directory.readUInt16LE(at + 10), sum = directory.readUInt32LE(at + 16);
+      const packed = directory.readUInt32LE(at + 20), size = directory.readUInt32LE(at + 24);
+      const nameBytes = directory.readUInt16LE(at + 28), extraBytes = directory.readUInt16LE(at + 30), commentBytes = directory.readUInt16LE(at + 32);
+      const mode = directory.readUInt8(at + 5) === 3 ? directory.readUInt32LE(at + 38) >>> 16 : 0;
+      const headerAt = directory.readUInt32LE(at + 42);
+      if (at + 46 + nameBytes > directory.length) throw new Error('it is not a zip archive, or it is damaged: its directory cannot be read');
+      const name = directory.toString('utf8', at + 46, at + 46 + nameBytes);
+      at += 46 + nameBytes + extraBytes + commentBytes;
+
+      if ((flags & 0x1) !== 0) throw new Error(`entry ${JSON.stringify(name)} is encrypted`);
+      if (packed === 0xffffffff || size === 0xffffffff || headerAt === 0xffffffff) throw new Error(`entry ${JSON.stringify(name)} is of the 64-bit form, which is not unpacked`);
+      const parts = inside(name);
+      if (parts === null) throw new Error(`entry ${JSON.stringify(name)} would land outside the organ's directory: its name is absolute or climbs with ".."`);
+      const kind = mode & 0o170000;
+      if (kind === 0o040000 || name.endsWith('/')) {
+        enterDir(dest, parts, name);
+        continue;
+      }
+      if (kind !== 0 && kind !== 0o100000 && kind !== 0o120000) throw new Error(`entry ${JSON.stringify(name)} is of a kind that is not unpacked; an organ holds only files, directories and links`);
+      if (parts.length === 0) throw new Error(`entry ${JSON.stringify(name)} names the organ's directory itself and is not a directory`);
+      const path = join(enterDir(dest, parts.slice(0, -1), name), parts.at(-1)!);
+      if (isTaken(path)) throw new Error(`entry ${JSON.stringify(name)} appears twice, or would replace something an earlier entry made`);
+      unpacked += size;
+      if (unpacked > MAX_UNPACKED_BYTES) throw new Error(`it unpacks to more than ${MAX_UNPACKED_BYTES} bytes`);
+
+      // Where the bytes begin is said by the entry's own header, whose name and extra field may differ in length from the directory's.
+      const header = read(headerAt, 30);
+      if (header.readUInt32LE(0) !== 0x04034b50) throw new Error(`entry ${JSON.stringify(name)} is not where the archive's directory says`);
+      const stored = read(headerAt + 30 + header.readUInt16LE(26) + header.readUInt16LE(28), packed);
+      let bytes: Buffer;
+      if (method === 0) bytes = stored;
+      else if (method === 8) {
+        // Never more than the size the directory gave, which is already counted: an entry that inflates beyond it is refused, not written.
+        try { bytes = inflateRawSync(stored, { maxOutputLength: Math.max(size, 1) }); } catch (err) { throw new Error(`entry ${JSON.stringify(name)} cannot be inflated, or is larger than the archive says: ${reasonOf(err)}`); }
+      } else throw new Error(`entry ${JSON.stringify(name)} is compressed by a method (${method}) that is not unpacked; only stored and deflated entries are`);
+      if (bytes.length !== size || crc32(bytes) !== sum) throw new Error(`entry ${JSON.stringify(name)} is damaged: its bytes are not what the archive's own checksum says`);
+
+      if (kind === 0o120000) {
+        const target = bytes.toString('utf8');
+        checkLink(name, parts, target);
+        symlinkSync(target, path);
+        links.push(path);
+      } else {
+        // As for a tar: readable and writable by the owner whatever the archive says, and no setuid. An archive made where files have no modes holds plain ones.
+        const fileFd = openSync(path, 'wx', ((mode & 0o777) === 0 ? 0o644 : mode & 0o777) | 0o600);
+        try {
+          for (let offset = 0; offset < bytes.length;) offset += writeSync(fileFd, bytes, offset, bytes.length - offset);
+        } finally {
+          closeSync(fileFd);
+        }
+      }
+    }
+    sealLinks(dest, links);
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -420,7 +534,8 @@ async function unpackOrgan(root: string, organ: Organ): Promise<string | null> {
   const tmp = join(trees, `.${organ.sha256}.${randomUUID()}`);
   mkdirSync(tmp);
   try {
-    await unpackInto(archivePath(root, organ.sha256), tmp);
+    if (archiveKind(organ) === 'zip') unzipInto(archiveOf(root, organ), tmp);
+    else await unpackInto(archiveOf(root, organ), tmp);
     renameSync(tmp, tree);
     return null;
   } catch (err) {
@@ -532,7 +647,7 @@ export async function fetchMissing(
   const get = o.get ?? fetch;
   const problems: string[] = [];
   for (const organ of organs) {
-    const path = archivePath(root, organ.sha256);
+    const path = archiveOf(root, organ);
     if (existsSync(path) || existsSync(treePath(root, organ.sha256))) continue;
     const tmp = `${path}.${process.pid}.tmp`;
     try {
@@ -571,7 +686,7 @@ if (import.meta.main) {
     }
     const tried = await tryOrgans(root, parsePins({ organs: read(ORGANS_FILE), engines: read(ENGINES_FILE) }), tmp);
     if (tried.problem !== undefined) console.error(tried.problem);
-    else if (tried.dir === null) console.error(`${file} pins no organs, and ${ENGINES_FILE} no engines. Archives go to ${organCache(root).archives}/<sha256>.tar.gz`);
+    else if (tried.dir === null) console.error(`${file} pins no organs, and ${ENGINES_FILE} no engines. Archives go to ${organCache(root).archives}/<sha256>.tar.gz, or .zip`);
     else console.log(tried.dir);
     status = tried.problem === undefined ? 0 : 1;
   } catch (err) {

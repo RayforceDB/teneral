@@ -146,7 +146,7 @@ test('anything that is not exactly a pin is refused, and the refusal names the o
     `https://example.org/${'a'.repeat(2000)}.tar.gz`]) {
     refused({ x: { ...good, url } }, 'organ x', '"url"');
   }
-  for (const url of ['https://example.org/x.zip', 'https://example.org/x.tar.xz', 'https://example.org/x.tgz', 'https://example.org/x']) {
+  for (const url of ['https://example.org/x.tar.xz', 'https://example.org/x.tgz', 'https://example.org/x']) {
     refused({ x: { ...good, url } }, '.tar.gz');
   }
   for (const sha256 of [undefined, 7, '', hash.slice(1), `${hash}0`, hash.toUpperCase(), `${hash.slice(0, 63)}g`]) {
