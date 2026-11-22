@@ -14,12 +14,13 @@ WORKDIR /teneral
 # run without, and the container is what confines it.
 # ripgrep, fd, jq and universal-ctags are for reading a codebase without reading it whole: the first
 # three are the agent's to call, and ctags, with ast-grep below, answers its `code` command
-# (body/code.ts). unzip opens the ast-grep archive.
+# (body/code.ts). clangd answers it for C where a name has to be resolved: who uses a function, what
+# a use refers to, what a compiler says of a file (body/code-clangd.ts). unzip opens the ast-grep archive.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates procps \
     curl tar gzip clang libclang-rt-dev libc6-dev make openssh-client gh \
     chromium fonts-liberation \
-    ripgrep fd-find jq universal-ctags unzip \
+    ripgrep fd-find jq universal-ctags clangd unzip \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
 

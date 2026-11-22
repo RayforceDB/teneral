@@ -114,7 +114,13 @@ export class LspSession {
       try { message = JSON.parse(this.buffer.subarray(end + 4, end + 4 + length).toString()) as Message; }
       catch { this.buffer = this.buffer.subarray(end + 4 + length); return this.fail(new Error('invalid LSP JSON')); }
       this.buffer = this.buffer.subarray(end + 4 + length);
-      if (typeof message.id !== 'number') { if (this.notifications.length < 100) this.notifications.push(message); continue; }
+      // What the server asks of its client (to create a progress token, to read configuration) is granted with nothing, so that it goes on.
+      if (typeof message.id === 'number' && typeof message.method === 'string') { this.send({ id: message.id, result: null }); continue; }
+      if (typeof message.id !== 'number') {
+        if (message.method === 'textDocument/publishDiagnostics' && this.notifications.length < 100) this.notifications.push(message);
+        this.listener?.(message);
+        continue;
+      }
       const pending = this.pending.get(message.id);
       if (pending === undefined) continue; // A late response is retired, never rebound.
       this.pending.delete(message.id);
@@ -135,6 +141,9 @@ export class LspSession {
     });
   }
   notify(method: string, params: unknown): void { this.send({ method, params }); }
+  private listener: ((message: Message) => void) | null = null;
+  /** Every notification the server sends from now on is handed to `listener`: its progress, its diagnostics. */
+  onNotify(listener: (message: { method?: string; params?: unknown }) => void): void { this.listener = listener; }
   diagnostics(): Message[] { return this.notifications.filter((message) => message.method === 'textDocument/publishDiagnostics'); }
   log(): string { return this.logs; }
   close(): void {

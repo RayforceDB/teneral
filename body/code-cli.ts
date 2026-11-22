@@ -1,5 +1,6 @@
 import { Code, CodeError, USAGE, type Options } from './code';
 import { backends } from './code-backends';
+import { clangd } from './code-clangd';
 
 /**
  * The `code` command: body/bin/code starts this file, and `bash` has that directory on its PATH
@@ -28,7 +29,7 @@ export function parse(argv: string[]): { words: string[]; flags: Record<string, 
   return { words, flags };
 }
 
-export async function answer(argv: string[], cwd: string, code: Code = new Code(backends())): Promise<{ status: 0 | 1 | 2; text: string }> {
+export async function answer(argv: string[], cwd: string, code: Code = new Code([clangd(), ...backends()])): Promise<{ status: 0 | 1 | 2; text: string }> {
   try {
     const { words, flags } = parse(argv);
     const [operation, first, ...rest] = words;
@@ -45,6 +46,7 @@ export async function answer(argv: string[], cwd: string, code: Code = new Code(
       case 'definition': case 'def': return await code.definition(need('a name'), rest[0] ?? '.', options);
       case 'references': case 'refs': return await code.references(need('a name'), rest[0] ?? '.', options);
       case 'search': return await code.search(need('a pattern'), rest, options);
+      case 'diagnostics': return await code.diagnostics(need('a file'), options);
       case 'languages': return await code.supported();
       default: throw new CodeError(`unknown question: ${operation}; \`code --help\` shows what can be asked`);
     }
