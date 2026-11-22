@@ -1,5 +1,5 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { JournalEvent } from './journal';
 import { eventChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
@@ -22,8 +22,9 @@ import { currentMemoryIds, documentOf, postings, type Index, type Kind, type Mat
 // which holds for every row where its line ends.
 //
 // The directory is named by the version of its layout (see "Notes" in brain/prompt.md). A change
-// of columns means a new directory, built from the journal, and the old one left as it is, so a
-// generation that is rolled back to finds a store it understands.
+// of columns means a new directory, built from the journal, so no body ever opens a layout it does
+// not know. The directories of other layouts are removed when this one is opened: nothing is kept
+// for a body that is no longer the one running, and one that is rolled back to builds its own again.
 
 /** The version of the layout below. It is in the directory's name: see `storeDir`. */
 export const STORE_VERSION = 2;
@@ -31,6 +32,16 @@ export const STORE_VERSION = 2;
 /** Where the store of a journal lies: beside it, in a directory of its own. */
 export function storeDir(journal: string): string {
   return join(journal, '..', `store-v${STORE_VERSION}`);
+}
+
+/** Removes the stores of other layouts beside this journal: what a body before this one, or one rolled back from, laid out. */
+export function dropOtherStores(journal: string): void {
+  const memory = dirname(journal), mine = basename(storeDir(journal));
+  let names: string[] = [];
+  try { names = readdirSync(memory); } catch { return; }
+  for (const name of names) {
+    if (/^store-v\d+$/.test(name) && name !== mine) rmSync(join(memory, name), { recursive: true, force: true });
+  }
 }
 
 /** The tables: the name of each in the directory, the name it is bound to in the database, and its columns. */
@@ -43,6 +54,8 @@ const NAMES = Object.keys(TABLES) as TableName[];
 const BOUND = TABLES.events.bound;
 /** The names rows and a question's terms are handed over under, for one statement. */
 const BATCH = 'mem_batch';
+/** How a day is written: compressed. An event's whole line is in the table, and text takes a fraction of its length on disk; a column is decoded when it is first read. */
+const SAVED = '{compress: true}';
 const ASKED = 'mem_asked';
 /** Events handed over in one piece. A call into the database holds up everything else, and an event has a hundred terms, so a long journal is laid out in portions. */
 const PORTION = 1000;
@@ -202,6 +215,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     lastDay = Number.NEGATIVE_INFINITY;
   }
   mkdirSync(dir, { recursive: true });
+  if (dir === storeDir(journal)) dropOtherStores(journal);
 
   function persist(): void {
     if (!mounted || dirty.size === 0) return;
@@ -209,7 +223,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
       for (const name of NAMES) {
         const { bound, columns } = TABLES[name];
         ray.run(
-          `(.db.splayed.set ${partition(day, name)} (select {from: ${bound} where: (== date ${dayName(day)}) ${columns.map((c) => `${c}: ${c}`).join(' ')}}) ${symbols})`,
+          `(.db.splayed.set ${partition(day, name)} (select {from: ${bound} where: (== date ${dayName(day)}) ${columns.map((c) => `${c}: ${c}`).join(" ")}}) ${symbols} ${SAVED})`,
         );
       }
     }
@@ -243,7 +257,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
         const none = { events: rowsOf([]), terms: termsOf([]) };
         for (const name of NAMES) {
           ray.bind(BATCH, none[name]);
-          ray.run(`(.db.splayed.set ${partition(day, name)} ${BATCH} ${symbols})`);
+          ray.run(`(.db.splayed.set ${partition(day, name)} ${BATCH} ${symbols} ${SAVED})`);
         }
         mount();
       } else if (Number.isFinite(last) && day !== last) {

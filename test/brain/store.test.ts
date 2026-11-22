@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { appendFileSync, rmSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { fromRayNs } from '../../brain/ray';
-import { STORE_VERSION, openStore, scan, storeDir } from '../../brain/store';
+import { STORE_VERSION, dropOtherStores, openStore, scan, storeDir } from '../../brain/store';
 import { library, ray } from './rayforce';
 
 const real = test.skipIf(library === null);
@@ -27,6 +27,22 @@ const twoDays = () => [
 
 test('the store of a journal lies beside it, in a directory named by the version of its layout', () => {
   expect(storeDir('/a/memory/journal.jsonl')).toBe(`/a/memory/store-v${STORE_VERSION}`);
+});
+
+test('the stores of other layouts beside a journal are removed, and nothing else there is', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'teneral-store-'));
+  try {
+    const journal = join(dir, 'journal.jsonl');
+    writeFileSync(journal, '');
+    const mine = `store-v${STORE_VERSION}`;
+    for (const name of ['store-v1', `store-v${STORE_VERSION + 1}`, mine, 'store-values', 'images']) {
+      mkdirSync(join(dir, name));
+      writeFileSync(join(dir, name, 'kept'), 'x');
+    }
+    dropOtherStores(journal);
+    expect(readdirSync(dir).sort()).toEqual(['images', 'journal.jsonl', mine, 'store-values'].sort());
+    expect(existsSync(join(dir, mine, 'kept'))).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a journal is read as lines with their places in the file', () => {
