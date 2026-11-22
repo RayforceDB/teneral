@@ -301,3 +301,11 @@ test('it says how to offer a change to the species, as it is checked, and that g
   expect(flat).toMatch(/It runs a stranger's code on your install, so your owner approves that commit first/);
   expect(flat).toMatch(/not a vote/);
 });
+
+test('the agent is told of its `code` command, which is in no list of tools', () => {
+  // The command costs nothing in a request (body/code.ts); this paragraph is the only place the agent learns it exists.
+  expect(prompt).toContain('**Reading code without reading it whole.** In `bash`, `code` answers questions about source');
+  for (const form of ['code outline <file>', 'code symbol <name> [path]', 'code definition <name>', 'code references <name>', "code search '<pattern>' --lang <language>", 'code --help']) {
+    expect(prompt).toContain(form);
+  }
+});
