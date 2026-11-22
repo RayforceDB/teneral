@@ -92,6 +92,28 @@ function between(earlier: string, later: string): number {
 }
 
 /**
+ * What the cutting of episodes reads of an event, and nothing more: no text. A journal is cut by
+ * these alone, so what cuts it need not hold the events themselves (brain/memory-table.ts keeps
+ * only these, and only of the stretch that is not remembered yet).
+ */
+export interface Slim {
+  id: string;
+  ts: string;
+  type: string;
+  /** `eventChars` of it. */
+  chars: number;
+  /** How many calls a reply made. */
+  calls: number;
+  /** Whether it asks for a turn. */
+  asks: boolean;
+}
+
+export function slimOf(e: JournalEvent): Slim {
+  const calls = e.type === 'assistant' ? (e as { toolCalls?: unknown }).toolCalls : undefined;
+  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e) };
+}
+
+/**
  * The journal as episodes, in order, covering every event exactly once.
  *
  * `kept` names the stretches that were remembered already (brain/sleep.ts journals them). Each is
@@ -99,13 +121,13 @@ function between(earlier: string, later: string): number {
  * the rules only decide what comes after the last of them. A span whose events cannot be found is
  * passed over.
  */
-export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
+export function episodesOf(events: Slim[], kept: Span[] = []): Episode[] {
   const at = new Map(events.map((e, i) => [e.id, i]));
   const out: Episode[] = [];
   const push = (from: number, to: number, why: Boundary): void => {
     if (to <= from) return;
     let chars = 0;
-    for (let i = from; i < to; i++) chars += eventChars(events[i]!);
+    for (let i = from; i < to; i++) chars += events[i]!.chars;
     const first = events[from]!;
     const last = events[to - 1]!;
     out.push({ id: first.id, from, to, first: first.id, last: last.id, start: first.ts, end: last.ts, chars, why, closed: true });
@@ -135,8 +157,8 @@ export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
     // An episode begins with something said to the agent. Records nobody is shown, such as the notes of its own
     // memory, may lie before that; they are no episode of their own and go with the one that follows.
     if (i > from && begun) {
-      const quiet = asks(e) && !owed;
-      const betweenRounds = e.type === 'assistant' || (asks(e) && pending <= 0);
+      const quiet = e.asks && !owed;
+      const betweenRounds = e.type === 'assistant' || (e.asks && pending <= 0);
       const reason: Boundary | null = !quiet ? (betweenRounds && chars >= EPISODE_HARD_CHARS ? 'size' : null)
         : e.type === 'generation.promoted' || e.type === 'generation.rolledback' ? 'generation'
         : between(events[i - 1]!.ts, e.ts) > GAP_MS ? 'gap'
@@ -150,21 +172,25 @@ export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
         begun = false;
       }
     }
-    if (asks(e) || e.type === 'assistant') begun = true;
-    chars += eventChars(e);
+    if (e.asks || e.type === 'assistant') begun = true;
+    chars += e.chars;
     if (e.type === 'assistant') {
-      const calls = (e as { toolCalls?: unknown }).toolCalls;
-      pending = Array.isArray(calls) ? calls.length : 0;
+      pending = e.calls;
       owed = pending > 0;
     } else if (e.type === 'tool.result') pending -= 1;
     else if (e.type === 'turn.interrupted') owed = false;
-    else if (asks(e)) owed = true;
+    else if (e.asks) owed = true;
   }
   push(from, events.length, why);
   // The last one is where the agent is now, unless it is a remembered span with nothing after it.
   const last = out.at(-1);
   if (last !== undefined && last.why !== 'kept') last.closed = false;
   return out;
+}
+
+/** The same for whole events: see `episodesOf`. */
+export function episodes(events: JournalEvent[], kept: Span[] = []): Episode[] {
+  return episodesOf(events.map(slimOf), kept);
 }
 
 /**
