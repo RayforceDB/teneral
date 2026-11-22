@@ -2,7 +2,8 @@ import { existsSync, statSync } from 'node:fs';
 import { readEvents, type JournalEvent } from './journal';
 import { episodes, type Episode } from './episodes';
 import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
-import { openRay, type Ray } from './ray';
+import { libraryAt, openRay, type Ray } from './ray';
+import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { remembered } from './remembered';
 import { openStore, readLine, scan, type Line, type Store } from './store';
@@ -247,6 +248,68 @@ export function openPast(journal: string, library: string | null, log: (line: st
     }
   }
   return journalPast(journal);
+}
+
+/**
+ * The past as a running agent has it: asked of the database in a process of its own
+ * (brain/rayserver.ts), which this starts, with the journal read through whenever that cannot be
+ * had. `organsDir` is where the pinned build lies: its library, to be the client with, and its
+ * program, to be the server.
+ *
+ * The database is a help and never a condition. When its process dies, or answers with something
+ * that is not an answer, what was asked is asked of the journal instead, and so is everything
+ * after it for as long as this body runs: the next body starts the database afresh, and the store
+ * is brought up to the journal then. Nothing is lost by that; it is only slower.
+ */
+export async function openServedPast(journal: string, organsDir: string | null, log: (line: string) => void = () => {}): Promise<Past> {
+  if (organsDir === null || !existsSync(libraryAt(organsDir)) || !existsSync(serverAt(organsDir))) return journalPast(journal);
+  let server: RayServer | null = null;
+  try {
+    server = await startRayServer(serverAt(organsDir), journal, { log });
+    const ray = openRay({ library: libraryAt(organsDir), server: { port: server.port } });
+    try {
+      const store = openStore(ray, journal);
+      if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
+      return guarded(storePast(journal, ray, store, true), server, journal, log);
+    } catch (err) {
+      ray.close();
+      throw err;
+    }
+  } catch (err) {
+    server?.stop();
+    log(`[memory] the database could not be used, the journal is read through instead: ${err instanceof Error ? err.message : String(err)}`);
+    return journalPast(journal);
+  }
+}
+
+/** `served`, with the journal read through in its place from the first time it fails. See `openServedPast`. */
+function guarded(served: Past, server: RayServer, journal: string, log: (line: string) => void): Past {
+  let now: Past = served;
+  let fell = false;
+  const fall = (err: unknown): Past => {
+    if (!fell) {
+      fell = true;
+      log(`[memory] the database ${server.alive() ? 'failed' : 'is gone'}, the journal is read through from here on: ${err instanceof Error ? err.message : String(err)}`);
+      try { served.close(); } catch { /* it was the one that failed */ }
+      server.stop();
+      now = journalPast(journal);
+    }
+    return now;
+  };
+  const through = <T>(asked: (past: Past) => T): T => {
+    if (fell) return asked(now);
+    try { return asked(now); } catch (err) { return asked(fall(err)); }
+  };
+  return {
+    get by() { return now.by; },
+    get ray() { return fell ? undefined : served.ray; },
+    find: (question, options) => through((past) => past.find(question, options)),
+    asked: () => through((past) => past.asked()),
+    around: (id, before, after) => through((past) => past.around(id, before, after)),
+    sync: () => through((past) => past.sync()),
+    persist: () => through((past) => past.persist()),
+    close: () => { try { now.close(); } finally { server.stop(); } },
+  };
 }
 
 /** A journal time to the minute, in UTC, as the agent reads times everywhere. */

@@ -29,7 +29,7 @@ import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
 import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
-import { openPast } from '../brain/past';
+import { openServedPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
@@ -147,7 +147,7 @@ try {
 const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce,RayforceDB/teneral').split(',').map(s => s.trim()).filter(Boolean);
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
-const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
+const past = await openServedPast(journal, organs === '' ? null : organs, (line) => console.error(line));
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
 const community = openCommunity(past.ray ?? null, journalNow());
 const id = env('TENERAL_ID');

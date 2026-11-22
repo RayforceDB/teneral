@@ -1,7 +1,12 @@
 import { CString, dlopen, ptr, toArrayBuffer, type Pointer } from 'bun:ffi';
 import { join } from 'node:path';
 
-// RayforceDB inside the agent's own process. The database is a shared library; a query is a
+// RayforceDB as the agent reaches it. The database is a shared library. It is used in one of two
+// ways (see `RayOptions.server`): as the database itself, inside the agent's own process, or as the
+// client of a database that runs in a process of its own, which is how a running agent uses it.
+// What follows describes the first; the second differs only in where a query runs.
+//
+// Inside the process, a query is a
 // function call, and a column of its result is memory that is read where it lies. Nothing is
 // turned into the text of a query or the bytes of a protocol on the way in or out: columns go in
 // as typed arrays, with one copy, and come back as typed arrays, with one copy.
@@ -139,6 +144,8 @@ const SYMBOLS = {
   ray_table_new: { args: ['i64'], returns: 'ptr' },
   ray_table_add_col: { args: ['ptr', 'i64', 'ptr'], returns: 'ptr' },
   ray_env_set: { args: ['i64', 'ptr'], returns: 'i32' },
+  ray_poll_create: { args: [], returns: 'ptr' },
+  ray_runtime_set_poll: { args: ['ptr'], returns: 'void' },
 } as const;
 
 export interface RayOptions {
@@ -148,6 +155,14 @@ export interface RayOptions {
   cores?: number;
   /** The commit the library must have been built from, as much of its hash as the caller knows. Any other build is refused. */
   commit?: string;
+  /**
+   * A database in a process of its own (brain/rayserver.ts) to be the client of. Everything asked
+   * of this `Ray` is then evaluated there, and what is bound is bound there: the library in this
+   * process only carries values to it and back, over shared memory when both are on one machine.
+   * A fault in a query is then the server's, which the agent outlives, and what is asked comes
+   * back as an error of kind `io` when the server is gone.
+   */
+  server?: { host?: string; port: number };
 }
 
 export interface Ray {
@@ -161,9 +176,14 @@ export interface Ray {
   bind(name: string, columns: Record<string, Column>): void;
   /** The commit the library was built from. */
   commit: string;
+  /** How the bytes travel to the server this is the client of (`shm`, `tcp`, ...); undefined for the database inside this process. */
+  transport?: string;
   /** Ends the runtime. Nothing may be called after it. */
   close(): void;
 }
+
+/** Names this side keeps in its own runtime when it is a client: the connection, the source on its way out, a table on its way out. */
+const HANDLE = 'teneral_ipc_handle', SOURCE = 'teneral_ipc_source', OUTGOING = 'teneral_ipc_outgoing';
 
 /** Bun's types give a returned pointer as a number or a bigint depending on the signature; at run time it is one pointer. */
 const at = (pointer: unknown): Pointer => pointer as Pointer;
@@ -192,6 +212,9 @@ export function openRay(options: RayOptions): Ray {
   c.ray_pool_init_total(Math.max(1, Math.floor(options.cores ?? 2)));
   live = true;
   let open = true;
+  // Set once this runtime is the client of a server: see `RayOptions.server`.
+  let remote = false;
+  let transport: string | undefined;
 
   const decoder = new TextDecoder('utf-8', { fatal: false });
   const encoder = new TextEncoder();
@@ -390,20 +413,77 @@ export function openRay(options: RayOptions): Ray {
     return made;
   }
 
+  /** Evaluates `source` where this `Ray` has its database: here, or in the server it is the client of. */
+  function ask<T>(source: string, use: (value: Pointer) => T): T {
+    if (!remote) return evaluate(source, use);
+    if (source.includes('\0')) throw new Error('source may not hold a NUL character');
+    // The source goes over as a value, a cell of a table made here, and is never written into the
+    // statement that sends it: nothing in it can end that statement or add to it.
+    bindHere(SOURCE, { s: { type: 'str', data: [source] } });
+    return evaluate(`(.ipc.send ${HANDLE} (at (at ${SOURCE} 's) 0))`, use);
+  }
+
+  if (options.server !== undefined) {
+    const host = options.server.host ?? '127.0.0.1';
+    const port = options.server.port;
+    if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
+      c.ray_runtime_destroy(runtime);
+      lib.close();
+      live = false;
+      throw new Error(`not the address of a database: ${host}:${port}`);
+    }
+    try {
+      // A runtime made by this side has no loop for connections of its own; a client needs one.
+      c.ray_runtime_set_poll(at(c.ray_poll_create()));
+      evaluate(`(set ${HANDLE} (.ipc.open "${host}:${port}"))`, () => undefined);
+      const landed = evaluate(`(get (.ipc.handle ${HANDLE}) 'transport)`, read);
+      transport = typeof landed === 'string' ? landed : undefined;
+      remote = true;
+    } catch (err) {
+      open = false;
+      live = false;
+      c.ray_runtime_destroy(runtime);
+      lib.close();
+      throw err;
+    }
+  }
+
   return {
     commit: built,
+    ...(transport === undefined ? {} : { transport }),
     run(source) {
-      evaluate(source, () => undefined);
+      ask(source, () => undefined);
     },
     query(source) {
-      return evaluate(source, read);
+      return ask(source, read);
     },
     table(source) {
-      const result = evaluate(source, read);
+      const result = ask(source, read);
       if (result === null || typeof result !== 'object' || !('rows' in result)) throw new RayError('type', 'the query did not return a table');
       return result;
     },
     bind(name, columns) {
+      if (!remote) return bindHere(name, columns);
+      if (!NAME.test(name)) throw new Error(`not a name that can be bound: ${name}`);
+      // Made here, sent as it is, bound there: `set` is called with the name and the table, and nothing is parsed.
+      bindHere(OUTGOING, columns);
+      try {
+        evaluate(`(.ipc.send ${HANDLE} (list set (quote ${name}) ${OUTGOING}))`, () => undefined);
+      } finally {
+        evaluate(`(set ${OUTGOING} null)`, () => undefined);
+      }
+    },
+    close() {
+      if (!open) return;
+      if (remote) { try { evaluate(`(.ipc.close ${HANDLE})`, () => undefined); } catch { /* the server is gone already */ } }
+      open = false;
+      live = false;
+      c.ray_runtime_destroy(runtime);
+      lib.close();
+    },
+  };
+
+  function bindHere(name: string, columns: Record<string, Column>): void {
       if (!open) throw new Error('rayforce was closed');
       if (!NAME.test(name)) throw new Error(`not a name that can be bound: ${name}`);
       const entries = Object.entries(columns);
@@ -434,13 +514,5 @@ export function openRay(options: RayOptions): Ray {
       const status = c.ray_env_set(intern(name), table);
       c.ray_release(table);
       if (status !== 0) throw new RayError('env', `the table could not be bound to ${name}`);
-    },
-    close() {
-      if (!open) return;
-      open = false;
-      live = false;
-      c.ray_runtime_destroy(runtime);
-      lib.close();
-    },
-  };
+  }
 }
