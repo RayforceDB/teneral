@@ -224,6 +224,11 @@ export function bashEnv(env: Record<string, string | undefined>): Record<string,
   return rest;
 }
 
+/** The body's own commands (body/bin: `code`, questions about source code) come first on the PATH of what bash runs, so each generation runs its own. */
+export function withCommands(env: Record<string, string | undefined>, bin: string = join(import.meta.dir, 'bin')): Record<string, string | undefined> {
+  return { ...env, PATH: env.PATH === undefined || env.PATH === '' ? bin : `${bin}:${env.PATH}` };
+}
+
 /**
  * Runs without blocking the process, so sensors keep working while a command runs.
  * `detached` makes bash the leader of its own process group; at the limit the whole group is killed.
@@ -234,7 +239,7 @@ export function bashEnv(env: Record<string, string | undefined>): Record<string,
 export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal, track?: { journal: string; gen: string; name: string }): Promise<string> {
   if (signal?.aborted) return 'not run: interrupted by your owner before it started\n';
   const p = Bun.spawn(['bash', '-c', command], {
-    cwd, env: bashEnv(process.env), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
+    cwd, env: withCommands(bashEnv(process.env)), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
   });
   const killGroup = (): void => {
     try {
