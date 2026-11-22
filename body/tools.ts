@@ -1,5 +1,4 @@
 import { work } from './work';
-import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { CHAT_TOOLS } from './chat-tools';
 import type { Community } from './community';
@@ -100,41 +99,6 @@ function toolPath(ctx: ToolContext, given: string): string {
   }
   return real;
 }
-
-const lsp: Tool = {
-  spec: {
-    name: 'lsp',
-    description: 'Ask a trusted language-server profile for semantic definition, references, hover, document symbols or diagnostics. Profiles are host configuration; no arbitrary executable, query-driver, edit or hidden text fallback. Freshness/completeness are explicit.',
-    parameters: {
-      type: 'object',
-      properties: {
-        profile: { type: 'string', description: 'Profile name from the host-owned LSP configuration' },
-        operation: { type: 'string', enum: ['definition', 'references', 'hover', 'symbols', 'diagnostics'] },
-        path: { type: 'string', description: 'Document path, relative to the profile cwd or inside an allowed dependency root' },
-        text: { type: 'string', description: 'Exact document contents to synchronize as this version' },
-        version: { type: 'number', description: 'Positive document version; default 1' },
-        line: { type: 'number', description: 'Zero-based line for definition/references/hover' },
-        character: { type: 'number', description: 'Zero-based UTF-8 character for definition/references/hover' },
-        limit: { type: 'number', description: 'Maximum returned items, 1–100; default 50' },
-      },
-      required: ['profile', 'operation', 'path', 'text'],
-    },
-  },
-  async run(args, ctx, signal) {
-    const profiles = readProfiles(process.env.TENERAL_LSP_PROFILES);
-    const name = str(args, 'profile'); const profile = profiles[name];
-    if (profile === undefined) throw new Error(`unknown LSP profile: ${name}. Profiles come from TENERAL_LSP_PROFILES, not tool arguments`);
-    const number = (key: string, fallback?: number): number | undefined => {
-      const value = args !== null && typeof args === 'object' ? (args as Record<string, unknown>)[key] : undefined;
-      if (value === undefined) return fallback;
-      if (typeof value !== 'number') throw new Error(`${key} must be a number`);
-      return value;
-    };
-    const operation = str(args, 'operation');
-    if (!['definition', 'references', 'hover', 'symbols', 'diagnostics'].includes(operation)) throw new Error('unsupported LSP operation');
-    return JSON.stringify(await runLsp({ profile: profile as LspProfile, operation: operation as 'definition' | 'references' | 'hover' | 'symbols' | 'diagnostics', path: str(args, 'path'), text: str(args, 'text'), version: number('version'), line: number('line'), character: number('character'), limit: number('limit'), signal }), null, 2);
-  },
-};
 
 const read: Tool = {
   idempotent: true,
@@ -777,4 +741,4 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, know, forget, lesson];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, know, forget, lesson];

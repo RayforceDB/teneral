@@ -8,7 +8,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
  * on its PATH; it is not a tool, so it costs nothing in a request until it is used.
  *
  * Two tables carry everything particular: LANGUAGES says which files are which language and what
- * each backend calls it, and a list of backends (body/code-backends.ts) says what can answer. For
+ * each backend calls it, and a list of backends (body/code-backends.ts, body/code-clangd.ts) says what can answer. For
  * each question the first backend that serves the language and is present answers, and the answer
  * says how sure it is. A new language is one entry in the first table; a new program that answers
  * is one entry in the second.
@@ -25,6 +25,8 @@ export interface Language {
   ctags?: string;
   /** What ast-grep calls it. */
   astGrep?: string;
+  /** The language server that resolves its names, when there is one (body/code-clangd.ts). */
+  server?: string;
   /** The grammar is not one ast-grep carries: it is loaded from the file the image built (SGCONFIG). */
   custom?: boolean;
   /**
@@ -70,7 +72,7 @@ const SCRIPT: readonly Definition[] = [
 ];
 
 export const LANGUAGES: readonly Language[] = [
-  { name: 'c', extensions: ['.c', '.h', '.inc'], ctags: 'C', astGrep: 'c', inFunction: { wrap: (pattern) => `void f__() { ${pattern}; }`, block: 'compound_statement' } },
+  { name: 'c', extensions: ['.c', '.h', '.inc'], ctags: 'C', astGrep: 'c', server: 'clangd', inFunction: { wrap: (pattern) => `void f__() { ${pattern}; }`, block: 'compound_statement' } },
   { name: 'python', extensions: ['.py'], ctags: 'Python', astGrep: 'python' },
   { name: 'bash', extensions: ['.sh', '.bash'], ctags: 'Sh', astGrep: 'bash', definitions: [{ kind: 'function', rule: named('function_definition') }] },
   {
@@ -117,13 +119,23 @@ export interface Hit {
   text: string;
 }
 
+/** Something a compiler would say about a file. */
+export interface Diagnostic {
+  line: number;
+  column: number;
+  severity: 'error' | 'warning' | 'note' | 'hint';
+  message: string;
+}
+
 export type Op = 'outline' | 'grep' | 'search' | 'definition' | 'references' | 'diagnostics';
 
 /**
  * Something that can answer. It has only the methods for what it can do. `outline` lists what the
  * given files (all of one language) define; `grep` finds a whole word as text; `search` finds code
- * by shape. `definition`, `references` and `diagnostics` are for a backend that resolves names, a
- * language server: with none, the layer builds the first two out of `grep` and `outline`.
+ * by shape. The last three are for a backend that resolves names, a language server. It is asked
+ * from a place in a file, which the layer finds: `definitionAt` from a use of the name, `references`
+ * from the places the name is defined. Each may answer null (it cannot tell this time: no index, no
+ * compile commands), and the question then goes on to `grep` and `outline`, whose answer says it is less sure.
  */
 export interface Backend {
   name: string;
@@ -133,8 +145,9 @@ export interface Backend {
   outline?(files: string[], language: Language): Promise<Sym[]>;
   grep?(word: string, root: string, extensions: string[]): Promise<Hit[]>;
   search?(pattern: string, language: Language, paths: string[]): Promise<Hit[]>;
-  definition?(name: string, root: string, language: Language): Promise<Sym[] | null>;
-  references?(name: string, root: string, language: Language): Promise<Hit[] | null>;
+  definitionAt?(file: string, line: number, name: string, root: string, language: Language): Promise<Sym[] | null>;
+  references?(name: string, at: Sym[], root: string, language: Language): Promise<Hit[] | null>;
+  diagnostics?(file: string, root: string, language: Language): Promise<Diagnostic[] | null>;
 }
 
 export class CodeError extends Error {}
@@ -171,7 +184,7 @@ export interface Answer {
   text: string;
 }
 
-const LIMITS = { outline: 300, definition: 20, references: 80, search: 50, body: 300, files: 400 } as const;
+const LIMITS = { outline: 300, definition: 20, references: 80, search: 50, body: 300, files: 400, diagnostics: 60 } as const;
 
 export class Code {
   constructor(private readonly backends: readonly Backend[], private readonly languages: readonly Language[] = LANGUAGES) {}
@@ -228,7 +241,7 @@ export class Code {
     return { status: wanted.length === 0 ? 1 : 0, text: [`${this.show(file, options)}: ${notes.join('; ')}`, ...wanted.slice(0, limit).map((sym) => this.row(sym))].join('\n') + '\n' };
   }
 
-  /** Definitions of `name` in the checkout around `path`: by a language server when one serves the language, else by listing the symbols of the files that mention the name. */
+  /** Definitions of `name` by its name alone: in one file, or under a directory by listing the symbols of the files that mention it. */
   private async definitions(name: string, path: string, options: Options): Promise<{ symbols: Sym[]; grade: string; partial: boolean }> {
     const target = resolve(options.cwd, path);
     if (!existsSync(target)) throw new CodeError(`${target}: no such file or directory`);
@@ -236,15 +249,8 @@ export class Code {
       const { symbols, backend } = await this.symbolsOf(target, options);
       return { symbols: symbols.filter((sym) => sym.name === name), grade: `${backend.grade} (${backend.name})`, partial: false };
     }
-    const wanted = options.lang !== undefined ? [this.language('', options)] : [...this.languages];
+    const rest = options.lang !== undefined ? [this.language('', options)] : [...this.languages];
     const found: Sym[] = []; const grades = new Set<string>(); let partial = false;
-    const rest: Language[] = [];
-    for (const language of wanted) {
-      const server = await this.pick('definition', language);
-      const exact = server !== null ? await server.definition!(name, target, language) : null;
-      if (server !== null && exact !== null) { found.push(...exact); if (exact.length > 0) grades.add(`${server.grade} (${server.name})`); }
-      else rest.push(language);
-    }
     const text = await this.pick('grep', null);
     if (rest.length > 0 && text !== null) {
       const mentions = await text.grep!(name, target, rest.flatMap((language) => language.extensions));
@@ -264,8 +270,23 @@ export class Code {
     return { symbols: found, grade: [...grades].join(', '), partial };
   }
 
-  /** Where a name is defined. */
+  /**
+   * Where a name is defined. With `path` as `file:line`, the name as it is used on that line is
+   * resolved by the language server, which tells apart two things of one name; else, or when no
+   * server can, every definition of the name is listed.
+   */
   async definition(name: string, path: string, options: Options): Promise<Answer> {
+    const use = /^(.+):(\d+)$/.exec(path);
+    const file = use === null ? null : resolve(options.cwd, use[1]!);
+    if (use !== null && file !== null && existsSync(file) && statSync(file).isFile()) {
+      const language = this.language(file, options);
+      const server = await this.pick('definition', language);
+      const exact = server === null ? null : await server.definitionAt!(file, Number(use[2]), name, projectRoot(file), language);
+      if (server !== null && exact !== null && exact.length > 0) {
+        return { status: 0, text: [`${name} as used at ${this.show(file, options)}:${use[2]}: ${server.grade} (${server.name})`, ...exact.map((sym) => `${this.show(sym.path, options)}:${sym.line}`)].join('\n') + '\n' };
+      }
+      path = projectRoot(file);
+    }
     const { symbols, grade, partial } = await this.definitions(name, path, options);
     if (symbols.length === 0) return { status: 1, text: `no definition of ${name} found${partial ? ' in the files looked at (too many mention it; give a narrower path)' : ''}\n` };
     const limit = this.limit(options, LIMITS.definition);
@@ -299,37 +320,47 @@ export class Code {
     if (!existsSync(target)) throw new CodeError(`${target}: no such file or directory`);
     const root = statSync(target).isFile() ? projectRoot(target) : target;
     const wanted = options.lang !== undefined ? [this.language('', options)] : [...this.languages];
-    const hits: Hit[] = []; const grades = new Set<string>(); const rest: Language[] = [];
+    // What a language server resolved and what only matched as text are kept apart: the second may name something else.
+    const sure: Hit[] = []; const loose: Hit[] = []; let server: Backend | null = null; const rest: Language[] = [];
+    const within = (hit: Hit): boolean => hit.path === target || hit.path.startsWith(target + '/');
     for (const language of wanted) {
-      const server = await this.pick('references', language);
-      const exact = server !== null ? await server.references!(name, root, language) : null;
-      if (server !== null && exact !== null) { hits.push(...exact); if (exact.length > 0) grades.add(`${server.grade} (${server.name})`); }
-      else rest.push(language);
+      const mine = await this.pick('references', language);
+      // A language server is asked from where the name is defined, so those places are found first.
+      const from = mine === null ? [] : (await this.definitions(name, projectRoot(target), { ...options, lang: language.name })).symbols.filter((sym) => !MINOR.has(sym.kind));
+      const exact = mine === null || from.length === 0 ? null : await mine.references!(name, from, projectRoot(target), language);
+      if (mine !== null && exact !== null) { sure.push(...exact.filter(within)); server = mine; } else rest.push(language);
     }
     const text = await this.pick('grep', null);
     if (rest.length > 0) {
       if (text === null) throw new CodeError('nothing here can search text: neither rg nor grep was found');
-      const found = await text.grep!(name, statSync(target).isFile() ? target : root, rest.flatMap((language) => language.extensions));
-      if (found.length > 0) grades.add(`${text.grade} (${text.name}): every place the word appears, whatever it names there`);
-      hits.push(...found);
+      loose.push(...await text.grep!(name, statSync(target).isFile() ? target : root, rest.flatMap((language) => language.extensions)));
     }
-    if (hits.length === 0) return { status: 1, text: `no use of ${name} found\n` };
+    if (sure.length + loose.length === 0) return { status: 1, text: `no use of ${name} found\n` };
     const limit = this.limit(options, LIMITS.references);
-    const byFile = new Map<string, Hit[]>();
-    for (const hit of hits) byFile.set(hit.path, [...(byFile.get(hit.path) ?? []), hit]);
-    const lines = [`${name}: ${[...grades].join(', ')}; ${Math.min(hits.length, limit)} of ${hits.length} places in ${byFile.size} files`];
-    let room = limit;
-    for (const [file, mine] of byFile) {
-      if (room <= 0) break;
-      const inside = await this.enclosing(file);
-      lines.push(this.show(file, options));
-      for (const hit of mine.slice(0, room)) {
-        const within = inside(hit.line);
-        lines.push(`${String(hit.line).padStart(7)}  ${within === null ? '' : `[${within}] `}${hit.text.trim().slice(0, 160)}`);
+    const lines: string[] = []; let room = limit;
+    const list = async (hits: Hit[], heading: string): Promise<void> => {
+      if (hits.length === 0) return;
+      const byFile = new Map<string, Hit[]>();
+      for (const hit of hits) byFile.set(hit.path, [...(byFile.get(hit.path) ?? []), hit]);
+      const shown = Math.min(hits.length, room);
+      lines.push(`${heading}; ${shown} of ${hits.length} places in ${byFile.size} files`);
+      let left = shown;
+      for (const [file, mine] of byFile) {
+        if (left <= 0) break;
+        const inside = await this.enclosing(file);
+        lines.push(this.show(file, options));
+        for (const hit of mine.slice(0, left)) {
+          const around = inside(hit.line);
+          lines.push(`${String(hit.line).padStart(7)}  ${around === null ? '' : `[${around}] `}${hit.text.trim().slice(0, 160)}`);
+        }
+        left -= mine.length;
       }
-      room -= mine.length;
-    }
-    if (hits.length > limit) lines.push(`[${hits.length - limit} more: give a narrower path, or raise --limit]`);
+      room -= shown;
+      if (hits.length > shown) lines.push(`[${hits.length - shown} more: give a narrower path, or raise --limit]`);
+    };
+    if (server !== null) await list(sure, `${name}: ${server.grade} (${server.name})`);
+    const others = server !== null && sure.length > 0;
+    await list(loose, `${others ? `${name} in other languages` : name}: ${text?.grade} (${text?.name}): every place the word appears, whatever it names there`);
     return { status: 0, text: lines.join('\n') + '\n' };
   }
   /** For one file, a function from a line to the name of the function or type around it. Without a backend for the file, it knows nothing. */
@@ -367,9 +398,24 @@ export class Code {
     return { status: 0, text: lines.join('\n') + '\n' };
   }
 
+  /** What a compiler says about one file, by the language server. */
+  async diagnostics(path: string, options: Options): Promise<Answer> {
+    const file = resolve(options.cwd, path);
+    if (!existsSync(file) || !statSync(file).isFile()) throw new CodeError(`${file}: no such file`);
+    const language = this.language(file, options);
+    const server = await this.pick('diagnostics', language);
+    if (server === null) throw new CodeError(`nothing here checks ${language.name}; \`code languages\` says what is there`);
+    const found = await server.diagnostics!(file, projectRoot(file), language);
+    if (found === null) throw new CodeError(`${server.name} could not check ${this.show(file, options)}: it has no compile commands for this project (a Makefile or compile_commands.json at its root), or did not finish in time`);
+    const limit = this.limit(options, LIMITS.diagnostics);
+    const lines = [`${this.show(file, options)}: ${server.grade} (${server.name}); ${found.length === 0 ? 'no problems' : `${Math.min(found.length, limit)} of ${found.length} problems`}`];
+    for (const one of found.slice(0, limit)) lines.push(`${`${one.line}:${one.column}`.padStart(9)}  ${one.severity.padEnd(7)} ${one.message.slice(0, 200)}`);
+    return { status: 0, text: lines.join('\n') + '\n' };
+  }
+
   /** What is supported here, and by what: one line for each language. */
   async supported(): Promise<Answer> {
-    const lines = [['language'.padEnd(11), 'files'.padEnd(22), 'outline'.padEnd(21), 'search'.padEnd(21), 'definition'.padEnd(21), 'references'].join(' ')];
+    const lines = [['language'.padEnd(11), 'files'.padEnd(22), 'outline'.padEnd(21), 'search'.padEnd(21), 'definition'.padEnd(21), 'references'.padEnd(21), 'diagnostics'].join(' ')];
     for (const language of this.languages) {
       // A name is resolved by a language server when there is one; without, a definition comes from the outline and a use from the text.
       const cell = async (op: Op, without?: Op): Promise<string> => {
@@ -378,7 +424,7 @@ export class Code {
       };
       lines.push([
         language.name.padEnd(11), language.extensions.join(' ').padEnd(22),
-        await cell('outline'), await cell('search'), await cell('definition', 'outline'), await cell('references', 'grep'),
+        await cell('outline'), await cell('search'), await cell('outline'), await cell('references', 'grep'), await cell('diagnostics'),
       ].join(' ').trimEnd());
     }
     lines.push('A dash means nothing in this container answers that: the program is missing from the image.');
@@ -390,9 +436,11 @@ export const USAGE = `code: questions about source code, answered the same way i
 
   code outline <file>              what the file defines, with line ranges
   code symbol <name> [path]        the body of a function or type, with line numbers
-  code definition <name> [path]    where a name is defined
+  code definition <name> [path]    where a name is defined; with file:line as the path,
+                                   the name as it is used on that line
   code references <name> [path]    every use of a name, by file, with the function it is in
   code search <pattern> [path...]  code of a given shape; $X is one node, $$$X any number
+  code diagnostics <file>          what a compiler says about the file
   code languages                   what is supported in this container, and how well
 
 [path] is a file or a directory, the current directory when left out.

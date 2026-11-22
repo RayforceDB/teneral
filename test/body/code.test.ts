@@ -145,33 +145,64 @@ test('uses of a name are grouped by file, each with the function around it, and 
   ]);
   const capped = await code.references('helper', '.', { cwd: root, limit: 2 });
   expect(capped.text).toContain('2 of 3 places'); expect(capped.text).toContain('[1 more: give a narrower path');
+  expect(capped.text.match(/more:/g)).toHaveLength(1);
   expect(capped.text).not.toContain('src/b.c');
   expect((await new Code(fake(symbols, [])).references('helper', '.', { cwd: root })).status).toBe(1);
 });
 
-test('a backend that resolves names answers first, and its answer is called exact', async () => {
+test('a backend that resolves names is asked from where the name is defined, and its answer is called exact', async () => {
   const { root, file, symbols, hits } = sample();
   const asked: string[] = [];
   const code = new Code(fake(symbols, hits, {
     name: 'server',
     async serves(op, language) { return (op === 'definition' || op === 'references') && language?.name === 'c'; },
-    async definition(name) { asked.push(`definition ${name}`); return [{ name, kind: 'function', path: file, line: 3, end: 5 }]; },
-    async references(name) { asked.push(`references ${name}`); return [{ path: file, line: 7, text: '  return helper(LIMIT);' }]; },
+    async definitionAt(at, line, name) { asked.push(`definition ${name} ${at.slice(root.length)}:${line}`); return [{ name, kind: 'definition', path: file, line: 3, end: 3 }]; },
+    async references(name, from) { asked.push(`references ${name} from ${from.map((sym) => `${sym.kind}@${sym.line}`).join(',')}`); return [{ path: file, line: 7, text: '  return helper(LIMIT);' }]; },
   }));
-  expect((await code.definition('helper', '.', { cwd: root, lang: 'c' })).text).toBe('helper: exact (server); 1 of 1 definitions\nsrc/a.c:3-5  function  helper\n');
+  // A name alone is listed from the outline; the use of it on one line is resolved.
+  expect((await code.definition('helper', '.', { cwd: root })).text).toContain('syntactic (parser)');
+  expect((await code.definition('helper', 'src/b.c:1', { cwd: root })).text).toBe('helper as used at src/b.c:1: exact (server)\nsrc/a.c:3\n');
   const uses = await code.references('helper', '.', { cwd: root, lang: 'c' });
-  expect(uses.text.split('\n')[0]).toBe('helper: exact (server); 1 of 1 places in 1 files');
-  expect(asked).toEqual(['definition helper', 'references helper']);
+  expect(uses.text.split('\n').slice(0, 3)).toEqual(['helper: exact (server); 1 of 1 places in 1 files', 'src/a.c', '      7  [entry] return helper(LIMIT);']);
+  // What only matched as text is not mixed into it: b.c is in neither list, the server having answered for C.
+  expect(uses.text).not.toContain('textual');
+  expect(asked).toEqual(['definition helper /src/b.c:1', 'references helper from function@3']);
+});
+
+test('uses in other languages are listed apart from the exact ones, as text', async () => {
+  const { root, file, symbols, hits } = sample();
+  writeFileSync(join(root, 'tool.py'), 'helper()\n');
+  const code = new Code(fake(symbols, [...hits, { path: join(root, 'tool.py'), line: 1, text: 'helper()' }], {
+    name: 'server',
+    async serves(op, language) { return op === 'references' && language?.name === 'c'; },
+    async references() { return [{ path: file, line: 7, text: '  return helper(LIMIT);' }]; },
+  }));
+  const lines = (await code.references('helper', '.', { cwd: root })).text.split('\n');
+  expect(lines[0]).toBe('helper: exact (server); 1 of 1 places in 1 files');
+  expect(lines[3]).toStartWith('helper in other languages: textual (words): every place the word appears');
 });
 
 test('a backend that resolves names and cannot answer this time leaves the question to the next', async () => {
   const { root, symbols, hits } = sample();
   const code = new Code(fake(symbols, hits, {
     name: 'server',
-    async serves(op) { return op === 'definition'; },
-    async definition() { return null; },
+    async serves(op) { return op === 'definition' || op === 'references'; },
+    async definitionAt() { return null; },
+    async references() { return null; },
   }));
-  expect((await code.definition('helper', '.', { cwd: root, lang: 'c' })).text).toContain('syntactic (parser)');
+  expect((await code.definition('helper', 'src/b.c:1', { cwd: root })).text).toBe('helper: syntactic (parser); 1 of 1 definitions\nsrc/a.c:3-5  function  helper(int a)\n');
+  // The answer says it is text; it is not passed off as the server's.
+  expect((await code.references('helper', '.', { cwd: root, lang: 'c' })).text.split('\n')[0]).toBe('helper: textual (words): every place the word appears, whatever it names there; 3 of 3 places in 2 files');
+});
+
+test('what a compiler says about a file is listed, and a file nothing can check is refused', async () => {
+  const { root, symbols } = sample();
+  const checked = (found: unknown) => new Code(fake(symbols, [], { name: 'server', async serves(op) { return op === 'diagnostics'; }, async diagnostics() { return found as never; } }));
+  expect((await checked([{ line: 7, column: 10, severity: 'error', message: "Use of undeclared identifier 'LIMIT'" }]).diagnostics('src/a.c', { cwd: root })).text)
+    .toBe("src/a.c: exact (server); 1 of 1 problems\n     7:10  error   Use of undeclared identifier 'LIMIT'\n");
+  expect((await checked([]).diagnostics('src/a.c', { cwd: root })).text).toBe('src/a.c: exact (server); no problems\n');
+  await expect(checked(null).diagnostics('src/a.c', { cwd: root })).rejects.toThrow('server could not check src/a.c: it has no compile commands');
+  await expect(new Code(fake(symbols)).diagnostics('src/a.c', { cwd: root })).rejects.toThrow('nothing here checks c');
 });
 
 test('a search by shape needs a language, and reports each match by its first line', async () => {
@@ -186,11 +217,11 @@ test('a search by shape needs a language, and reports each match by its first li
 
 test('what is supported is one line for each language, with a dash where nothing answers', async () => {
   const table = (await new Code(backends(async () => ({ code: 0, out: '', err: '' }), (program) => program === 'ctags' || program === 'grep')).supported()).text.split('\n');
-  expect(table[0]!.split(/\s+/)).toEqual(['language', 'files', 'outline', 'search', 'definition', 'references']);
+  expect(table[0]!.split(/\s+/)).toEqual(['language', 'files', 'outline', 'search', 'definition', 'references', 'diagnostics']);
   const row = (name: string): string => table.find((line) => line.startsWith(name))!.replace(/\s+/g, ' ');
-  expect(row('c ')).toBe('c .c .h .inc ctags (syntactic) - ctags (syntactic) grep (textual)');
+  expect(row('c ')).toBe('c .c .h .inc ctags (syntactic) - ctags (syntactic) grep (textual) -');
   // Without ast-grep Rayfall has nothing that reads it; its uses are still found as text.
-  expect(row('rayfall')).toBe('rayfall .rfl - - - grep (textual)');
+  expect(row('rayfall')).toBe('rayfall .rfl - - - grep (textual) -');
 });
 
 function canned(replies: Record<string, Ran>): { runner: Runner; ran: { command: string[]; input?: string }[] } {
