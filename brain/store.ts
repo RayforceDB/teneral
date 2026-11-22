@@ -121,6 +121,31 @@ function sourceOf(e: JournalEvent): string {
   return typeof named === 'string' ? named.slice(0, 64) : '';
 }
 
+/**
+ * Something made from the events and kept in tables of its own: what is known, what is remembered,
+ * how the journal is cut into episodes. The store hands it every event once, in order, and it
+ * says how its tables stand; the store binds them in the database, where every reader asks, and
+ * writes them out beside the events. It can always be made again from the first event on, and is
+ * whenever its tables cannot be read or do not reach as far as they say.
+ */
+export interface Projection {
+  /** Its name in the store: its tables are bound as `mem_<name>_<table>` and lie under `.derived/<name>/`. */
+  name: string;
+  /** Changed whenever what it makes of an event, or the columns of its tables, change: tables written under another are made again. */
+  version: number;
+  /** Starts from nothing. */
+  reset(): void;
+  /** Takes one event in; true when its tables may have changed. `seq` is the event's number. */
+  step(e: JournalEvent, seq: number): boolean;
+  /** Its tables as they stand, column by column. */
+  tables(): Record<string, Record<string, Column>>;
+  /** Its state again, from its tables as they were last written. */
+  restore(tables: Record<string, Table>): void;
+}
+
+/** The name a projection's table is bound under in the database. */
+export const boundAs = (projection: string, table: string): string => `mem_${projection}_${table}`;
+
 export interface Store {
   /** Lays out what the journal has gained since the last call. Returns how many events that was. */
   sync(): number;
@@ -158,7 +183,7 @@ function quoted(path: string): string {
  * when it cannot be read or reaches past the journal. On return it holds every whole line the
  * journal has.
  */
-export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): Store {
+export function openStore(ray: Ray, journal: string, dir = storeDir(journal), projections: Projection[] = []): Store {
   const root = quoted(dir);
   const symbols = quoted(join(dir, '.sym'));
   const partition = (day: number, table: TableName): string => quoted(join(dir, dayName(day), table));
@@ -232,8 +257,59 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
   mkdirSync(dir, { recursive: true });
   if (dir === storeDir(journal)) dropOtherStores(journal);
 
+  // What is made from the events: read back as it was last written, then brought up to the events.
+  const derived = (projection: Projection, table: string): string => quoted(join(dir, '.derived', projection.name, table));
+  /** Projections whose tables in the database, or on disk, are behind their state. */
+  const unbound = new Set<Projection>();
+  const unwritten = new Set<Projection>();
+  const bindTables = (projection: Projection): void => {
+    for (const [table, columns] of Object.entries(projection.tables())) ray.bind(boundAs(projection.name, table), columns);
+  };
+  const stepAll = (e: JournalEvent, seq: number): void => {
+    for (const projection of projections) if (projection.step(e, seq)) { unbound.add(projection); unwritten.add(projection); }
+  };
+  const bindChanged = (): void => {
+    for (const projection of unbound) bindTables(projection);
+    unbound.clear();
+  };
+  /** The events numbered `from` and after, a portion at a time, each with its number. */
+  const replay = (from: number, each: (e: JournalEvent, seq: number) => void): void => {
+    for (let at = from; at < rows; at += PORTION) {
+      const t = ray.table(`(select {from: ${BOUND} where: (and (>= seq ${at}) (< seq ${at + PORTION})) asc: seq seq: seq line: line})`);
+      const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+      const lines = t.columns.line as string[] | undefined ?? [];
+      for (let i = 0; i < lines.length; i++) {
+        try { each(JSON.parse(lines[i]!) as JournalEvent, Number(seqs[i])); } catch { /* a cell that is no event: as a line that is none */ }
+      }
+    }
+  };
+  for (const projection of projections) {
+    let reaches = 0;
+    projection.reset();
+    try {
+      const names = Object.keys(projection.tables());
+      const read: Record<string, Table> = {};
+      for (const table of names) read[table] = ray.table(`(select {from: (.db.splayed.get ${derived(projection, table)} ${symbols})})`);
+      const mark = ray.table(`(select {from: (.db.splayed.get ${derived(projection, 'mark')} ${symbols})})`);
+      const [version, seq] = [Number((mark.columns.version as BigInt64Array)[0]), Number((mark.columns.seq as BigInt64Array)[0])];
+      if (version === projection.version && Number.isSafeInteger(seq) && seq >= 0 && seq <= rows) {
+        projection.restore(read);
+        reaches = seq;
+      }
+    } catch {
+      // Never written, written by another version, or not to be read: made again from the first event.
+      projection.reset();
+      reaches = 0;
+    }
+    let changed = reaches === 0;
+    if (mounted) replay(reaches, (e, seq) => { if (projection.step(e, seq)) changed = true; });
+    bindTables(projection);
+    if (changed) unwritten.add(projection);
+  }
+
   function persist(): void {
-    if (!mounted || dirty.size === 0) return;
+    if (!mounted) return;
+    if (dirty.size === 0) { writeDerived(); return; }
     for (const day of [...dirty].sort((a, b) => a - b)) {
       for (const name of NAMES) {
         const { bound, columns } = TABLES[name];
@@ -245,6 +321,21 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     dirty.clear();
     // Mounted again, the days just written are read from disk like any other, and the memory they took is given back.
     mount();
+    writeDerived();
+  }
+
+  /** Writes out what is made from the events, after the events it was made from: a table that reaches further than the events on disk is made again at the next start. */
+  function writeDerived(): void {
+    for (const projection of unwritten) {
+      bindTables(projection);
+      for (const table of Object.keys(projection.tables())) {
+        ray.run(`(.db.splayed.set ${derived(projection, table)} ${boundAs(projection.name, table)} ${symbols})`);
+      }
+      ray.bind(BATCH, { version: { type: 'i64', data: BigInt64Array.from([BigInt(projection.version)]) }, seq: { type: 'i64', data: BigInt64Array.from([BigInt(rows)]) } });
+      ray.run(`(.db.splayed.set ${derived(projection, 'mark')} ${BATCH} ${symbols})`);
+    }
+    unbound.clear();
+    unwritten.clear();
   }
 
   function sync(): number {
@@ -286,11 +377,13 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
       dirty.add(day);
       last = day;
       reached = batch.at(-1)!.line.next;
+      batch.forEach((b, i) => stepAll(b.line.event, rows + i));
       rows += batch.length;
       documents += batch.reduce((sum, b) => sum + (documentOf(b.line.event) === null ? 0 : 1), 0);
       from = to;
     }
     lastDay = last;
+    bindChanged();
     return lines.length;
   }
 
