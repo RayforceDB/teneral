@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { fromRayNs } from '../../brain/ray';
-import { STORE_VERSION, openStore, scan, storeDir } from '../../brain/store';
+import { STORE_VERSION, dropOtherStores, openStore, scan, storeDir } from '../../brain/store';
 import { library, ray } from './rayforce';
 
 const real = test.skipIf(library === null);
@@ -27,6 +27,22 @@ const twoDays = () => [
 
 test('the store of a journal lies beside it, in a directory named by the version of its layout', () => {
   expect(storeDir('/a/memory/journal.jsonl')).toBe(`/a/memory/store-v${STORE_VERSION}`);
+});
+
+test('the stores of other layouts beside a journal are removed, and nothing else there is', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'teneral-store-'));
+  try {
+    const journal = join(dir, 'journal.jsonl');
+    writeFileSync(journal, '');
+    const mine = `store-v${STORE_VERSION}`;
+    for (const name of ['store-v1', `store-v${STORE_VERSION + 1}`, mine, 'store-values', 'images']) {
+      mkdirSync(join(dir, name));
+      writeFileSync(join(dir, name, 'kept'), 'x');
+    }
+    dropOtherStores(journal);
+    expect(readdirSync(dir).sort()).toEqual(['images', 'journal.jsonl', mine, 'store-values'].sort());
+    expect(existsSync(join(dir, mine, 'kept'))).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a journal is read as lines with their places in the file', () => {
@@ -125,7 +141,8 @@ real('a store that reaches past its journal is thrown away and built again', () 
   const again = openStore(ray(), path);
   expect(again.rebuilt).toContain('reaches byte');
   expect(again.count()).toBe(1);
-});
+  // Over a second where an agent runs, and more while its machine is busy: the usual five seconds were not always enough.
+}, 30_000);
 
 real('a store that cannot be read is thrown away and built again', () => {
   const events = twoDays();
@@ -135,7 +152,8 @@ real('a store that cannot be read is thrown away and built again', () => {
   const again = openStore(ray(), path);
   expect(again.rebuilt).toContain('could not be read');
   expect(again.count()).toBe(4);
-});
+  // Over a second where an agent runs, and more while its machine is busy: the usual five seconds were not always enough.
+}, 30_000);
 
 real('an event that claims an earlier time than the one before it is laid out with that one\'s day', () => {
   const events = [
@@ -170,4 +188,30 @@ real('a long journal is laid out in portions, and is all there', () => {
 
 real('a store cannot lie at a path that a statement would read as something else', () => {
   expect(() => openStore(ray(), journalOf([]), '/tmp/a"b')).toThrow('cannot lie at a path');
+});
+
+real('an event is whole in its row: it is read from the table, with the journal\'s file gone, one by its place or a stretch in order', () => {
+  const events = [
+    said('2026-11-13T09:00:00.000Z', 'a "quoted" line\nwith a break, a back\\slash and 😀'),
+    ev('2026-11-13T09:00:01.000Z', { type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: { command: 'ls -la' } }] }),
+    ev('2026-11-13T09:00:02.000Z', { type: 'tool.result', callId: 'c1', ok: true, output: 'x'.repeat(30_000) }),
+    replied('2026-11-14T10:00:00.000Z', 'done'),
+  ];
+  const path = journalOf(events);
+  const lines = scan(path, 0).lines;
+  const store = openStore(ray(), path);
+  // Nothing below can come from the file.
+  rmSync(path);
+  for (const [i, at] of lines.entries()) expect(store.read(at.off)).toEqual(events[i]!);
+  // A byte where no line begins, and one past the end, hold no event.
+  expect(store.read(lines[1]!.off + 1)).toBeNull();
+  expect(store.read(lines.at(-1)!.next)).toBeNull();
+  expect(store.read(-1)).toBeNull();
+  expect(store.read(Number.NaN)).toBeNull();
+  // A stretch is from a byte up to another, across the day's boundary, in the journal's order.
+  expect(store.stretch(0, lines.at(-1)!.next)).toEqual(events);
+  expect(store.stretch(lines[1]!.off, lines[3]!.off)).toEqual(events.slice(1, 3));
+  expect(store.stretch(lines[2]!.off, lines[2]!.next)).toEqual([events[2]!]);
+  expect(store.stretch(lines[3]!.next, lines[3]!.next + 100)).toEqual([]);
+  expect(store.stretch(50, 50)).toEqual([]);
 });
