@@ -27,6 +27,10 @@ export interface Past {
   asked(): number | null;
   /** The event with this id and the ones around it, in order; null when the journal has no such event. */
   around(id: string, before: number, after: number): { events: JournalEvent[]; at: number } | null;
+  /** The newest event of this type, and of this source when one is given (a stimulus's source, a note's kind, a called tool's name); null when there is none. */
+  latest(type: string, source?: string): JournalEvent | null;
+  /** The notes of these kinds, in order. */
+  notes(kinds: readonly string[]): JournalEvent[];
   /** What became of a memory or a fact since it was written: what made it outdated, and what stands now in its place (brain/links.ts). Null when nothing did. */
   since(id: string): Since | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
@@ -42,11 +46,11 @@ export interface Found extends Hit {
 }
 
 /** The journal read through, and read again only when it has grown. */
-function reader(journal: string): () => Line[] {
+function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
   let all: Line[] = [];
   let lines: Line[] = [];
   let end = 0;
-  return () => {
+  const read = (): Line[] => {
     if (existsSync(journal) && statSync(journal).size < end) {
       // Shorter than what was read: another file than before. Start over.
       all = [];
@@ -63,6 +67,8 @@ function reader(journal: string): () => Line[] {
     end = more.end;
     return lines;
   };
+  // Everything the journal holds, also what the owner took back: for what asks after a record, not after the conversation.
+  return Object.assign(read, { all: (): Line[] => { read(); return all; } });
 }
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
@@ -132,6 +138,11 @@ export function journalPast(journal: string): Past {
   let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
   return {
     by: 'journal',
+    latest(type, source) {
+      const named = (e: JournalEvent): unknown => (e.type === 'stimulus' ? (e as { source?: unknown }).source : e.type === 'tool.intent' ? (e as { name?: unknown }).name : e.type === 'note' ? e.kind : '');
+      return lines.all().findLast((line) => line.event.type === type && (source === undefined || named(line.event) === source))?.event ?? null;
+    },
+    notes: (kinds) => lines.all().flatMap((line) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [line.event] : [])),
     since(id) {
       const now = lines();
       if (tied?.seen !== now.length) tied = { seen: now.length, ties: tiesOf(links(now.map((line) => line.event))) };
@@ -231,6 +242,14 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   return {
     ray,
     by: 'store',
+    latest(type, source) {
+      store.sync();
+      return store.latest(type, source);
+    },
+    notes(kinds) {
+      store.sync();
+      return store.noted(kinds);
+    },
     since(id) {
       store.sync();
       const g = tied();
@@ -406,6 +425,8 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     get ray() { return fell ? undefined : served.ray; },
     find: (question, options) => through((past) => past.find(question, options)),
     since: (id) => through((past) => past.since(id)),
+    latest: (type, source) => through((past) => past.latest(type, source)),
+    notes: (kinds) => through((past) => past.notes(kinds)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => { again(); through((past) => past.sync()); },
@@ -445,6 +466,9 @@ export function sinceLines(past: Pick<Past, 'since' | 'around'>, e: JournalEvent
   if (since.parts !== undefined && since.parts.outdated > 0) lines.push(`[${since.parts.outdated} of the ${since.parts.of} memories this one stands for were outdated by later ones]`);
   return lines;
 }
+
+/** Where a stimulus came from; undefined for anything else, and for none. */
+export const sourceOf = (e: JournalEvent | null | undefined): string | undefined => (e?.type === 'stimulus' ? e.source : undefined);
 
 /** A journal time to the minute, in UTC, as the agent reads times everywhere. */
 export const when = (ts: string): string => `${ts.slice(0, 16).replace('T', ' ')} UTC`;

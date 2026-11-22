@@ -159,7 +159,7 @@ console.log(JSON.stringify(out));
     ],
   });
   // What the server kept is beside the journal, to be found by the next body.
-  expect(existsSync(join(root, 'memory', 'store-v2'))).toBe(true);
+  expect(existsSync(join(root, 'memory', 'store-v3'))).toBe(true);
 }, 60_000);
 
 test.skipIf(!real)('a server an earlier body left running is ended before the next one is started', async () => {
