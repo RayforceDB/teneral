@@ -1,7 +1,7 @@
-import { FACT_KIND, known } from './known';
-import { fromOwner } from './owned';
+import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, known } from './known';
+import { WITHDRAW_KIND, fromOwner } from './owned';
 import type { JournalEvent } from './journal';
-import { EPISODE_KIND, MERGE_KIND, remembered } from './remembered';
+import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered } from './remembered';
 import { asText } from './stemnote';
 
 // Recall is finding again what the journal holds: by words, with no model asked. Every event that
@@ -96,6 +96,15 @@ export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null
   }
   return found !== null && found.text.trim() !== '' ? found : null;
 }
+
+/**
+ * The kinds of notes that decide which memories and facts stand: `currentMemoryIds` reads nothing
+ * else, so it gives the same from these notes alone as from the whole journal. A store reads only
+ * these (brain/store.ts).
+ */
+export const CURRENT_NOTES = [
+  EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, FACT_KIND, INTENTION_KIND, DONE_KIND, FORGET_KIND, ALLOWED_KIND, WORK_KIND, LEGACY_WORK_KIND, WITHDRAW_KIND,
+] as const;
 
 /**
  * The memory notes that still stand as derivatives. Facts and episode memories use the same
