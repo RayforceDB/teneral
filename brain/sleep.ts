@@ -12,6 +12,8 @@ import { saysTooLong } from './retry';
 import { clip } from '../body/text';
 import { asText } from './stemnote';
 import { put, reflect } from './agenda';
+import { OUTDATED_KIND, WHY_CHARS, outdatedStretches, type OutdatedData } from './links';
+import type { Past } from './past';
 
 // Sleep is when the agent forms its memories. While nothing is asked of it, it takes the oldest
 // episode that is over and has no memory yet, and asks its own model, as itself, what it will
@@ -80,6 +82,8 @@ export interface SleepDeps {
    * provider's cache and tell it nothing it needs.
    */
   append?: (body: EventBody) => void;
+  /** The agent's past, to find the earlier memories nearest to a new one (see `nearest`). Without it none is shown, and none is said to be outdated. */
+  past?: Pick<Past, 'find'>;
 }
 
 /** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `reflected`: the agent looked over what it is doing (brain/agenda.ts). `woken`: something arrived first, and nothing was written. */
@@ -133,7 +137,7 @@ function opening(events: JournalEvent[]): string {
 }
 
 /** What the agent is asked, after the journal up to the end of the episode. */
-export function question(episode: Episode, events: JournalEvent[], chars: number): string {
+export function question(episode: Episode, events: JournalEvent[], chars: number, earlier: Earlier[] = []): string {
   const begins = opening(events);
   return [
     `${MEMORY_MARK} It is time to form a memory. It is of the stretch of the conversation above from ${when(episode.start)} to ${when(episode.end)}: `
@@ -165,7 +169,50 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'One or two questions that you or your owner might ask some later month and that this stretch answers. Put each in other words than the stretch used, '
     + 'as someone would who remembers what it was about and not how it was said. After => copy exactly the first six words or so of the one message in this stretch that holds the answer. '
     + 'They are kept to test, later, whether you can still find what you knew.',
+    ...(earlier.length === 0 ? [] : [
+      'Outdated:\n- M1a2b3c4 <what it says that no longer holds>\n'
+      + 'A memory says what was so when it was formed, and you will find it again long after. These earlier memories of yours may be about the same things as this stretch:\n'
+      + earlier.map((m) => `${m.mark} (${when(m.start)}) ${m.title}: ${m.text.replace(/\s+/g, ' ').slice(0, EARLIER_CHARS)}`).join('\n')
+      + '\nName one of them here only when this stretch shows that something it says no longer holds: what it left open is now done, what it planned was changed, '
+      + 'a state, a place or a number it gives is now another. Say in a few words what no longer holds and what holds instead. '
+      + 'A memory that is only about the same thing is not outdated, and most stretches outdate none.',
+    ]),
   ].join('\n\n');
+}
+
+/** An earlier memory shown when a new one is formed, so that the agent can say whether it still holds. `from` names its stretch. */
+export interface Earlier { mark: string; from: string; start: string; title: string; text: string }
+/** How many are shown, and how much of each. */
+export const EARLIER_MAX = 4;
+const EARLIER_CHARS = 300;
+/** How much of what was said in a stretch the earlier memories are looked for by. */
+const NEAREST_CHARS = 4000;
+
+/**
+ * The earlier memories nearest to a stretch, by its words: the ones the stretch may have made
+ * outdated. Only memories of single stretches that stand, came before this one, said something,
+ * and are not known to be outdated already. No model is asked; the search is `recall`'s.
+ */
+export function nearest(past: Pick<Past, 'find'> | undefined, asOf: JournalEvent[], episode: Episode, lived: JournalEvent[]): Earlier[] {
+  if (past === undefined) return [];
+  const words = lived.flatMap((e) => (e.type === 'stimulus' || e.type === 'assistant' ? [asText((e as { text?: unknown }).text)] : [])).join(' ').slice(0, NEAREST_CHARS);
+  if (words.trim() === '') return [];
+  let found: ReturnType<Past['find']>;
+  // The memory is formed with or without them: a search that fails is no reason not to remember.
+  try { found = past.find(words, { kinds: ['memory'], limit: EARLIER_MAX * 4 }); } catch { return []; }
+  const told = remembered(asOf);
+  const standing = new Map([...told.memories.values()].map((memory) => [memory.id, memory]));
+  const already = outdatedStretches(asOf, told);
+  const out: Earlier[] = [];
+  for (const hit of found) {
+    const memory = standing.get(hit.event.id);
+    if (memory === undefined || memory.outcome === 'quiet' || !(memory.start < episode.start) || already.has(memory.from)) continue;
+    const mark = `M${memory.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+    if (out.some((one) => one.mark === mark)) continue;
+    out.push({ mark, from: memory.from, start: memory.start, title: memory.title, text: memory.text });
+    if (out.length === EARLIER_MAX) break;
+  }
+  return out;
 }
 
 /** A line of the answer without the marks a model may put around a label. */
@@ -183,25 +230,28 @@ export interface Formed {
   done: { mark: string; how: string }[];
   /** Questions this stretch answers, each with the beginning of the message that answers it. */
   questions: { question: string; begins: string }[];
+  /** Earlier memories this stretch made outdated: the mark each was shown with, and what no longer holds. */
+  outdated: { mark: string; why: string }[];
 }
 
 const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about)\s+[^)]*\)\s*)*)(.+)$/i;
 const INTENTION_LINE = /^-\s*\[\s*(\d{4}-\d{2}-\d{2})?\s*\]\s*(.+)$/;
 const DONE_LINE = /^-\s*(I[0-9a-zA-Z]{4,12})\b[\s:,-]*(.*)$/;
 const QUESTION_LINE = /^-\s*(.+?)\s*=>\s*(.+)$/;
+const OUTDATED_LINE = /^-\s*(M[0-9a-zA-Z]{4,12})\b[\s:,-]*(.+)$/;
 /** The most questions one stretch may set: they are a sample, not an index. */
 const QUESTIONS_MAX = 2;
 /** The most of either that one episode may set down: a list longer than this is not a list of what matters. */
 const LIST_MAX = 12;
 
-type List = 'facts' | 'intentions' | 'done' | 'questions';
-const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions' };
+type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated';
+const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated' };
 
 /** The lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
-function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions'> & { body: string[] } {
+function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated'> & { body: string[] } {
   const heading = (line: string): List | null => HEADINGS[plain(line).toLowerCase()] ?? null;
   const first = lines.findIndex((line) => heading(line) !== null);
-  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions'> = { facts: [], intentions: [], done: [], questions: [] };
+  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated'> = { facts: [], intentions: [], done: [], questions: [], outdated: [] };
   if (first === -1) return { body: lines, ...found };
   let list: List | null = null;
   for (const line of lines.slice(first)) {
@@ -224,6 +274,9 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
     } else if (list === 'questions' && found.questions.length < QUESTIONS_MAX) {
       const m = QUESTION_LINE.exec(item);
       if (m && m[1]!.trim().length >= 8 && m[2]!.trim().length >= 4) found.questions.push({ question: m[1]!.trim(), begins: m[2]!.trim().replace(/^["'«“]+|["'»”…. ]+$/g, '') });
+    } else if (list === 'outdated' && found.outdated.length < EARLIER_MAX) {
+      const m = OUTDATED_LINE.exec(item);
+      if (m && m[2]!.trim().length >= 8) found.outdated.push({ mark: m[1]!, why: m[2]!.trim() });
     }
   }
   return { body: lines.slice(0, first), ...found };
@@ -284,7 +337,6 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   }
 
   const chars = targetChars(episode.chars);
-  const ask = question(episode, lived, chars);
   let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
   // Only the journal up to the end of the episode: the memory is formed as of then. The memories of
   // what came before it belong to that, wherever they were journaled: they are written when there is
@@ -300,6 +352,8 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     return (e.kind === FACT_KIND || e.kind === INTENTION_KIND || e.kind === DONE_KIND) && before(about.episode);
   });
   const asOf = [...events.slice(0, episode.to), ...earlier];
+  const near = nearest(d.past, asOf, episode, lived);
+  const ask = question(episode, lived, chars, near);
   let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER });
   let usage: Usage | undefined;
   let problem = '';
@@ -322,7 +376,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, ...kept } = memory;
+      const { facts, intentions, done, questions, outdated, ...kept } = memory;
       put(d, {
         type: 'note', kind: EPISODE_KIND,
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
@@ -344,6 +398,11 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       for (const settled of done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);
         if (open !== undefined) put(d, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, episode: episode.first } });
+      }
+      // Only a memory that was shown, named by the mark it was shown with, can be said to be outdated.
+      for (const said of outdated) {
+        const old = near.find((one) => one.mark === said.mark);
+        if (old !== undefined) put(d, { type: 'note', kind: OUTDATED_KIND, data: { memory: old.from, by: episode.first, why: said.why.slice(0, WHY_CHARS) } satisfies OutdatedData });
       }
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);

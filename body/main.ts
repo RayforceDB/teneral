@@ -539,6 +539,7 @@ async function rest(): Promise<boolean> {
       system: () => composeSystem(prompt, soulDir, journal),
       signal: stop.signal,
       append: (body) => { if (working) formed.push(body); else appendEvent(journal, gen, body); },
+      past,
     }).then((slept) => {
       const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
       if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);

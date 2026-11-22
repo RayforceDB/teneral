@@ -5,6 +5,7 @@ import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
+import { LINE_MAX, LINK_NOTES, links, tiesOf, type Since } from './links';
 import { remembered } from './remembered';
 import { openStore, readLine, scan, type Line, type Store } from './store';
 import { clip } from '../body/text';
@@ -26,6 +27,8 @@ export interface Past {
   asked(): number | null;
   /** The event with this id and the ones around it, in order; null when the journal has no such event. */
   around(id: string, before: number, after: number): { events: JournalEvent[]; at: number } | null;
+  /** What became of a memory or a fact since it was written: what made it outdated, and what stands now in its place (brain/links.ts). Null when nothing did. */
+  since(id: string): Since | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
   sync(): void;
   persist(): void;
@@ -126,8 +129,14 @@ function finder(
 /** The past of `journal`, asked of the journal itself. */
 export function journalPast(journal: string): Past {
   const lines = reader(journal);
+  let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
   return {
     by: 'journal',
+    since(id) {
+      const now = lines();
+      if (tied?.seen !== now.length) tied = { seen: now.length, ties: tiesOf(links(now.map((line) => line.event))) };
+      return tied.ties.since(id);
+    },
     find: finder(scanIndex(lines), (off) => readLine(journal, off), (ids) => {
       const wanted = new Set(ids);
       return new Map(lines().filter((line) => wanted.has(line.event.id)).map((line) => [line.event.id, line.off]));
@@ -187,9 +196,59 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   /** Whether the event at `off` still stands: records and notes always do, what was said in a stretch taken back does not. */
   const stands = (ranges: [number, number][], off: number, e: JournalEvent): boolean =>
     !wasSaid(e) || !ranges.some(([from, to]) => off >= from && off < to);
+  /**
+   * The ties between notes as the database holds them: a table of edges between numbered notes,
+   * and two graphs over it, one of what outdates or replaces what and one of what a wider memory
+   * stands for. They are made again when a note they are made from has been written; walking them
+   * is the database's work.
+   */
+  let graph: { notes: number; at: Map<string, number>; ids: string[]; why: Map<string, string> } | null = null;
+  const tied = (): NonNullable<typeof graph> => {
+    const notes = store.notedCount(LINK_NOTES);
+    if (graph?.notes === notes) return graph;
+    const all = links(store.noted(LINK_NOTES));
+    const at = new Map<string, number>();
+    const ids: string[] = [];
+    const node = (id: string): bigint => {
+      let n = at.get(id);
+      if (n === undefined) { n = ids.length; at.set(id, n); ids.push(id); }
+      return BigInt(n);
+    };
+    const lines = all.filter((link) => link.kind !== 'covers');
+    const parts = all.filter((link) => link.kind === 'covers');
+    const edges = (of: typeof all): Record<string, { type: 'i64'; data: BigInt64Array }> => ({
+      src: { type: 'i64', data: BigInt64Array.from(of.map((link) => node(link.from))) },
+      dst: { type: 'i64', data: BigInt64Array.from(of.map((link) => node(link.to))) },
+    });
+    if (graph !== null) ray.run('(do (.graph.free mem_line_graph) (.graph.free mem_part_graph) null)');
+    ray.bind('mem_lines', edges(lines));
+    ray.bind('mem_parts', edges(parts));
+    ray.run("(do (set mem_line_graph (.graph.build mem_lines 'src 'dst)) (set mem_part_graph (.graph.build mem_parts 'src 'dst)) (set mem_outdated (distinct (at mem_lines 'dst))) null)");
+    graph = { notes, at, ids, why: new Map(lines.map((link) => [`${link.from} ${link.to}`, link.why ?? ''])) };
+    return graph;
+  };
+  const nodes = (source: string, column: string): number[] => [...(ray.table(source).columns[column] as BigInt64Array | undefined ?? [])].map(Number);
   return {
     ray,
     by: 'store',
+    since(id) {
+      store.sync();
+      const g = tied();
+      const n = g.at.get(id);
+      if (n === undefined) return null;
+      // Against the direction of an edge: from a note to the ones that came after it and say it no longer holds.
+      const direct = nodes(`(.graph.expand mem_line_graph ${n} 1)`, '_dst').map((one) => g.ids[one]!).sort();
+      const covered = nodes(`(.graph.expand mem_part_graph ${n} 0)`, '_dst');
+      const parts = covered.length === 0 ? undefined
+        : { outdated: nodes(`(select {from: (.graph.expand mem_part_graph ${n} 0) where: (in _dst mem_outdated)})`, '_dst').length, of: covered.length };
+      if (direct.length === 0) return parts !== undefined && parts.outdated > 0 ? { direct: [], latest: [], parts } : null;
+      const latest = nodes(`(select {from: (.graph.var-expand mem_line_graph ${n} 1 ${LINE_MAX} 1) where: (not (in _end mem_outdated))})`, '_end');
+      return {
+        direct: direct.map((one) => ({ id: one, why: g.why.get(`${one} ${id}`) ?? '' })),
+        latest: [...new Set(latest.map((one) => g.ids[one]!))].sort(),
+        ...(parts === undefined ? {} : { parts }),
+      };
+    },
     find(question, options) {
       store.sync();
       const ranges = aside();
@@ -304,12 +363,45 @@ function guarded(served: Past, server: RayServer, journal: string, log: (line: s
     get by() { return now.by; },
     get ray() { return fell ? undefined : served.ray; },
     find: (question, options) => through((past) => past.find(question, options)),
+    since: (id) => through((past) => past.since(id)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => through((past) => past.sync()),
     persist: () => through((past) => past.persist()),
     close: () => { try { now.close(); } finally { server.stop(); } },
   };
+}
+
+/**
+ * What became of a memory or a fact since, as lines to stand under it where it is shown: what made
+ * it outdated, in the agent's own words, and where the later one is. Empty when nothing did. So
+ * that what is found is never taken for how things are now.
+ */
+export function sinceLines(past: Pick<Past, 'since' | 'around'>, e: JournalEvent): string[] {
+  if (e.type !== 'note') return [];
+  let since: Since | null;
+  try { since = past.since(e.id); } catch { return []; }
+  if (since === null) return [];
+  const lines: string[] = [];
+  const note = (id: string): JournalEvent | null => past.around(id, 0, 0)?.events[0] ?? null;
+  for (const one of since.direct.slice(0, 2)) {
+    const later = note(one.id);
+    const d = (later as { data?: { from?: unknown; start?: unknown; title?: unknown; text?: unknown } } | null)?.data;
+    if (later === null || d === undefined) continue;
+    lines.push(typeof d.from === 'string'
+      ? `[outdated since ${when(typeof d.start === 'string' ? d.start : later.ts)}: ${one.why === '' ? 'a later memory says otherwise' : one.why} (your memory "${String(d.title)}", of the stretch that begins at event ${d.from})]`
+      : `[replaced on ${when(later.ts)} by: ${clip(String(d.text), 300)}]`);
+  }
+  const more = since.latest.filter((id) => !since.direct.some((one) => one.id === id));
+  if (more.length > 0) {
+    const last = note(more.at(-1)!);
+    const d = (last as { data?: { from?: unknown; title?: unknown; text?: unknown } } | null)?.data;
+    if (last !== null && d !== undefined) lines.push(typeof d.from === 'string'
+      ? `[and that one was outdated in turn; the latest is your memory "${String(d.title)}", of the stretch that begins at event ${d.from}]`
+      : `[and that one was replaced in turn; what holds now: ${clip(String(d.text), 300)}]`);
+  }
+  if (since.parts !== undefined && since.parts.outdated > 0) lines.push(`[${since.parts.outdated} of the ${since.parts.of} memories this one stands for were outdated by later ones]`);
+  return lines;
 }
 
 /** A journal time to the minute, in UTC, as the agent reads times everywhere. */
