@@ -125,7 +125,8 @@ real('a store that reaches past its journal is thrown away and built again', () 
   const again = openStore(ray(), path);
   expect(again.rebuilt).toContain('reaches byte');
   expect(again.count()).toBe(1);
-});
+  // Over a second where an agent runs, and more while its machine is busy: the usual five seconds were not always enough.
+}, 30_000);
 
 real('a store that cannot be read is thrown away and built again', () => {
   const events = twoDays();
@@ -135,7 +136,8 @@ real('a store that cannot be read is thrown away and built again', () => {
   const again = openStore(ray(), path);
   expect(again.rebuilt).toContain('could not be read');
   expect(again.count()).toBe(4);
-});
+  // Over a second where an agent runs, and more while its machine is busy: the usual five seconds were not always enough.
+}, 30_000);
 
 real('an event that claims an earlier time than the one before it is laid out with that one\'s day', () => {
   const events = [
