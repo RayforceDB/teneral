@@ -137,6 +137,10 @@ export interface Store {
   read(off: number): JournalEvent | null;
   /** The events whose lines begin at byte `from` or after it and before byte `to`, in the journal's order. */
   stretch(from: number, to: number): JournalEvent[];
+  /** The notes of these kinds, in the journal's order: `kinds` are names written in this repository, never anything that arrived. */
+  noted(kinds: readonly string[]): JournalEvent[];
+  /** How many notes of these kinds there are: what changes when there is something new to read of them. */
+  notedCount(kinds: readonly string[]): number;
   /** Whether the store was thrown away and built again when it was opened, and why. */
   rebuilt: string | null;
 }
@@ -330,8 +334,25 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
       if (!mounted || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) return [];
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (>= off ${from}) (< off ${to})) asc: off line: line})`));
     },
+    noted(kinds) {
+      if (!mounted || kinds.length === 0) return [];
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: ${ofKinds(kinds)} asc: off line: line})`));
+    },
+    notedCount(kinds) {
+      if (!mounted || kinds.length === 0) return 0;
+      const n = ray.query(`(count (select {from: ${BOUND} where: ${ofKinds(kinds)} off: off}))`);
+      return typeof n === 'bigint' || typeof n === 'number' ? Number(n) : 0;
+    },
     rebuilt,
   };
+}
+
+/** The condition that a row is a note of one of these kinds. A note's kind is in `source`, where a stimulus has where it came from. */
+function ofKinds(kinds: readonly string[]): string {
+  for (const kind of kinds) if (!/^[a-z][a-z0-9.]*$/.test(kind)) throw new Error(`not the name of a kind of note: ${kind}`);
+  const one = (kind: string): string => `(== source '${kind})`;
+  const any = kinds.slice(1).reduce((all, kind) => `(or ${all} ${one(kind)})`, one(kinds[0]!));
+  return `(and (== type 'note) ${any})`;
 }
 
 /** The events a table's `line` column holds, in its order. A cell that is not an event is passed over, as a line of the journal that is not one is. */

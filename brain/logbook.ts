@@ -6,6 +6,7 @@ import { health, healthNote } from './health';
 import { known, knownText } from './known';
 import { pinned } from './owned';
 import { lessonText } from './lessons';
+import { outdatedStretches } from './links';
 import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
@@ -124,7 +125,11 @@ export function pinnedAmong(events: JournalEvent[], kept: Episode[]): Set<number
  * shown as it happened, for as long as the pinned stretches together fit their share of the room,
  * and is never taken into a wider memory.
  */
-export function entries(kept: Episode[], count: number, { memories, quarantined, merges }: Remembered, pins?: Pins): Entry[] {
+/** What is said under a memory that a later one made outdated: the agent's own words for what no longer holds, and from when. */
+const outdatedLine = (o: { why: string; since: string }): string =>
+  ` Something in it no longer holds since ${when(o.since)}${o.why === '' ? '' : `, as you said then: ${o.why}`}. Where the two differ, the later one is how things are.`;
+
+export function entries(kept: Episode[], count: number, { memories, quarantined, merges }: Remembered, pins?: Pins, outdated?: Map<string, { why: string; since: string }>): Entry[] {
   const endsAt = new Map(kept.map((e, i) => [e.last, i]));
   const out: Entry[] = [];
   let pinRoom = pins?.room ?? 0;
@@ -162,7 +167,8 @@ export function entries(kept: Episode[], count: number, { memories, quarantined,
     }
     const memory = memories.get(episode.first);
     const given = quarantined.get(episode.first);
-    const messages = memory !== undefined ? (memory.outcome === 'quiet' ? [] : recalled(memory, unmet))
+    const late = outdated?.get(episode.first);
+    const messages = memory !== undefined ? (memory.outcome === 'quiet' ? [] : recalled(memory, `${late === undefined ? '' : outdatedLine(late)}${unmet}`))
       : given !== undefined ? unremembered(given)
       // Remembered once, and the memory withdrawn by the owner: it is being formed again.
       : [{ role: 'user' as const, content: `${MEMORY_MARK} ${when(episode.start)} to ${when(episode.end)}: your memory of this stretch was withdrawn and is being formed again. It is in your journal as it happened.` }];
@@ -232,7 +238,8 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
   const starts = (place: number): number => (place === 0 ? 0 : ends[place - 1]!);
   const pins: Pins = { held: pinnedAmong(events, kept), verbatim: (place) => messages.slice(starts(place), ends[place]!), room: Math.floor(room * PIN_SHARE) };
-  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all, pins), cap)), ...knowing];
+  const outdated = outdatedStretches(events, all);
+  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all, pins, outdated), cap)), ...knowing];
   const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
   // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.

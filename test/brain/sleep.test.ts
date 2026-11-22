@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
+import { OUTDATED_KIND, outdatedStretches } from '../../brain/links';
+import { journalPast } from '../../brain/past';
 import { EPISODE_KIND, QUARANTINE_KIND, remembered } from '../../brain/remembered';
 import { memoryHealth, parseMemory, question, sleep, targetChars, waiting } from '../../brain/sleep';
 
@@ -203,7 +205,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [], done: [], questions: [],
+    facts: [], intentions: [], done: [], questions: [], outdated: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });
@@ -215,4 +217,35 @@ test('what is not in that form is not a memory, and the reason is said', () => {
   expect(parseMemory(`Title: A\nOutcome: quiet\n\n${body}`, 600)).toMatchObject({ problem: expect.stringContaining('second line') });
   expect(parseMemory('Title: A\nOutcome: done\n\nshort', 600)).toEqual({ problem: 'there was no memory after the two lines' });
   expect(parseMemory(`Title: A\nOutcome: done\n\n${'z'.repeat(2000)}`, 600)).toMatchObject({ problem: expect.stringContaining('far more than the 600') });
+});
+
+test('the earlier memories nearest to a stretch are shown when its memory is formed, and the one it names is recorded as outdated', async () => {
+  const a = [said('please plan the release for November, the date is the 20th'), replied('The release is planned for November 20th.')];
+  const b = [said('move the release to December, the date is now the 4th', LONG), replied('The release is moved to December 4th.')];
+  const s = setup([...a, ...b, said('thanks', LONG)], [answer('Title: The release in November\nOutcome: done\n\nMy owner asked for the release on November 20th and I planned it so.')]);
+  const deps = { ...s.deps, past: journalPast(s.journal) };
+  await sleep(deps);
+  const first = remembered(readEvents(s.journal)).memories.get(a[0]!.id)!;
+  const mark = `M${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+
+  const seen: ChatMessage[][] = [];
+  await sleep({ ...deps, provider: async (messages) => {
+    seen.push(messages);
+    return answer(`Title: The release moved\nOutcome: done\n\nMy owner moved the release to December 4th.\n\nOutdated:\n- ${mark} the release is on December 4th, not November 20th\n- Mnosuch99 this names nothing that was shown`);
+  } });
+
+  const asked = seen[0]!.at(-1)!.content!;
+  expect(asked).toContain(`${mark} (`);
+  expect(asked).toContain('The release in November: My owner asked for the release on November 20th');
+  const notes = readEvents(s.journal).filter((e) => e.type === 'note' && e.kind === OUTDATED_KIND);
+  expect(notes.map((e) => (e as { data: unknown }).data)).toEqual([{ memory: a[0]!.id, by: b[0]!.id, why: 'the release is on December 4th, not November 20th' }]);
+  expect(outdatedStretches(readEvents(s.journal)).get(a[0]!.id)).toEqual({ why: 'the release is on December 4th, not November 20th', since: b[0]!.ts });
+});
+
+test('with no past to look in, or no earlier memory near, nothing about outdating is asked', async () => {
+  const { events } = twoEpisodes();
+  const s = setup([...events, said('more', LONG)], [answer(MEMORY)]);
+  await sleep({ ...s.deps, past: journalPast(s.journal) });
+  expect(s.seen[0]!.at(-1)!.content).not.toContain('Outdated:');
+  expect(parseMemory(`${MEMORY}\n\nOutdated:\n- Mabcd1234 something that no longer holds`, 400)).toMatchObject({ outdated: [{ mark: 'Mabcd1234', why: 'something that no longer holds' }] });
 });

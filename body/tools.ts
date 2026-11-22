@@ -13,7 +13,7 @@ import { git } from '../immune/gates';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
 import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
-import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
+import { journalPast, shown, sinceLines, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
 import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessons } from '../brain/lessons';
@@ -430,7 +430,8 @@ const recallTool: Tool = {
     const asking = past.asked();
     const found = past.find(query, { kinds: IN[where], limit: limit + 1 }).filter((hit) => hit.doc !== asking).slice(0, limit);
     if (found.length === 0) return `Nothing in your journal holds these words${where === 'everything' ? '' : ` in "${where}"`}. Try other words, or the words another language would use for it.`;
-    return cap(found.map((hit) => shown(hit.event, FOUND_CHARS)).join('\n\n'));
+    // A memory says what was so then: what a later one made of it stands under it.
+    return cap(found.map((hit) => [shown(hit.event, FOUND_CHARS), ...sinceLines(past, hit.event)].join('\n')).join('\n\n'));
   },
 };
 
