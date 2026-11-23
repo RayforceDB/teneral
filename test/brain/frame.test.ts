@@ -11,8 +11,8 @@ import { lessons } from '../../brain/lessons';
 import { remembered } from '../../brain/remembered';
 import { asOfEvents, sleep } from '../../brain/sleep';
 import type { Tool, ToolContext } from '../../body/tools';
-import { frameAsOf, frameFrom, requestFrom } from '../../brain/frame';
-import { runTurn } from '../../brain/loop';
+import { frameAsOf, frameFrom, requestFrom, turnOwed } from '../../brain/frame';
+import { journalSuffixReads, runTurn } from '../../brain/loop';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
 import { idleStart, idleStep, idleOf } from '../../brain/idle';
 import { journalPast, projections, storePast } from '../../brain/past';
@@ -21,7 +21,7 @@ import { library, ray } from './rayforce';
 import { GAP_MS, episodes } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { swapped } from '../../brain/logbook';
-import { assemble, buildMessages, counted, frameOf, narrow, wireNames, type Sight } from '../../brain/memory';
+import { assemble, buildMessages, counted, frameOf, narrow, needsTurn, wireNames, type Sight } from '../../brain/memory';
 import { EPISODE_KIND } from '../../brain/remembered';
 import { SHOWN_KIND } from '../../brain/shown';
 
@@ -324,12 +324,14 @@ real('a turn with the database at hand sends, round for round, the requests a tu
     { text: 'done with it', toolCalls: [] },
   ];
   const echo: Tool = { spec: { name: 'echo', description: '', parameters: {} }, async run(args) { return `echo:${JSON.stringify(args)}`; } };
+  let places = 0;
+  const before = journalSuffixReads.length;
   const turn = async (withPast: boolean): Promise<{ seen: ChatMessage[][]; asked: number[] }> => {
     const journal = join(mkdtempSync(join(tmpdir(), 'teneral-turn-')), 'journal.jsonl');
     writeFileSync(journal, seeded.map(line).join(''));
     const asked: number[] = [];
     const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
-    const watched = { ...past, standingFrom: (seq: number, end?: number) => { asked.push(end ?? -1); return past.standingFrom(seq, end); } };
+    const watched = { ...past, standingFrom: (seq: number, end?: number) => { asked.push(end ?? -1); return past.standingFrom(seq, end); }, asked: () => { places += 1; return past.asked(); } };
     const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp', ...(withPast ? { past: watched } : {}) };
     const seen: ChatMessage[][] = [];
     const replies = script();
@@ -345,6 +347,9 @@ real('a turn with the database at hand sends, round for round, the requests a tu
   expect(held.asked).toEqual([]);
   expect(served.asked.length).toBeGreaterThanOrEqual(3);
   expect(served.asked.every((end) => end > seeded.length - 1)).toBe(true);
+  // The turn asked where the latest thing said lies, once, and held the journal from there on only.
+  expect(places).toBe(1);
+  expect(journalSuffixReads.length).toBeGreaterThan(before);
   // The requests were made from the last part: they open with memories, not with the first thing ever said.
   expect(JSON.stringify(served.seen[0])).not.toContain('matter 0 ');
 }, 120_000);
@@ -430,3 +435,21 @@ real('the request a memory is formed with, as of the end of its episode, is the 
   // The database was asked for each of them.
   expect(asOf).toBeGreaterThanOrEqual(5);
 }, 180_000);
+
+real('whether a turn is owed is the same asked of the past as read from the whole journal, after every event of a life', () => {
+  // The end of a life, where everything that bears on it happens: late arrivals, calls and their results, a refusal and its acceptance, a stretch taken back.
+  const all = fuller();
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-owed-')), 'journal.jsonl');
+  const from = all.length - 120;
+  writeFileSync(journal, all.slice(0, from).map(line).join(''));
+  const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+  const answers = new Set<boolean>();
+  for (let upTo = from; upTo <= all.length; upTo++) {
+    if (upTo > from) appendFileSync(journal, line(all[upTo - 1]!));
+    const want = needsTurn(all.slice(0, upTo));
+    expect(turnOwed(past, journal)).toBe(want);
+    expect(turnOwed(undefined, journal)).toBe(want);
+    answers.add(want);
+  }
+  expect(answers.size).toBe(2);
+}, 120_000);

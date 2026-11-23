@@ -485,14 +485,21 @@ export function assemble(frame: Frame, system: string, budgetChars = DEFAULT_BUD
 export function needsTurn(journaled: JournalEvent[]): boolean {
   // What the owner took back asks for nothing any more. Derive acceptance from that same view.
   const events = standing(journaled);
-  const accepted = acceptanceNotes(events);
+  return owes(events, acceptanceNotes(events));
+}
+
+/**
+ * The same of a conversation as it stands, or of its last part from something said to the agent
+ * on: nothing before that bears on it. `accepted` is what the stem's acceptance says, by event.
+ */
+export function owes(events: JournalEvent[], accepted: Map<string, string>): boolean {
   // Only the last thing that bears on it decides: each such event overrides all before it. So the
   // journal is read from its end to the first one, and whether a reply is current, which goes
   // through the journal itself, is asked once and not of every reply the agent ever gave. Asked of
   // each, this took seconds on a journal a week old, and it is asked every few seconds.
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
-    if (e.type === 'assistant') return reply(e).calls.length > 0 || !replyIsCurrent(events, e);
+    if (e.type === 'assistant') return reply(e).calls.length > 0 || !replyIsCurrent(events, e, accepted);
     // The owner ended that turn. What was unanswered stays so until something else arrives.
     if (e.type === 'turn.interrupted') return false;
     if (e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id)) return true;

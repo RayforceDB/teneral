@@ -4,6 +4,7 @@ import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-b
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
 import { requestFrom } from './frame';
 import type { ChatMessage } from './provider';
+import type { Past } from './past';
 import { DEFAULT_BUDGET, stemNote, type Sight, type View } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
@@ -73,16 +74,27 @@ export function mayStayQuiet(source: string | undefined): boolean {
 /** For tests: count only incremental suffix reads, not the one full read at turn start. */
 export const journalSuffixReads: { path: string; bytes: number }[] = [];
 
-/** One turn's journal view. Only the small suffix added during the turn is reparsed. */
-function turnJournal(journal: string): { read: () => JournalEvent[]; refresh: () => void } {
-  let events = readEvents(journal);
+/**
+ * One turn's view of the journal: from the latest thing said to the agent on, which is all a turn
+ * reads of it, and what is added while the turn runs. Where the turn has a past, the place of
+ * that thing is asked of it and the journal is read from there; without one the journal is read
+ * whole. `whole` says which. Only the small suffix added during the turn is reparsed.
+ */
+function turnJournal(journal: string, past?: Past): { read: () => JournalEvent[]; refresh: () => void; whole: boolean } {
+  let from: number | null = null;
+  try { from = past?.by === 'store' ? past.asked() : null; } catch { /* the journal is read whole */ }
+  let events = from === null ? readEvents(journal) : readEventsFrom(journal, from);
+  // What the place led to is the thing said, or the journal is another than the past knows: then it is read whole.
+  if (from !== null && events[0]?.type !== 'stimulus') { from = null; events = readEvents(journal); }
   let offset = journalSize(journal);
+  const whole = from === null;
   return {
+    whole,
     read: () => events,
     refresh: () => {
       const size = journalSize(journal);
       // A journal only grows. Replacing or truncating it falls back to the full reader.
-      if (size < offset) events = readEvents(journal);
+      if (size < offset) events = whole ? readEvents(journal) : readEventsFrom(journal, from!);
       else {
         journalSuffixReads.push({ path: journal, bytes: size - offset });
         events = events.concat(readEventsFrom(journal, offset));
@@ -104,9 +116,9 @@ function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEF
   return { gone, stop: () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); } };
 }
 
-/** Whether anything that calls for a reply was journaled after the first `shown` events. */
-function arrivedSince(events: JournalEvent[], shown: number): boolean {
-  const accepted = acceptanceNotes(events);
+/** Whether anything that calls for a reply was journaled after the first `shown` events. `past` answers for what the stem accepted when `events` is only the last part of the journal. */
+function arrivedSince(events: JournalEvent[], shown: number, past?: Past): boolean {
+  const accepted = past === undefined ? acceptanceNotes(events) : past.accepted();
   return events.slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id));
 }
 
@@ -161,12 +173,14 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   // A length-limited answer gets one continuation per turn. A second cut-off stays visibly marked.
   let continued = false;
   const route = d.imageRoute;
-  const journal = turnJournal(d.journal);
-  const request = (events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View): ChatMessage[] => requestFrom(d.ctx.past, events, system, budgetChars, sight, view);
+  const journal = turnJournal(d.journal, d.ctx.past);
+  // Asked of the past only when the turn holds the last part of the journal: what it holds whole answers by itself.
+  const asked = journal.whole ? undefined : d.ctx.past;
+  const request = (events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View): ChatMessage[] => requestFrom(d.ctx.past, events, system, budgetChars, sight, view, journal.whole ? undefined : () => readEvents(d.journal));
   // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
   const quietTick = mayStayQuiet(journal.read().findLast(e => e.type === 'stimulus')?.source);
-  const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
+  const learned = route ? refusedImages(asked === undefined ? journal.read() : asked.notes([IMAGE_REFUSAL_KIND]), route) : new Set<string>();
   // Rounds in a row made of nothing but calls that do nothing (noOpCall). The second ends the turn.
   let idleRounds = 0;
   // The request of the round before, and how many rounds in a row began with that same request.
@@ -217,7 +231,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         if (sameRequests >= 2) {
           // As at the round limit: over something the model never saw, no finished reply is written, so that stays owed.
           journal.refresh();
-          if (arrivedSince(journal.read(), shown)) return 'done';
+          if (arrivedSince(journal.read(), shown, asked)) return 'done';
           appendEvent(d.journal, d.gen, { type: 'assistant', text: SAME_REQUEST_REPLY, toolCalls: [] });
           d.onText?.(SAME_REQUEST_REPLY);
           return 'done';
@@ -275,7 +289,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
       journal.refresh();
-      if (arrivedSince(journal.read(), shown)) continue;
+      if (arrivedSince(journal.read(), shown, asked)) continue;
       // Queued work resumes through its sensor, never by replaying a final reply.
       return 'done';
     }
@@ -285,7 +299,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       for (const call of reply.toolCalls) appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok: false, output: NO_OP_RESULT });
       // As at the round limit: over something the model never saw, no finished reply is written, so that stays owed.
       journal.refresh();
-      if (arrivedSince(journal.read(), shown)) return 'done';
+      if (arrivedSince(journal.read(), shown, asked)) return 'done';
       appendEvent(d.journal, d.gen, { type: 'assistant', text: quietTick ? QUIET_REPLY : NO_OP_REPLY, toolCalls: [] });
       return 'done';
     }
@@ -352,7 +366,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   // The note below reads as a finished reply. Written over something the model never saw, it would
   // mark that as answered; without it the turn stays owed and the caller starts another.
   journal.refresh();
-  if (arrivedSince(journal.read(), shown)) return 'done';
+  if (arrivedSince(journal.read(), shown, asked)) return 'done';
   appendEvent(d.journal, d.gen, { type: 'assistant', text: ROUND_LIMIT_REPLY, toolCalls: [] });
   return 'done';
 }
