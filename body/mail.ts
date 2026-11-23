@@ -15,6 +15,8 @@ export function mailKey(env: Record<string, string | undefined>, file: string): 
 const SOURCE = 'agent:email';
 const PREFIX = 'AgentMail notification ';
 const QUIET_KIND = 'mail.quiet.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const MAIL_READS = { sources: [SOURCE], kinds: [QUIET_KIND] };
 /** Zulip already delivered the conversation itself; its email notice is only a receipt. */
 export function duplicateZulipNotice(metadata: Row): boolean {
   return typeof metadata.from === 'string' && metadata.from.includes('<noreply@zulip.com>')

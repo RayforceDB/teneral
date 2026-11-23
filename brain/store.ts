@@ -181,6 +181,8 @@ export interface Store {
   noted(kinds: readonly string[]): JournalEvent[];
   /** What was said to the agent from these sources, in the journal's order. A source is whatever a sensor called itself. */
   stimuli(sources: readonly string[]): JournalEvent[];
+  /** What was said from these sources and the notes of these kinds, together, in the journal's order. */
+  picked(sources: readonly string[], kinds: readonly string[]): JournalEvent[];
   /** The same, each with its number. */
   notedAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /** How many notes of these kinds there are: what changes when there is something new to read of them. */
@@ -562,6 +564,13 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
     },
     noted,
     notedAt,
+    picked(sources, kinds) {
+      if (!mounted || sources.length + kinds.length === 0) return [];
+      // A source and a kind share the column, each under its own type: asked for together, and told apart here.
+      ray.bind(ASKED, { w: { type: 'sym', data: [...sources, ...kinds].map((name) => name.slice(0, 64)) } });
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (or (== type 'stimulus) (== type 'note)) (in source (at ${ASKED} 'w))) asc: off line: line})`))
+        .filter((e) => (e.type === 'stimulus' ? sources.includes(e.source) : e.type === 'note' && kinds.includes(e.kind)));
+    },
     stimuli(sources) {
       if (!mounted || sources.length === 0) return [];
       // The names go over as a column, never as part of the statement.

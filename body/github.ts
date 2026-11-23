@@ -3,6 +3,8 @@ import type { Sensor, Stimulus } from './sensors';
 
 export const GITHUB_SOURCE = 'agent:github';
 export const GITHUB_CURSOR_KIND = 'github.cursor.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const GITHUB_READS = { sources: [GITHUB_SOURCE], kinds: [GITHUB_CURSOR_KIND] };
 const PREFIX = 'GitHub ';
 const PAGE_SIZE = 50;
 const MAX_PAGES = 4;
@@ -315,6 +317,8 @@ export function github(options: Options): Sensor {
 /** Cursor for the authenticated account inbox, separate from repository polling. */
 export interface GithubNotificationCursor { updated: string | null; seen: string[] }
 export const GITHUB_NOTIFICATION_CURSOR_KIND = 'github.notifications.cursor.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const GITHUB_NOTIFICATION_READS = { sources: [GITHUB_SOURCE], kinds: [GITHUB_NOTIFICATION_CURSOR_KIND] };
 interface NotificationOptions {
   events: () => JournalEvent[];
   /** Reads the token without exposing it to the environment, model or logs. */

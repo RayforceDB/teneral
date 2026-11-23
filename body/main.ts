@@ -1,8 +1,8 @@
 import { watchJournal } from "./acceptance";
 import { REFUSED_KIND, SENT_KIND, decideBudget, shares } from './adaptive-budget';
-import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
-import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard';
-import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
+import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor, GITHUB_READS, GITHUB_NOTIFICATION_READS } from './github';
+import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken, RAYBOARD_READS } from './rayboard';
+import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor, WORKSPACE_READS } from './workspace';
 import { hasToken } from '../species/github';
 import { speciesRef } from '../species/species';
 import { githubRemote, gitRemote } from '../species/github';
@@ -24,7 +24,7 @@ import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './ima
 import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
-import { GITHUB_ACCOUNT_KIND, githubAccount } from './github-account';
+import { GITHUB_ACCOUNT_KIND, githubAccount, GITHUB_ACCOUNT_READS } from './github-account';
 import { TIMER_MAX_MS, clockMayTick, clockTick, inbox, owner, ownerStimulus, terminal, tickAt, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
@@ -36,8 +36,8 @@ import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
-import { mail, mailKey } from './mail';
-import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
+import { mail, mailKey, MAIL_READS } from './mail';
+import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor, ZULIP_READS } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
@@ -71,6 +71,8 @@ const past = await openServedPast(journal, organs === '' ? null : organs, (line)
 // journal from the latest thing said to the agent on. None of it is the journal held whole.
 const noted = (...kinds: string[]): JournalEvent[] => past.notes(kinds);
 const ownerTyped = (): JournalEvent[] => past.stimuli(['terminal', PAIRED_SOURCE]);
+/** What a sensor reads to know where it was (its `…_READS`), asked for each time it looks. */
+const read = (of: { sources: string[]; kinds: string[] }) => (): JournalEvent[] => past.picked(of.sources, of.kinds);
 const sinceSaid = (): JournalEvent[] => {
   if (past.by === 'store') {
     try {
@@ -421,17 +423,17 @@ const sensors: Sensor[] = [
     chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'), peer: peerOn('rayboard'),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
-    events: () => journalNow(),
+    events: read(RAYBOARD_READS),
   })] : []),
   // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
   ...(process.env.TENERAL_WORKSPACE_WATCH === '1' ? [workspaceSensor({
     root: workspace,
-    events: () => journalNow(),
+    events: read(WORKSPACE_READS),
     checkpoint: (cursor: WorkspaceCursor) => appendEvent(journal, gen, { type: 'note', kind: WORKSPACE_CURSOR_KIND, data: cursor }),
   })] : []),
   ...githubRepositories.map(repository => github({
     repository, upstream,
-    events: () => journalNow(),
+    events: read(GITHUB_READS),
     checkpoint: (cursor: GithubCursor) => {
       // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
       // holds this checkpoint back. One note replaces all feed cursors for a repository atomically;
@@ -444,12 +446,12 @@ const sensors: Sensor[] = [
   // Which account the stored token belongs to, told to the agent when it is new (body/github-account.ts).
   ...(process.env.TENERAL_AUTH ? [githubAccount({
     token: () => { try { return readFileSync(join(process.env.TENERAL_AUTH!, 'github-token'), 'utf8'); } catch { return ''; } },
-    events: () => journalNow(),
+    events: read(GITHUB_ACCOUNT_READS),
     note: (login) => appendEvent(journal, gen, { type: 'note', kind: GITHUB_ACCOUNT_KIND, data: { login } }),
   })] : []),
   ...(process.env.TENERAL_AUTH && hasToken(process.env.TENERAL_AUTH) ? [(emit: (s: Stimulus) => void) => {
     const worker = githubNotificationPoller({
-      events: () => journalNow(),
+      events: read(GITHUB_NOTIFICATION_READS),
       token: () => existsSync(join(process.env.TENERAL_AUTH!, 'github-token')) ? readFileSync(join(process.env.TENERAL_AUTH!, 'github-token'), 'utf8') : '',
       checkpoint: (cursor: GithubNotificationCursor) => appendEvent(journal, gen, { type: 'note', kind: GITHUB_NOTIFICATION_CURSOR_KIND, data: cursor }),
     }, emit);
@@ -459,7 +461,7 @@ const sensors: Sensor[] = [
   // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
-    conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => journalNow(),
+    conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: read(ZULIP_READS),
     ownerId: confirmedZulipOwnerId(ownerTyped(), zulipOwnerId), owners: ownersOn('zulip'), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
     mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'), peer: peerOn('zulip'),
@@ -473,7 +475,7 @@ const sensors: Sensor[] = [
   }),
   mail({
     key: () => mailKey(process.env, mailConfigPath),
-    events: () => journalNow(),
+    events: read(MAIL_READS),
     quiet: id => appendEvent(journal, gen, { type: 'note', kind: 'mail.quiet.v1', data: id }),
   }),
 ];
