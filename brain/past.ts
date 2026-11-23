@@ -39,6 +39,8 @@ export interface Past {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in order. */
   notes(kinds: readonly string[]): JournalEvent[];
+  /** What was said to the agent from these sources, in order: also what the owner took back, as a record of who spoke. */
+  stimuli(sources: readonly string[]): JournalEvent[];
   /** The same, each with its number (the place of its line, when the journal is read through). */
   notesAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /**
@@ -196,6 +198,7 @@ export function journalPast(journal: string): Past {
       return lines.all().findLast((line) => line.event.type === type && (source === undefined || named(line.event) === source))?.event ?? null;
     },
     notes: (kinds) => lines.all().flatMap((line) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [line.event] : [])),
+    stimuli: (sources) => lines.all().flatMap((line) => (line.event.type === 'stimulus' && sources.includes(line.event.source) ? [line.event] : [])),
     notesAt: (kinds) => lines.all().flatMap((line, seq) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [{ event: line.event, seq }] : [])),
     since(id) {
       const now = lines();
@@ -284,6 +287,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     graph = { stamp, at: new Map(ids.map((id, n) => [id, n])), ids, why };
     return graph;
   };
+  const notesRead = new Map<string, { count: number; events: JournalEvent[] }>();
   const nodes = (source: string, column: string): number[] => [...(ray.table(source).columns[column] as BigInt64Array | undefined ?? [])].map(Number);
   return {
     ray,
@@ -326,7 +330,17 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     },
     notes(kinds) {
       store.sync();
-      return store.noted(kinds);
+      // Asked again and again by what watches for something new (body/main.ts): read once for as long as the journal has not grown.
+      const key = kinds.join(' ');
+      const had = notesRead.get(key);
+      if (had !== undefined && had.count === store.count()) return had.events;
+      const events = store.noted(kinds);
+      notesRead.set(key, { count: store.count(), events });
+      return events;
+    },
+    stimuli(sources) {
+      store.sync();
+      return store.stimuli(sources);
     },
     notesAt(kinds) {
       store.sync();
@@ -518,6 +532,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     latest: (type, source) => through((past) => past.latest(type, source)),
     notes: (kinds) => through((past) => past.notes(kinds)),
     notesAt: (kinds) => through((past) => past.notesAt(kinds)),
+    stimuli: (sources) => through((past) => past.stimuli(sources)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => { again(); through((past) => past.sync()); },
