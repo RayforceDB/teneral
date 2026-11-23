@@ -428,7 +428,7 @@ real('the request a memory is formed with, as of the end of its episode, is the 
     const provider: Provider = async (messages) => { seen.push(structuredClone(messages)); return { text: MEMORY, toolCalls: [] }; };
     const opened = storePast(own, ray(), openStore(ray(), own, undefined, projections()), false);
     const asked = { ...opened, notesAt: (kinds: readonly string[]) => { asOf += 1; return opened.notesAt(kinds); } };
-    for (let night = 0; night < 5; night++) await sleep({ journal: own, gen: 'g2', provider, specs: [], system: () => 'SYS', budgetChars: 30_000, ...(withPast ? { asked } : {}) });
+    for (let night = 0; night < 14; night++) await sleep({ journal: own, gen: 'g2', provider, specs: [], system: () => 'SYS', budgetChars: 30_000, ...(withPast ? { asked } : {}) });
     return seen;
   };
   const read = await nights(false);

@@ -181,6 +181,8 @@ export interface Store {
   noted(kinds: readonly string[]): JournalEvent[];
   /** The newest `limit` calls of the tool `name`, as their intents were journaled, the newest first. */
   calls(name: string, limit: number): JournalEvent[];
+  /** Every event of this type, in the journal's order: for the few kinds of record that are rare (a generation rolled back). */
+  ofType(type: string): JournalEvent[];
   /** Every source something was ever said from. */
   sources(): string[];
   /** The same of the conversation as it stands, after the event numbered `seq`. */
@@ -588,6 +590,11 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       if (!mounted || limit <= 0) return [];
       ray.bind(ASKED, { w: { type: 'sym', data: [name.slice(0, 64)] } });
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (== type 'tool.intent) (in source (at ${ASKED} 'w))) desc: seq take: ${Math.trunc(limit)} line: line})`));
+    },
+    ofType(type) {
+      if (!mounted) return [];
+      ray.bind(ASKED, { w: { type: 'sym', data: [type.slice(0, 64)] } });
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: (in type (at ${ASKED} 'w)) asc: off line: line})`));
     },
     sources() {
       if (!mounted) return [];

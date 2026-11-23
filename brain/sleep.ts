@@ -1,10 +1,10 @@
 import { readEvents, type EventBody, type JournalEvent, type Usage } from './journal';
-import { frameAsOf } from './frame';
+import { frameAsOf, knownAsOf, notesAsOf } from './frame';
 import { DEFAULT_BUDGET, assemble, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
-import { standing } from './owned';
-import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Source } from './known';
+import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
+import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
@@ -341,12 +341,78 @@ export function asOfEvents(events: JournalEvent[], episode: Pick<Episode, 'from'
 }
 
 /**
+ * What sleep reads of the agent's life: asked of the past where the body has one (`fromPast`), read
+ * from the journal otherwise (`fromJournal`). The same answers either way.
+ */
+interface Read {
+  /** The oldest episode that is over and has neither a memory nor a record of there being none. */
+  waiting(): Episode | undefined;
+  /** The events from the first of `first` to the last of `last`, as the conversation stands. */
+  stretch(first: Episode, last: Episode): JournalEvent[];
+  /** The notes of the memory as of the end of `episode`, with the later ones about what came before it: what `nearest` reads. */
+  notesAsOf(episode: Episode): JournalEvent[];
+  /** What was known as of then: what the marks the agent was shown name. */
+  knownAsOf(episode: Episode): Known;
+  /** The whole journal as of then (`asOfEvents`): for the request made with no database. */
+  asOf(episode: Episode): JournalEvent[];
+  /** What is remembered, the remembered episodes, and which of them hold a pinned event. */
+  remembered(): { all: Remembered; kept: Episode[]; pinned: Set<number> };
+  /** What the look ahead is handed: the journal, or its last event alone where the rest is asked. */
+  last(): JournalEvent[];
+}
+
+function fromJournal(events: JournalEvent[]): Read {
+  return {
+    waiting: () => waiting(events)[0],
+    stretch: (first, last) => events.slice(first.from, last.to),
+    notesAsOf: (episode) => asOfEvents(events, episode),
+    asOf: (episode) => asOfEvents(events, episode),
+    knownAsOf: (episode) => known(asOfEvents(events, episode)),
+    remembered() {
+      const all = remembered(events);
+      const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
+      return { all, kept, pinned: pinnedAmong(events, kept) };
+    },
+    last: () => events,
+  };
+}
+
+function fromPast(past: Past): Read {
+  type Seqs = Episode & { fromSeq: number; toSeq: number };
+  return {
+    waiting: () => waitingOf(past.episodes(), past.remembered())[0],
+    stretch: (first, last) => past.standingFrom((first as Seqs).fromSeq, (last as Seqs).toSeq),
+    notesAsOf(episode) {
+      const { then, earlier } = notesAsOf(past, episode as Seqs);
+      return [...then.map((n) => n.event), ...earlier];
+    },
+    knownAsOf: (episode) => knownAsOf(past, episode as Seqs),
+    // Only when the database could not give the request: then the journal is read for it, once.
+    asOf: (episode) => asOfEvents(standing(past.standingFrom(0)), episode),
+    remembered() {
+      const all = past.remembered();
+      const kept = past.kept();
+      const marked = pinned(past.notes([PIN_KIND, UNPIN_KIND]));
+      const held = new Set<number>();
+      if (marked.size > 0) {
+        for (const seq of past.places([...marked]).values()) {
+          const place = kept.findIndex((e) => e.fromSeq <= seq && seq < e.toSeq);
+          if (place !== -1) held.add(place);
+        }
+      }
+      return { all, kept, pinned: held };
+    },
+    last: () => past.standingFrom(Math.max(0, past.count() - 1)),
+  };
+}
+
+/**
  * The request a memory of `episode` is formed with. Asked of the database where the body has a
  * past (`frameAsOf` in brain/frame.ts): the same request, with nothing of the journal read but the
  * end of it that is shown. Made from `asOf` when there is no past, when the database cuts the
  * conversation otherwise just now, or when asking it fails.
  */
-function asOfRequest(d: SleepDeps, asOf: JournalEvent[], episode: Episode, budget: number, ask: string): ChatMessage[] {
+function asOfRequest(d: SleepDeps, asOf: () => JournalEvent[], episode: Episode, budget: number, ask: string): ChatMessage[] {
   const system = d.system();
   const view = { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER };
   if (d.asked?.by === 'store') {
@@ -357,7 +423,7 @@ function asOfRequest(d: SleepDeps, asOf: JournalEvent[], episode: Episode, budge
       console.error(`[memory] the request for a memory was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return buildMessages(asOf, system, budget, undefined, view);
+  return buildMessages(asOf(), system, budget, undefined, view);
 }
 
 /**
@@ -365,14 +431,14 @@ function asOfRequest(d: SleepDeps, asOf: JournalEvent[], episode: Episode, budge
  * failed request writes nothing, and the episode waits on.
  */
 export async function sleep(d: SleepDeps): Promise<Slept> {
-  const events = standing(readEvents(d.journal));
-  const episode = waiting(events)[0];
+  const read = d.asked?.by === 'store' ? fromPast(d.asked) : fromJournal(standing(readEvents(d.journal)));
+  const episode = read.waiting();
   if (episode === undefined) {
     // Everything is remembered: first the memories are kept to their size, then, now and then, the agent looks ahead.
-    const merged = await merge(d, events);
-    return merged === 'nothing' ? reflect(d, events) : merged;
+    const merged = await merge(d, read);
+    return merged === 'nothing' ? reflect(d, read.last()) : merged;
   }
-  const lived = events.slice(episode.from, episode.to);
+  const lived = read.stretch(episode, episode);
   if (thin(lived)) {
     put(d, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet', voices: voicesOf(lived) } satisfies MemoryData });
     return 'quiet';
@@ -380,10 +446,9 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
 
   const chars = targetChars(episode.chars);
   let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  const asOf = asOfEvents(events, episode);
-  const near = nearest(d.past, asOf, episode, lived);
+  const near = nearest(d.past, read.notesAsOf(episode), episode, lived);
   const ask = question(episode, lived, chars, near);
-  let messages: ChatMessage[] = asOfRequest(d, asOf, episode, budget, ask);
+  let messages: ChatMessage[] = asOfRequest(d, () => read.asOf(episode), episode, budget, ask);
   let usage: Usage | undefined;
   let problem = '';
   let halved = false;
@@ -397,7 +462,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       // Characters are only an estimate of tokens: once more with half, as a turn does.
       halved = true;
       budget = Math.floor(budget / 2);
-      messages = asOfRequest(d, asOf, episode, budget, ask);
+      messages = asOfRequest(d, () => read.asOf(episode), episode, budget, ask);
       attempt -= 1;
       continue;
     }
@@ -411,7 +476,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
       });
       // A fact may name the one it replaces only by a mark it was shown: a mark that names nothing, or an intention, replaces nothing.
-      const held = known(asOf);
+      const held = read.knownAsOf(episode);
       for (const fact of facts) {
         const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
         put(d, {
@@ -457,11 +522,10 @@ interface Crowded {
   all: ReturnType<typeof remembered>;
 }
 
-function crowded(events: JournalEvent[], cap: number): Crowded | null {
-  const all = remembered(events);
-  const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
+function crowded(read: Read, cap: number): Crowded | null {
+  const { all, kept, pinned } = read.remembered();
   // A pinned stretch counts as itself here, whatever room it has in a request: it is never made into anything wider.
-  const shown = entries(kept, kept.length, all, { held: pinnedAmong(events, kept), verbatim: () => [], room: Infinity });
+  const shown = entries(kept, kept.length, all, { held: pinned, verbatim: () => [], room: Infinity });
   const size = shown.reduce((sum, entry) => sum + entry.messages.reduce((n, m) => n + sizeOf(m), 0), 0);
   if (size <= cap) return null;
   for (let i = 0; i + MERGE_COUNT <= shown.length; i++) {
@@ -528,14 +592,15 @@ function mergeQuestion(lived: boolean, parts: number, start: string, end: string
  * without a model, as a list of what its parts were called, so that a model that will not answer
  * cannot leave the logbook growing for ever.
  */
-async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
-  const found = crowded(events, d.logbookChars ?? DEFAULT_LOGBOOK_CHARS);
+async function merge(d: SleepDeps, read: Read): Promise<Slept> {
+  const found = crowded(read, d.logbookChars ?? DEFAULT_LOGBOOK_CHARS);
   if (found === null) return 'nothing';
   const { run, kept, all } = found;
   const [first, last] = [kept[run[0]!.from]!, kept[run.at(-1)!.to]!];
   const span = { from: first.first, to: last.last, start: first.start, end: last.end };
   const level = run[0]!.level + 1;
-  const voices = voicesOf(events.slice(first.from, last.to));
+  const lived = read.stretch(first, last);
+  const voices = voicesOf(lived);
   const parts = run.filter((entry) => entry.messages.length > 0);
   const titles = parts.map((entry) => (entry.messages.at(-1)!.content ?? '').split('\n')[0]!);
   const listed: MergeData = {
@@ -561,7 +626,7 @@ async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
   if (level === 2) {
     // One step deeper than memories of episodes are the episodes.
     for (const cut of CUTS) {
-      const again = buildMessages(cutShort(events.slice(first.from, last.to), cut), system, Number.MAX_SAFE_INTEGER, undefined, {
+      const again = buildMessages(cutShort(lived, cut), system, Number.MAX_SAFE_INTEGER, undefined, {
         ask: mergeQuestion(true, parts.length, span.start, span.end, chars), tailChars: Number.MAX_SAFE_INTEGER, resultsChars: Number.MAX_SAFE_INTEGER,
       });
       if (sizeOfAll(again) <= room) {

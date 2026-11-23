@@ -4,7 +4,7 @@ import { acceptedSince, idleFrom, namesBefore } from './frame-table';
 import { idleOf, idleStart, idleStep, idleTicks } from './idle';
 import { RESULT_KIND, lastResult } from './exam';
 import { countsOf, healthOf } from './health';
-import { KNOWN_NOTES, knownOf, knownStart, knownStep } from './known';
+import { KNOWN_NOTES, knownOf, knownStart, knownStep, type Known } from './known';
 import { putsFrom } from './known-table';
 import { RECENT, lessonPlaces, lessonTextOf, lessonsOf } from './lessons';
 import { conversationBefore, lessonsBefore, lessonsFrom } from './lessons-table';
@@ -115,6 +115,42 @@ export function requestFrom(past: Past | undefined, events: JournalEvent[], syst
 }
 
 /**
+ * The notes of the memory as of the end of `episode`: those written up to then, each with its
+ * number, and those written later that are about what came before it (`laterNoteOf`), in order.
+ * What was remembered, known, pinned and outdated then is made from them.
+ */
+export function notesAsOf(past: Past, episode: Pick<Placed, 'fromSeq' | 'toSeq'>): { then: { event: JournalEvent; seq: number }[]; earlier: JournalEvent[] } {
+  const end = episode.toSeq;
+  const kinds = [...new Set([EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, WITHDRAW_KIND, ...KNOWN_NOTES, ...LINK_NOTES, ...LATER_NOTES, PIN_KIND, UNPIN_KIND, RESULT_KIND])];
+  const noted = past.notesAt(kinds);
+  // The notes written after the episode that are about what came before it.
+  const after = noted.filter((n) => n.seq >= end && n.event.type === 'note' && LATER_NOTES.includes(n.event.kind));
+  const named = after.flatMap((n) => {
+    const about = (n.event as { data?: { from?: unknown; episode?: unknown } | null }).data;
+    return [about?.from, about?.episode].filter((id): id is string => typeof id === 'string');
+  });
+  const places = named.length === 0 ? new Map<string, number>() : past.places([...new Set(named)]);
+  const before = (id: unknown): boolean => typeof id === 'string' && (places.get(id) ?? Infinity) < episode.fromSeq;
+  return { then: noted.filter((n) => n.seq < end), earlier: after.filter((n) => laterNoteOf(n.event, before)).map((n) => n.event) };
+}
+
+/** What was known as of the end of `episode` (`known` of `asOfEvents`), asked of the database. */
+export function knownAsOf(past: Past, episode: Pick<Placed, 'fromSeq' | 'toSeq'>): Known {
+  if (past.ray === undefined) throw new Error('what was known at an earlier moment is asked of the database');
+  const { then, earlier } = notesAsOf(past, episode);
+  return knownThen(past.ray, then, earlier, episode.toSeq);
+}
+
+/** The step that reads a whole journal, taken over the notes up to then and the replies that put something to the owner, in their order, and then over the later notes that belong. */
+function knownThen(ray: Ray, then: { event: JournalEvent; seq: number }[], earlier: JournalEvent[], end: number): Known {
+  const state = knownStart();
+  const read = [...then.filter((n) => n.event.type === 'note' && KNOWN_NOTES.includes(n.event.kind)), ...putsFrom(ray).filter((p) => p.seq < end)].sort((a, b) => a.seq - b.seq);
+  for (const { event } of read) knownStep(state, event);
+  for (const event of earlier) knownStep(state, event);
+  return knownOf(state);
+}
+
+/**
  * The frame of the request a memory of `episode` is formed from (brain/sleep.ts): the journal as
  * of the end of that episode, with the notes written later that are about what came before it
  * (`asOfEvents`). Asked of the database, it is the frame `frameOf` makes of that journal, narrowed:
@@ -127,18 +163,7 @@ export function frameAsOf(past: Past, episode: Placed, room: number, chosen: Siz
   const ray = past.ray;
   if (ray === undefined) throw new Error('a frame as of an earlier moment is asked of the database');
   const end = episode.toSeq;
-  const kinds = [...new Set([EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, WITHDRAW_KIND, ...KNOWN_NOTES, ...LINK_NOTES, ...LATER_NOTES, PIN_KIND, UNPIN_KIND, RESULT_KIND])];
-  const noted = past.notesAt(kinds);
-  // The notes written after the episode that are about what came before it.
-  const after = noted.filter((n) => n.seq >= end && n.event.type === 'note' && LATER_NOTES.includes(n.event.kind));
-  const named = after.flatMap((n) => {
-    const about = (n.event as { data?: { from?: unknown; episode?: unknown } | null }).data;
-    return [about?.from, about?.episode].filter((id): id is string => typeof id === 'string');
-  });
-  const places = named.length === 0 ? new Map<string, number>() : past.places([...new Set(named)]);
-  const before = (id: unknown): boolean => typeof id === 'string' && (places.get(id) ?? Infinity) < episode.fromSeq;
-  const earlier = after.filter((n) => laterNoteOf(n.event, before)).map((n) => n.event);
-  const then = noted.filter((n) => n.seq < end);
+  const { then, earlier } = notesAsOf(past, episode);
   const notes = [...then.map((n) => n.event), ...earlier];
 
   const told = remembered(notes);
@@ -182,11 +207,7 @@ export function frameAsOf(past: Past, episode: Placed, room: number, chosen: Siz
 
   const last = (earlier.at(-1) ?? rest.at(-1) ?? events.at(-1))?.ts ?? '';
   // What was known then: the step that reads a whole journal, taken over the notes up to then and the replies that put something to the owner, in their order, and then over the later notes that belong.
-  const state = knownStart();
-  const read = [...then.filter((n) => n.event.type === 'note' && KNOWN_NOTES.includes(n.event.kind)), ...putsFrom(ray).filter((p) => p.seq < end)].sort((a, b) => a.seq - b.seq);
-  for (const { event } of read) knownStep(state, event);
-  for (const event of earlier) knownStep(state, event);
-  const known = knownOf(state);
+  const known = knownThen(ray, then, earlier, end);
 
   // The episodes as they stood: the remembered ones, then what the rules make of the rest.
   const open = episodesOf(rest.map(slimOf)).map((e) => ({ ...e, from: e.from + keptTo, to: e.to + keptTo }));
