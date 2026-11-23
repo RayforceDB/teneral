@@ -48,8 +48,8 @@ import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
 import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
-import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
-import { QUIET_RUN, ensureHeard, modeOf, typingFor } from './chat-tools';
+import { HEARD_KIND, communityReads, openCommunity, type Heard, type How } from './community';
+import { ATTENTION_KIND, QUIET_RUN, ensureHeard, modeFrom, typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn, restInOf } from '../heart/coordinator';
 
 function env(name: string): string {
@@ -169,7 +169,7 @@ try {
 // A comma-separated setting preserves the old single-repository configuration.
 const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce,RayforceDB/teneral').split(',').map(s => s.trim()).filter(Boolean);
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
-const community = openCommunity(past.ray ?? null, journalNow());
+const community = openCommunity(past.ray ?? null, noted(...communityReads()));
 const id = env('TENERAL_ID');
 // Workers use only the base tools; the parent advertises its complete tool set to the skill registry.
 const subagents = new Subagents({
@@ -238,7 +238,7 @@ function hearIn(service: string, channel: string): void {
   const key = `${service}:${channel}`;
   if (askedToHear.has(key)) return;
   askedToHear.add(key);
-  void ensureHeard(ctx, service, channel, journalNow())
+  void ensureHeard(ctx, service, channel, noted(ATTENTION_KIND))
     .then((asked) => { if (asked) console.error(`[chat] ${service} was not sending the talk of ${channel}; asked it to`); })
     .catch((err) => console.error(`[chat] ${service} could not be asked for the talk of ${channel}: ${err instanceof Error ? err.message : String(err)}`));
 }
@@ -246,7 +246,7 @@ function listening(service: string, channel: { id: string; name: string }): Mode
   const key = `${service}:${channel.id}`;
   const kept = listened.get(key);
   if (kept !== undefined && Date.now() - kept.at < 60_000) return kept.mode;
-  const now = modeOf(journalNow(), service, channel);
+  const now = modeFrom(past, service, channel);
   // The first message from a channel in this life of the body: it is one the agent takes part in, so it is to hear it.
   if (kept === undefined) hearIn(service, channel.name);
   if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
@@ -259,10 +259,11 @@ function listening(service: string, channel: { id: string; name: string }): Mode
  * is shown with what the agent knows of them. For any service: only its name differs.
  */
 function whoSpeaks(service: string, speakers: Speaker[]): string {
-  const events = journalNow();
+  // Whom it has met, the contacts and what was heard are notes; what it knows of them is asked of the past.
+  const events = noted(PARTICIPANT_KIND, ...communityReads());
   const seen = speakers.map((s) => ({ service, id: s.id, name: s.name, ...(s.bot === undefined ? {} : { bot: s.bot }), ...(s.where === undefined ? {} : { met: s.where }) }));
   community.refresh(events);
-  return whoLines(events, seen, meet(journal, gen, events, seen), community);
+  return whoLines(events, seen, meet(journal, gen, events, seen), community, past.known().facts);
 }
 
 /**
