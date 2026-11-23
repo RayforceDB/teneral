@@ -11,7 +11,7 @@ import { acceptanceNotes } from './acceptance';
 import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
 import { idleTicks, ownStart, ownStep } from './idle';
 import { ownSpentSince, spendProjection } from './spend-table';
-import { firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
+import { countOf, countStates, firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
 import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonPlaces, lessonStart, lessonStep, lessons, lessonsOf, type Lesson } from './lessons';
@@ -73,6 +73,8 @@ export interface Past {
   stands(): Stands;
   /** How everything of one kind stands (brain/states-table.ts): the last said of each key, in the order said; with `state` or `gen`, only those that stand so. */
   states(name: string, where?: { state?: string; gen?: string }): StateRow[];
+  /** How often each key of one kind was said to stand in each way. */
+  stateCounts(name: string): { key: string; state: string; n: number }[];
   /** The first note about each of `keys`, in the order said. */
   firstStates(name: string, keys: string[]): StateRow[];
   /** How the newest note about any of `keys` says it stands; null when none was ever said. */
@@ -257,6 +259,7 @@ export function journalPast(journal: string): Past {
     states(name, where) { return lastOf(statesOf(lines.all().map((line) => line.event), name), where); },
     stateOf(name, keys) { return statesOf(lines.all().map((line) => line.event), name).findLast((row) => keys.includes(row.key))?.state ?? null; },
     firstStates(name, keys) { return firstOf(statesOf(lines.all().map((line) => line.event), name), keys); },
+    stateCounts(name) { return countOf(statesOf(lines.all().map((line) => line.event), name)); },
     quiet(source, mark, run) {
       const state = wakeStart();
       lines.all().forEach((line, seq) => { wakeStep(state, line.event, seq); });
@@ -477,6 +480,11 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.sync();
       store.settle();
       return firstStates(ray, name, keys);
+    },
+    stateCounts(name) {
+      store.sync();
+      store.settle();
+      return countStates(ray, name);
     },
     places(ids) {
       store.sync();
@@ -704,6 +712,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     states: (name, where) => through((past) => past.states(name, where)),
     stateOf: (name, keys) => through((past) => past.stateOf(name, keys)),
     firstStates: (name, keys) => through((past) => past.firstStates(name, keys)),
+    stateCounts: (name) => through((past) => past.stateCounts(name)),
     places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),

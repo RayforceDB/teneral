@@ -1,4 +1,4 @@
-import { QUESTION_MAX, QUESTION_MIN, REMINDED_KIND, type Reminder } from './reminded';
+import { QUESTION_MAX, QUESTION_MIN, REMINDED_KIND, type Reminder, OFFERED_KIND, type Offer } from './reminded';
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
@@ -39,6 +39,11 @@ export interface TurnDeps {
    * Null when nothing does. Omitted in tests of everything else.
    */
   remind?: (question: string, inFront: string, events: JournalEvent[]) => Reminder | null;
+  /**
+   * A skill the agent keeps that fits what was just said: offered once, by a line that names it and how to read it.
+   * The procedure itself is not shown: the agent opens it if it judges that it fits. Null when none fits.
+   */
+  offer?: (question: string) => Offer | null;
   /** Characters the memories of older episodes may take. Default: the one in brain/logbook.ts. */
   logbookChars?: number;
   /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
@@ -209,6 +214,21 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         }
         if (reminder !== null) {
           appendEvent(d.journal, d.gen, { type: 'note', kind: REMINDED_KIND, data: reminder });
+          journal.refresh();
+          events = journal.read();
+        }
+      }
+    }
+    if (round === 0 && d.offer !== undefined) {
+      // As with a reminder: before the first request of the turn, for something said, and once.
+      const asked = events.findLast((e) => e.type === 'stimulus');
+      const question = asked?.type === 'stimulus' && !mayStayQuiet(asked.source) ? asked.text.slice(0, QUESTION_MAX) : '';
+      const answered = asked === undefined || events.slice(events.indexOf(asked) + 1).some((e) => e.type === 'assistant' || (e.type === 'note' && e.kind === OFFERED_KIND));
+      if (question.length >= QUESTION_MIN && !answered) {
+        let offer: Offer | null = null;
+        try { offer = d.offer(question); } catch (err) { console.error(`[skills] no skill was offered for this turn: ${err instanceof Error ? err.message : String(err)}`); }
+        if (offer !== null) {
+          appendEvent(d.journal, d.gen, { type: 'note', kind: OFFERED_KIND, data: offer });
           journal.refresh();
           events = journal.read();
         }

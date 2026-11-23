@@ -187,7 +187,8 @@ export function reflectQuestion(held: Known, measured = '', now = Date.now()): s
     `${MEMORY_MARK} Nothing is asked of you at this moment, and you have remembered a good deal since you last looked over what you are doing. `
     + 'Look over it now: your memories, what you know and what you mean to do, all above. Think ahead, not back. Not what happened: what follows from it.',
     'What was left unfinished that nobody is holding? What keeps coming back, the same failure, the same request, the same detour, and could be dealt with once? '
-    + 'What would your owner be glad to find done without having asked? What do you need from your owner that you have not asked for?',
+    + 'What would your owner be glad to find done without having asked? What do you need from your owner that you have not asked for? '
+    + 'And a way of doing something that you worked out, that held, and that you would have to work out again next time: setting it down as a skill of your own (the tool `skill`, action scaffold) is a thing for your agenda too.',
     'Set down only what you would really do in time of your own, each so that it can be understood on its own, weeks from now. '
     + 'Nothing that is already in your list above. Ground each in something you can point to above, a memory, a failure, a thing your owner said; one such is worth more than five that are not, and none is an honest answer.'
     + (own >= OWN_OPEN_MANY ? ` You already hold ${own} ideas of your own that are open: before adding to them, close under Done those that no longer matter.` : ''),

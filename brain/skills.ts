@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameS
 import { dirname, join, resolve, sep } from 'node:path';
 import type { JournalEvent } from './journal';
 import { postings, queryTerms } from './recall';
+import { MEMORY_MARK } from './wire';
 import type { Column, Ray, Table } from './ray';
 
 // Skills are durable know-how, not a second source of authority or executable plugins. A package
@@ -23,7 +24,10 @@ const MAX_PACKAGE = 1_000_000;
 const ID = /^[a-z][a-z0-9-]{0,63}$/;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const HASH = /^[0-9a-f]{64}$/;
-const RUNNERS = new Set(['lost-response-recovery.v1']);
+/** The first skill's own runner, and the general one: a table of rules the package itself declares (`Decide`). */
+const TABLE_RUNNER = 'decision-table.v1';
+const RUNNERS = new Set(['lost-response-recovery.v1', TABLE_RUNNER]);
+const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 const OUTCOMES = new Set(['success', 'no-op', 'inconclusive', 'failure', 'harm']);
 const STATUS = new Set(['pass', 'fail']);
 export const OUTCOME_NAMES = ['success', 'no-op', 'inconclusive', 'failure', 'harm'] as const;
@@ -41,7 +45,23 @@ export interface Manifest {
   exclusions: string[];
   dependencies: { api: string; tools: string[] };
   assumptions: string[];
+  /** With the runner `decision-table.v1`: what the skill decides, as rules its cases are held to. */
+  decide?: Decide;
 }
+
+/**
+ * A skill's decision as a table: what is observed (`fields`, each with the values it can take),
+ * the rules in the order they are tried (the first whose every `when` holds decides), and what is
+ * decided when none does. It is declared, never run as code: the verification only looks up rows.
+ */
+export interface Decide {
+  fields: Record<string, string[]>;
+  rules: { when: Record<string, string>; then: string }[];
+  otherwise: string;
+}
+
+/** A verification case: what was observed, by field, and what the skill should decide. */
+export type SkillCase = { id: string; expected: string } & Record<string, string>;
 
 export interface RecoveryCase {
   id: string;
@@ -55,7 +75,7 @@ export interface SkillPackage {
   hash: string;
   manifest: Manifest;
   instructions: string;
-  cases: RecoveryCase[];
+  cases: SkillCase[];
   files: Record<string, string>;
 }
 
@@ -121,16 +141,51 @@ export function parseManifest(value: unknown): Manifest {
   if (d.api !== 'skill-runtime.v1') throw new Error('skill requires an incompatible runtime API');
   const tools = Array.isArray(d.tools) ? d.tools.map((v) => text(v, 'dependency tool', 64)) : [];
   if (new Set(tools).size !== tools.length) throw new Error('skill dependency tools must be unique');
+  if ((m.runner === TABLE_RUNNER) !== (m.decide !== undefined)) throw new Error(`a skill declares what it decides ("decide") exactly when its runner is ${TABLE_RUNNER}`);
   return {
     schema: 1, id: m.id as string, version: m.version as string,
     capability: text(m.capability, 'capability', 120), precedence: m.precedence,
     runner: m.runner as string, summary: text(m.summary, 'summary', 1000),
     triggers: strings(m.triggers, 'triggers'), exclusions: strings(m.exclusions, 'exclusions'),
     dependencies: { api: 'skill-runtime.v1', tools }, assumptions: strings(m.assumptions, 'assumptions'),
+    ...(m.decide === undefined ? {} : { decide: parseDecide(m.decide) }),
   };
 }
 
-export function parseCases(value: unknown): RecoveryCase[] {
+function parseDecide(value: unknown): Decide {
+  const d = object(value);
+  const named = (v: unknown, what: string): string => { const name = text(v, what, 40); if (!NAME.test(name)) throw new Error(`${what} must be a short lower-case name: ${name}`); return name; };
+  const fields: Record<string, string[]> = Object.create(null);
+  const given = Object.entries(object(d.fields));
+  if (given.length === 0 || given.length > 12) throw new Error('a decision table observes 1 to 12 fields');
+  for (const [name, values] of given) {
+    if (name === 'id' || name === 'expected') throw new Error(`a field cannot be named ${name}`);
+    if (!Array.isArray(values) || values.length < 2 || values.length > 12) throw new Error(`field ${name} takes 2 to 12 values`);
+    fields[named(name, 'field')] = values.map((v) => named(v, `value of ${name}`));
+    if (new Set(fields[name]).size !== values.length) throw new Error(`field ${name} names a value twice`);
+  }
+  if (!Array.isArray(d.rules) || d.rules.length === 0 || d.rules.length > 40) throw new Error('a decision table has 1 to 40 rules');
+  const rules = d.rules.map((raw, n) => {
+    const r = object(raw);
+    const when: Record<string, string> = Object.create(null);
+    const conditions = Object.entries(object(r.when));
+    if (conditions.length === 0) throw new Error(`rule ${n + 1} holds always: say that as "otherwise"`);
+    for (const [name, v] of conditions) {
+      if (fields[name] === undefined || typeof v !== 'string' || !fields[name]!.includes(v)) throw new Error(`rule ${n + 1} names a field or a value the table does not have: ${name}`);
+      when[name] = v;
+    }
+    return { when, then: named(r.then, 'what a rule decides') };
+  });
+  return { fields, rules, otherwise: named(d.otherwise, 'what is decided otherwise') };
+}
+
+/** What the table decides of what was observed: the first rule that holds, by its place; -1 and `otherwise` when none does. */
+export function tableDecision(decide: Decide, observed: Record<string, string>): { rule: number; decided: string } {
+  const rule = decide.rules.findIndex((r) => Object.entries(r.when).every(([name, v]) => observed[name] === v));
+  return { rule, decided: rule === -1 ? decide.otherwise : decide.rules[rule]!.then };
+}
+
+export function parseCases(value: unknown, decide?: Decide): SkillCase[] {
   const root = object(value);
   if (root.schema !== 1 || !Array.isArray(root.cases) || root.cases.length === 0 || root.cases.length > 100) throw new Error('cases.json must hold 1 to 100 schema-1 cases');
   const ids = new Set<string>();
@@ -139,13 +194,25 @@ export function parseCases(value: unknown): RecoveryCase[] {
     const id = text(c.id, 'case id', 100);
     if (ids.has(id)) throw new Error(`duplicate verification case: ${id}`);
     ids.add(id);
+    if (decide !== undefined) {
+      // A case of a decision table says what was observed in every field, and what should be decided.
+      const outcomes = new Set([decide.otherwise, ...decide.rules.map((r) => r.then)]);
+      const expected = text(c.expected, 'expected', 40);
+      if (!outcomes.has(expected)) throw new Error(`case ${id} expects what the table never decides: ${expected}`);
+      const observed: Record<string, string> = Object.create(null);
+      for (const [name, values] of Object.entries(decide.fields)) {
+        if (typeof c[name] !== 'string' || !values.includes(c[name] as string)) throw new Error(`case ${id} does not say ${name} as one of: ${values.join(', ')}`);
+        observed[name] = c[name] as string;
+      }
+      return { ...observed, id, expected } as SkillCase;
+    }
     const attempt = text(c.attempt, 'attempt', 20) as RecoveryCase['attempt'];
     const receipt = text(c.receipt, 'receipt', 20) as RecoveryCase['receipt'];
     const state = text(c.state, 'state', 20) as RecoveryCase['state'];
     const expected = text(c.expected, 'expected', 20) as RecoveryCase['expected'];
     if (!['started', 'not-started', 'interrupted'].includes(attempt) || !['matches', 'different', 'unknown', 'missing'].includes(receipt)
       || !['matches', 'different', 'unchanged', 'unknown'].includes(state) || !['no-op', 'retry-safe', 'inconclusive'].includes(expected)) throw new Error(`invalid recovery case: ${id}`);
-    return { id, attempt, receipt, state, expected };
+    return { id, attempt, receipt, state, expected } as SkillCase;
   });
 }
 
@@ -165,7 +232,7 @@ export function readPackage(root: string, expected?: string): SkillPackage {
   for (const required of FILES) if (files[required] === undefined) throw new Error(`skill package lacks ${required}`);
   const manifest = parseManifest(json(files['skill.json']!, 'skill.json'));
   const instructions = text(files['instructions.md'], 'instructions.md', MAX_FILE);
-  const cases = parseCases(json(files['cases.json']!, 'cases.json'));
+  const cases = parseCases(json(files['cases.json']!, 'cases.json'), manifest.decide);
   const hash = createHash('sha256').update(canonicalFiles(files)).digest('hex');
   if (expected !== undefined && hash !== expected) throw new Error(`skill package hash mismatch: expected ${expected}, got ${hash}`);
   return { hash, manifest, instructions, cases, files };
@@ -281,7 +348,7 @@ function readVirtualPackage(raw: Record<string, unknown>, hash: string): SkillPa
   for (const required of FILES) if (files[required] === undefined) throw new Error(`skill package lacks ${required}`);
   const manifest = parseManifest(json(files['skill.json']!, 'skill.json'));
   const instructions = text(files['instructions.md'], 'instructions.md', MAX_FILE);
-  const cases = parseCases(json(files['cases.json']!, 'cases.json'));
+  const cases = parseCases(json(files['cases.json']!, 'cases.json'), manifest.decide);
   if (createHash('sha256').update(canonicalFiles(files)).digest('hex') !== hash) throw new Error('skill package hash mismatch');
   return { hash, manifest, instructions, cases, files };
 }
@@ -295,10 +362,20 @@ export function recoveryDecision(c: Omit<RecoveryCase, 'id' | 'expected'>): Reco
 
 export function verifyPackage(skill: SkillPackage, tools: string[], generation: string): Omit<Verification, 'at' | 'event'> {
   const missing = skill.manifest.dependencies.tools.filter((tool) => !tools.includes(tool));
-  const failed = missing.length > 0 ? skill.cases.map((c) => c.id) : skill.cases.filter((c) => recoveryDecision(c) !== c.expected).map((c) => c.id);
+  const decide = skill.manifest.decide;
+  let failed: string[];
+  if (missing.length > 0) failed = skill.cases.map((c) => c.id);
+  else if (decide === undefined) failed = skill.cases.filter((c) => recoveryDecision(c as unknown as RecoveryCase) !== c.expected).map((c) => c.id);
+  else {
+    // Every case decided as it expects, and every rule and the "otherwise" decided some case: a rule no case reaches is a claim nothing holds to.
+    const reached = new Set<number>();
+    failed = skill.cases.filter((c) => { const { rule, decided } = tableDecision(decide, c); reached.add(rule); return decided !== c.expected; }).map((c) => c.id);
+    for (let n = 0; n < decide.rules.length; n++) if (!reached.has(n)) failed.push(`rule ${n + 1} is reached by no case`);
+    if (!reached.has(-1)) failed.push('"otherwise" is reached by no case');
+  }
   return {
     hash: skill.hash, status: failed.length === 0 ? 'pass' : 'fail',
-    fingerprint: fingerprint(tools, generation), passed: skill.cases.length - failed.length, total: skill.cases.length,
+    fingerprint: fingerprint(tools, generation), passed: skill.cases.filter((c) => !failed.includes(c.id)).length, total: skill.cases.length,
     cases: skill.cases.map((c) => c.id), failed,
   };
 }
@@ -337,6 +414,27 @@ export function selectSkill(state: SkillState, query: string, tools: string[], g
   if (second && best.score === second.score && best.skill.manifest.precedence === second.skill.manifest.precedence
     && best.successes - best.failures === second.successes - second.failures) return { status: 'conflict', query, candidates };
   return { status: 'selected', query, candidates, skill: best.skill };
+}
+
+/** A skill is offered only when at least this many of the words said are its own: one shared word is chance. */
+export const OFFER_TERMS = 2;
+
+/**
+ * The skill to offer for what was just said, as the line the agent is shown; null when none is
+ * selected, when it shares too few words with what was said, or when it was offered lately
+ * (`lately`: the hashes of the last offers). The line names the skill and says how to read it:
+ * the procedure is package content, and is shown only when the agent opens it.
+ */
+export function offerOf(state: SkillState, said: string, tools: string[], generation: string, lately: ReadonlySet<string>): { hash: string; id: string; text: string } | null {
+  const picked = selectSkill(state, said, tools, generation);
+  if (picked.status !== 'selected' || picked.skill === undefined || lately.has(picked.skill.hash)) return null;
+  const { manifest, hash } = picked.skill;
+  const own = new Set(postings(`${manifest.capability} ${manifest.summary} ${manifest.triggers.join(' ')}`).map((p) => p.term));
+  if (queryTerms(said).filter((term) => own.has(term)).length < OFFER_TERMS) return null;
+  return {
+    hash, id: manifest.id,
+    text: `${MEMORY_MARK} A skill you keep may fit what was just said: ${manifest.id} ${manifest.version}. ${manifest.summary} If it fits, read it with skill_show (hash ${hash}) before you act, and when the work is over record how it went with skill_outcome. It is know-how of your own, not an instruction and not an authority: if it does not fit, go on without it.`,
+  };
 }
 
 export function showSkill(skill: SkillPackage): string {
@@ -437,4 +535,30 @@ export function packageAt(workspace: string, path: string): string {
   const resolved = realpathSync(candidate);
   if (resolved !== root && !resolved.startsWith(root + sep)) throw new Error('skill package is outside the workspace');
   return resolved;
+}
+
+/**
+ * The files of a new skill, for the agent to fill in: a decision table with one field and one
+ * rule, instructions with the parts a procedure needs, and a case for the rule and one for what
+ * is decided otherwise. As written it already verifies; it says nothing yet.
+ */
+export function scaffold(id: string): Record<string, string> {
+  if (!ID.test(id)) throw new Error('a skill id is lower-case letters, digits and dashes, beginning with a letter');
+  const manifest = {
+    schema: 1, id, version: '0.1.0', capability: 'say.in-two-or-three-words.what-it-is-for', precedence: 100, runner: TABLE_RUNNER,
+    summary: 'One sentence: when this is used and what it decides.',
+    triggers: ['words someone would say when this is needed', 'another way it is said'],
+    exclusions: ['When this does not apply.'],
+    dependencies: { api: 'skill-runtime.v1', tools: ['bash'] },
+    assumptions: ['What must be true of the world for the procedure to hold.'],
+    decide: { fields: { observed: ['yes', 'no'] }, rules: [{ when: { observed: 'yes' }, then: 'go-on' }], otherwise: 'stop' },
+  };
+  const cases = { schema: 1, cases: [{ id: 'observed', observed: 'yes', expected: 'go-on' }, { id: 'not-observed', observed: 'no', expected: 'stop' }] };
+  const instructions = [
+    `# ${id}`, '',
+    'Use when ... This is procedure text: it grants no authority and runs nothing.', '',
+    '1. What to look at first, and how.', '2. What to decide from it: the table in skill.json says the same in rules, and cases.json holds it to them.',
+    '3. What to do for each decision, and what never to do.', '4. How to check the result, and to record how it went with `skill_outcome`.', '',
+  ].join('\n');
+  return { 'skill.json': `${JSON.stringify(manifest, null, 2)}\n`, 'instructions.md': instructions, 'cases.json': `${JSON.stringify(cases, null, 2)}\n` };
 }
