@@ -5,12 +5,13 @@ import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
-import { LINE_MAX, LINK_NOTES, links, tiesOf, type Since } from './links';
+import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { knownFrom, knownProjection } from './known-table';
 import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
-import { openStore, readLine, scan, type Line, type Projection, type Store } from './store';
+import { TIES, tiesProjection } from './ties-table';
+import { boundAs, openStore, readLine, scan, type Line, type Projection, type Store } from './store';
 import { clip } from '../body/text';
 
 // The past as the agent can ask for it: found by words, opened where something happened, and
@@ -81,7 +82,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -235,29 +236,21 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
    * stands for. They are made again when a note they are made from has been written; walking them
    * is the database's work.
    */
-  let graph: { notes: number; at: Map<string, number>; ids: string[]; why: Map<string, string> } | null = null;
+  let graph: { stamp: number; at: Map<string, number>; ids: string[]; why: Map<string, string> } | null = null;
   const tied = (): NonNullable<typeof graph> => {
-    const notes = store.notedCount(LINK_NOTES);
-    if (graph?.notes === notes) return graph;
-    const all = links(store.noted(LINK_NOTES));
-    const at = new Map<string, number>();
-    const ids: string[] = [];
-    const node = (id: string): bigint => {
-      let n = at.get(id);
-      if (n === undefined) { n = ids.length; at.set(id, n); ids.push(id); }
-      return BigInt(n);
-    };
-    const lines = all.filter((link) => link.kind !== 'covers');
-    const parts = all.filter((link) => link.kind === 'covers');
-    const edges = (of: typeof all): Record<string, { type: 'i64'; data: BigInt64Array }> => ({
-      src: { type: 'i64', data: BigInt64Array.from(of.map((link) => node(link.from))) },
-      dst: { type: 'i64', data: BigInt64Array.from(of.map((link) => node(link.to))) },
-    });
+    const edges = boundAs(TIES, 'edges');
+    const stamp = Number(((ray.table(`(select {from: ${boundAs(TIES, 'stamp')}})`).columns.n as BigInt64Array | undefined) ?? [])[0] ?? -1);
+    if (graph?.stamp === stamp) return graph;
+    // The ties were made again (brain/ties-table.ts): the graphs are built anew from the table, in the database.
     if (graph !== null) ray.run('(do (.graph.free mem_line_graph) (.graph.free mem_part_graph) null)');
-    ray.bind('mem_lines', edges(lines));
-    ray.bind('mem_parts', edges(parts));
-    ray.run("(do (set mem_line_graph (.graph.build mem_lines 'src 'dst)) (set mem_part_graph (.graph.build mem_parts 'src 'dst)) (set mem_outdated (distinct (at mem_lines 'dst))) null)");
-    graph = { notes, at, ids, why: new Map(lines.map((link) => [`${link.from} ${link.to}`, link.why ?? ''])) };
+    ray.run(`(do (set mem_lines (select {from: ${edges} where: (!= kind 'covers)})) (set mem_parts (select {from: ${edges} where: (== kind 'covers)})) `
+      + "(set mem_line_graph (.graph.build mem_lines 'src 'dst)) (set mem_part_graph (.graph.build mem_parts 'src 'dst)) (set mem_outdated (distinct (at mem_lines 'dst))) null)");
+    const named = ray.table(`(select {from: ${boundAs(TIES, 'nodes')}})`);
+    const ids: string[] = [];
+    (named.columns.id as string[] | undefined ?? []).forEach((id, i) => { ids[Number((named.columns.n as BigInt64Array)[i])] = id; });
+    const lines = ray.table('(select {from: mem_lines later: later earlier: earlier why: why})');
+    const why = new Map((lines.columns.later as string[] | undefined ?? []).map((later, i) => [`${later} ${(lines.columns.earlier as string[])[i]}`, (lines.columns.why as string[])[i]!]));
+    graph = { stamp, at: new Map(ids.map((id, n) => [id, n])), ids, why };
     return graph;
   };
   const nodes = (source: string, column: string): number[] => [...(ray.table(source).columns[column] as BigInt64Array | undefined ?? [])].map(Number);
@@ -289,6 +282,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     },
     since(id) {
       store.sync();
+      store.settle();
       const g = tied();
       const n = g.at.get(id);
       if (n === undefined) return null;
