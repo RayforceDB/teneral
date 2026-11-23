@@ -14,7 +14,8 @@ import { ownSpentSince, spendProjection } from './spend-table';
 import { firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
 import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
 import { knownFrom, knownProjection } from './known-table';
-import { lessonsProjection } from './lessons-table';
+import { lessonPlaces, lessonStart, lessonStep, lessons, lessonsOf, type Lesson } from './lessons';
+import { lessonsFrom, lessonsProjection } from './lessons-table';
 import { counted } from './wire';
 import { countedBefore, countsFrom, countsOf, episodesFrom, keptFrom, memoryProjection, rememberedFrom, type MemoryCounts, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
@@ -45,6 +46,12 @@ export interface Past {
   notes(kinds: readonly string[]): JournalEvent[];
   /** What was said to the agent from these sources, in order: also what the owner took back, as a record of who spoke. */
   stimuli(sources: readonly string[]): JournalEvent[];
+  /** The calls of the tool `name` made at or after the time `since` (milliseconds), as their intents were journaled, the newest first. */
+  callsSince(name: string, since: number): JournalEvent[];
+  /** What the owner said after the event numbered `seq` (from the terminal or a source `owner:…`), in order, of the conversation as it stands. */
+  ownerSaidSince(seq: number): JournalEvent[];
+  /** The lessons as they stand (brain/lessons.ts), and the conversation being lived as the rules alone cut the journal: the first event of it. */
+  lessons(): { held: Lesson[]; conversation: string | undefined };
   /** What was said from these sources and the notes of these kinds, together, in order: what a sensor reads to know where it was. Read once for as long as the journal has not grown. */
   picked(sources: readonly string[], kinds: readonly string[]): JournalEvent[];
   /** The same, each with its number (the place of its line, when the journal is read through). */
@@ -224,6 +231,17 @@ export function journalPast(journal: string): Past {
       return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
     },
     count: () => lines.all().length,
+    callsSince: (name, since) => lines.all().flatMap((line) => (line.event.type === 'tool.intent' && line.event.name === name && Date.parse(line.event.ts) >= since ? [line.event] : [])).reverse(),
+    ownerSaidSince(seq) {
+      const stands = new Set(lines());
+      return lines.all().flatMap((line, i) => (i > seq && stands.has(line) && line.event.type === 'stimulus' && fromOwner(line.event.source) ? [line.event] : []));
+    },
+    lessons() {
+      const events = lines().map((line) => line.event);
+      const state = lessonStart();
+      for (const e of events) lessonStep(state, e);
+      return { held: lessons(events), conversation: state.conversation === '' ? undefined : state.conversation };
+    },
     settled: () => lines.all().findLast((line) => line.event.type === 'assistant' || line.event.type === 'turn.interrupted')?.next ?? 0,
     accepted: () => acceptanceNotes(lines().map((line) => line.event)),
     stands() {
@@ -391,6 +409,28 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     count() {
       store.sync();
       return store.count();
+    },
+    callsSince(name, since) {
+      store.sync();
+      // The newest first, and more of them while the oldest taken is still within the time asked for.
+      for (let limit = 64; ; limit *= 4) {
+        const calls = store.calls(name, limit);
+        if (calls.length < limit || Date.parse(calls.at(-1)!.ts) < since) return calls.filter((e) => Date.parse(e.ts) >= since);
+      }
+    },
+    ownerSaidSince(seq) {
+      store.sync();
+      // Which sources are the owner's is a property of their names: the database says which names there are, and gives what was said from those.
+      return store.stimuliAfter(store.sources().filter(fromOwner), seq);
+    },
+    lessons() {
+      store.sync();
+      store.settle();
+      const { records, conversation } = lessonsFrom(ray);
+      const ids = lessonPlaces(records);
+      const at = ids.length === 0 ? new Map<string, number>() : store.places(ids);
+      const last = store.standingFrom(Math.max(0, store.count() - 1))[0]?.ts ?? '';
+      return { held: lessonsOf(records, (id) => at.get(id), Date.parse(last) || Date.now()), conversation };
     },
     settled() {
       store.sync();
@@ -645,6 +685,9 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     known: () => through((past) => past.known()),
     standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
     count: () => through((past) => past.count()),
+    ownerSaidSince: (seq) => through((past) => past.ownerSaidSince(seq)),
+    callsSince: (name, since) => through((past) => past.callsSince(name, since)),
+    lessons: () => through((past) => past.lessons()),
     settled: () => through((past) => past.settled()),
     accepted: () => through((past) => past.accepted()),
     stands: () => through((past) => past.stands()),

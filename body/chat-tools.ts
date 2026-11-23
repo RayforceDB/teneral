@@ -1,8 +1,9 @@
+import { pastOf } from './asked';
 import { readsState } from '../brain/states-table';
 import type { Past } from '../brain/past';
-import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
-import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
-import { openCommunity, tieWord, type Community } from './community';
+import { appendEvent, type JournalEvent } from '../brain/journal';
+import { CONTACT_KIND, PARTICIPANT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
+import { HEARD_KIND, openCommunity, tieWord, type Community } from './community';
 import { memberOf, spokeIn, type Mode } from './chat';
 import { SETTLED_KIND } from '../heart/glance';
 import { QUIET_REPLY } from '../brain/quiet';
@@ -217,18 +218,20 @@ export const chatSend: Tool = {
     if (service.send === undefined) throw new Error(`${service.name} can only be answered: use chat_reply`);
     const [channel, thread, user] = [text(args, 'channel'), text(args, 'thread'), text(args, 'user')];
     if ((channel === undefined) === (user === undefined)) throw new Error('give either channel with thread, or user');
-    const events = readEvents(ctx.journal);
+    // Whom it has met, the contacts and what was heard are notes, asked of the past.
+    const events = pastOf(ctx).notes([PARTICIPANT_KIND, CONTACT_KIND, HEARD_KIND]);
     let to: Destination;
     if (user !== undefined) {
       // Someone your owner placed in a circle is known to you by their word, whether or not they wrote first.
       const placed = contacts(events).get(`${service.name}:${user}`)?.circle !== undefined;
-      if (!placed && service.knows?.(ctx, events, user) !== true) throw new Error(`you may write first only to your owner, to people your owner placed in a circle, and to people who have written to you on ${service.name}; ${user} is none of these. Ask your owner`);
+      // Whether they wrote to the agent there is read in what that service's sensor journaled.
+      if (!placed && service.knows?.(ctx, pastOf(ctx).picked([`agent:${service.name}`, `owner:${service.name}`], []), user) !== true) throw new Error(`you may write first only to your owner, to people your owner placed in a circle, and to people who have written to you on ${service.name}; ${user} is none of these. Ask your owner`);
       to = { user };
     } else {
       if (thread === undefined) throw new Error('with channel, give thread: the topic to open or continue');
       // Counted from the journal, so a restart does not give the hour back.
       const since = Date.now() - HOUR_MS;
-      const opened = events.filter((e) => e.type === 'tool.intent' && e.name === 'chat_send' && Date.parse(e.ts) >= since
+      const opened = pastOf(ctx).callsSince('chat_send', since).filter((e) => e.type === 'tool.intent'
         && (e.args as Record<string, unknown> | null)?.service === service.name && String((e.args as Record<string, unknown>).channel ?? '') === channel).length;
       // This call's own intent is already journaled.
       if (opened > OPENED_MAX) throw new Error(`you have opened ${OPENED_MAX} messages nobody asked for in ${channel} within the hour. Wait, or answer what people say there with chat_reply`);
@@ -303,7 +306,8 @@ export const contact: Tool = {
   },
   async run(args, ctx) {
     const a = args as Record<string, unknown>;
-    const events = readEvents(ctx.journal);
+    // Whom it has met, the contacts and what was heard are notes, asked of the past.
+    const events = pastOf(ctx).notes([PARTICIPANT_KIND, CONTACT_KIND, HEARD_KIND]);
     const who = text(args, 'who');
     if (who === undefined) {
       const met = [...participants(events).values()];
@@ -334,14 +338,14 @@ export const contact: Tool = {
       if (!/^[\p{L}][\p{L}\p{N} _-]{1,39}$/u.test(circle)) throw new Error('a circle is a word or two, such as colleague or family');
       if (words === undefined) { data.supposed = circle; said.push(`you suppose ${p.name} is ${circle}; it becomes a circle when your owner says so`); }
       else {
-        if (ownerSays(events, words) === null) throw new Error('those words do not stand in any message of your owner\'s. A circle is theirs to give: ask them, and copy their answer exactly');
+        if (ownerSays(pastOf(ctx).ownerSaidSince(-1), words) === null) throw new Error('those words do not stand in any message of your owner\'s. A circle is theirs to give: ask them, and copy their answer exactly');
         data.circle = circle; data.words = words; said.push(`${p.name} is ${circle}, by your owner's word`);
       }
     }
     if (other !== undefined) {
       const second = whom(events, other);
       if (`${second.service}:${second.id}` === key) throw new Error('that is the same account');
-      if (words === undefined || ownerSays(events, words) === null) throw new Error('two accounts are one of them only when your owner says so: pass their own words, copied exactly from a message of theirs');
+      if (words === undefined || ownerSays(pastOf(ctx).ownerSaidSince(-1), words) === null) throw new Error('two accounts are one of them only when your owner says so: pass their own words, copied exactly from a message of theirs');
       data.same = `${second.service}:${second.id}`; data.words ??= words;
       said.push(`${second.name} (${second.service}:${second.id}) is the same one as ${p.name}`);
     }
@@ -545,7 +549,7 @@ export const chatAttention: Tool = {
     if (channel === undefined) throw new Error('name the channel');
     const mode = text(args, 'mode');
     if (mode === undefined) {
-      const now = modeOf(readEvents(ctx.journal), service.name, { id: channel, name: channel });
+      const now = modeFrom(pastOf(ctx), service.name, { id: channel, name: channel });
       // How it listens is its own choice; whether anything is sent to listen to is the service's, and the two must not be confused.
       let sent: boolean | undefined;
       try { sent = await service.hears?.(ctx, channel); } catch { sent = undefined; }
@@ -604,7 +608,7 @@ export const communityTool: Tool = {
   },
   async run(args, ctx) {
     const a = args as Record<string, unknown>;
-    const c = communityOf(ctx, readEvents(ctx.journal));
+    const c = communityOf(ctx, pastOf(ctx).notes([CONTACT_KIND, HEARD_KIND]));
     if (c.messages() === 0) return 'Nothing has been heard in a chat yet.';
     const head = `From ${c.messages()} messages heard, asked of the ${c.by === 'database' ? 'database' : 'journal\'s notes'}.`;
     switch (a.question) {

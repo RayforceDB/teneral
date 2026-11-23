@@ -1,3 +1,4 @@
+import { pastOf } from './asked';
 import { existsSync, readFileSync } from 'node:fs';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
@@ -119,7 +120,7 @@ export const work: Tool = {
     }
     if (a.check !== undefined && (typeof a.check !== 'number' || !(a.check >= 1) || a.check > 60 * 24 * 30)) throw new Error('check is minutes from now, between 1 and 43200');
     // Asked of the agent's past where it has one: the tables hold what is known, and the journal is not read through for it.
-    const held = ctx.past !== undefined ? ctx.past.known() : known(standing(readEvents(ctx.journal)));
+    const held = pastOf(ctx).known();
     // A commitment is named by its mark or by its exact words. A mark that names nothing open must not
     // become a new commitment whose whole text is that mark.
     const named = a.task.trim();

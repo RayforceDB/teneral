@@ -1,3 +1,4 @@
+import { pastOf } from './asked';
 import type { Tool, ToolContext } from './tools';
 import { appendEvent, readEvents } from '../brain/journal';
 import {
@@ -29,8 +30,8 @@ function toolNames(ctx: ToolContext): string[] {
   return ctx.toolNames ?? ['bash'];
 }
 function current(ctx: ToolContext) {
-  const events = readEvents(ctx.journal);
-  return skillState(events, ctx.journal);
+  // Skills are read from their own notes, asked of the past.
+  return skillState(pastOf(ctx).notes([SKILL_NOTE]), ctx.journal);
 }
 function hashOf(value: unknown): string {
   const hash = text(value, 'hash', 64);
@@ -52,7 +53,7 @@ function record(ctx: ToolContext, data: Record<string, unknown>): string {
 export function openSkills(ctx: ToolContext): SkillRegistry | null {
   if (!ctx.past?.ray) return null;
   try {
-    return openSkillRegistry(ctx.past.ray, ctx.journal, () => readEvents(ctx.journal), toolNames(ctx), ctx.gen);
+    return openSkillRegistry(ctx.past.ray, ctx.journal, () => pastOf(ctx).notes([SKILL_NOTE]), toolNames(ctx), ctx.gen);
   } catch (err) {
     console.error(`[skills] Rayforce registry could not be opened: ${err instanceof Error ? err.message : String(err)}`);
     return null;
