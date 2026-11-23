@@ -18,17 +18,22 @@ export const idleStart = (): IdleState => ({ ended: 0, clock: false, worked: fal
 
 /** Takes one more event in; true when the state changed. */
 export function idleStep(state: IdleState, e: JournalEvent): boolean {
-  if (e.type === 'assistant') {
-    const worked = state.worked || (Array.isArray(e.toolCalls) && e.toolCalls.length > 0);
+  return idleTake(state, e.type, e.type === 'assistant' && Array.isArray(e.toolCalls) && e.toolCalls.length > 0, e.type === 'stimulus' && e.source === 'clock');
+}
+
+/** The same from what the step reads of an event: its type, whether it is a reply that called a tool, and whether it is a tick of the clock. */
+export function idleTake(state: IdleState, type: string, calls: boolean, clock: boolean): boolean {
+  if (type === 'assistant') {
+    const worked = state.worked || calls;
     if (state.answered && worked === state.worked) return false;
     state.answered = true;
     state.worked = worked;
     return true;
   }
-  if (e.type !== 'stimulus') return false;
+  if (type !== 'stimulus') return false;
   // What arrived before is over: a tick that was worked on ends the run of idle ones, one only answered adds to it.
   if (state.clock) state.ended = state.worked ? 0 : state.ended + (state.answered ? 1 : 0);
-  state.clock = e.source === 'clock';
+  state.clock = clock;
   state.worked = false;
   state.answered = false;
   return true;

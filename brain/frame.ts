@@ -1,15 +1,20 @@
 import { acceptanceNotes } from './acceptance';
+import { episodesOf, shownChars, slimOf } from './episodes';
 import { acceptedSince, idleFrom, namesBefore } from './frame-table';
-import { idleTicks } from './idle';
+import { idleOf, idleStart, idleStep, idleTicks } from './idle';
 import { RESULT_KIND, lastResult } from './exam';
 import { healthOf } from './health';
+import { KNOWN_NOTES, knownOf, knownStart, knownStep } from './known';
+import { putsFrom } from './known-table';
 import { RECENT, lessonPlaces, lessonTextOf, lessonsOf } from './lessons';
-import { lessonsFrom } from './lessons-table';
-import { LINK_NOTES, outdatedStretches } from './links';
+import { conversationBefore, lessonsBefore, lessonsFrom } from './lessons-table';
+import type { Placed } from './memory-table';
+import { LATER_NOTES, LINK_NOTES, laterNoteOf, outdatedStretches } from './links';
 import { MEMORY_MARK, knowingOf, swapped, type Head, type Sizes } from './logbook';
 import { OVERLAP_EPISODES, assemble, buildMessages, frameOf, narrow, type Frame, type Sight, type View } from './memory';
 import type { ChatMessage } from './provider';
-import { PIN_KIND, UNPIN_KIND, pinned } from './owned';
+import { PIN_KIND, UNPIN_KIND, WITHDRAW_KIND, pinned } from './owned';
+import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered } from './remembered';
 import type { JournalEvent } from './journal';
 import type { Past } from './past';
 import type { Ray } from './ray';
@@ -113,4 +118,103 @@ export function requestFrom(past: Past | undefined, events: JournalEvent[], syst
     }
   }
   return buildMessages(events, system, budgetChars, sight, view);
+}
+
+/**
+ * The frame of the request a memory of `episode` is formed from (brain/sleep.ts): the journal as
+ * of the end of that episode, with the notes written later that are about what came before it
+ * (`asOfEvents`). Asked of the database, it is the frame `frameOf` makes of that journal, narrowed:
+ * what was remembered, known, pinned and outdated then is made from the notes up to then and the
+ * later ones that belong, each by the function that reads a whole journal; the counts of what lies
+ * before, the idle ticks and the conversation being lived are read where the tables keep them for
+ * the end of every episode.
+ */
+export function frameAsOf(past: Past, episode: Placed, room: number, chosen: Sizes = {}): Frame {
+  const ray = past.ray;
+  if (ray === undefined) throw new Error('a frame as of an earlier moment is asked of the database');
+  const end = episode.toSeq;
+  const kinds = [...new Set([EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, WITHDRAW_KIND, ...KNOWN_NOTES, ...LINK_NOTES, ...LATER_NOTES, PIN_KIND, UNPIN_KIND, RESULT_KIND])];
+  const noted = past.notesAt(kinds);
+  // The notes written after the episode that are about what came before it.
+  const after = noted.filter((n) => n.seq >= end && n.event.type === 'note' && LATER_NOTES.includes(n.event.kind));
+  const named = after.flatMap((n) => {
+    const about = (n.event as { data?: { from?: unknown; episode?: unknown } | null }).data;
+    return [about?.from, about?.episode].filter((id): id is string => typeof id === 'string');
+  });
+  const places = named.length === 0 ? new Map<string, number>() : past.places([...new Set(named)]);
+  const before = (id: unknown): boolean => typeof id === 'string' && (places.get(id) ?? Infinity) < episode.fromSeq;
+  const earlier = after.filter((n) => laterNoteOf(n.event, before)).map((n) => n.event);
+  const then = noted.filter((n) => n.seq < end);
+  const notes = [...then.map((n) => n.event), ...earlier];
+
+  const told = remembered(notes);
+  const cut = past.episodes();
+  let lies = 0;
+  const kept = cut.filter((e) => e.why === 'kept' && e.to <= episode.from).map((e) => ({ ...e, lies: lies += e.shown }));
+  const keptTo = kept.at(-1)?.to ?? 0;
+  const keptSeq = kept.at(-1)?.toSeq ?? 0;
+
+  const marked = pinned(notes);
+  const held = new Set<number>();
+  if (marked.size > 0) {
+    for (const seq of past.places([...marked]).values()) {
+      const place = kept.findIndex((e) => e.fromSeq <= seq && seq < e.toSeq);
+      if (place !== -1) held.add(place);
+    }
+  }
+
+  // Everything after what was remembered then, up to the end of the episode: read once, for what it counts for and for what is shown of it.
+  const rest = [...past.standingFrom(keptSeq, end), ...earlier];
+  const whole = lies + rest.reduce((sum, e) => sum + shownChars(e), 0);
+  const count = swapped({ kept, whole }, room, chosen);
+  const begin = count === 0 || held.size > 0 ? null : kept[Math.max(0, count - 1 - OVERLAP_EPISODES)]!;
+  const first = begin === null ? 0 : begin.from;
+  const events = first === keptTo ? rest : [...past.standingFrom(first === 0 ? 0 : begin!.fromSeq, keptSeq), ...rest];
+  const counts = { chars: 0, calls: 0, slots: 0 };
+  for (const e of cut) {
+    if (e.to > first) break;
+    counts.chars += e.chars;
+    counts.calls += e.calls;
+  }
+  let used = new Set<string>();
+  if (counts.calls > 0) {
+    const ids: string[] = [];
+    for (const e of events) if (e.type === 'assistant') for (const call of reply(e).calls) {
+      const id = (typeof call === 'object' && call !== null ? call as { id?: unknown } : {}).id;
+      if (typeof id === 'string') ids.push(id);
+    }
+    used = namesBefore(ray, counts.calls, ids);
+  }
+
+  const last = (earlier.at(-1) ?? rest.at(-1) ?? events.at(-1))?.ts ?? '';
+  // What was known then: the step that reads a whole journal, taken over the notes up to then and the replies that put something to the owner, in their order, and then over the later notes that belong.
+  const state = knownStart();
+  const read = [...then.filter((n) => n.event.type === 'note' && KNOWN_NOTES.includes(n.event.kind)), ...putsFrom(ray).filter((p) => p.seq < end)].sort((a, b) => a.seq - b.seq);
+  for (const { event } of read) knownStep(state, event);
+  for (const event of earlier) knownStep(state, event);
+  const known = knownOf(state);
+
+  // The episodes as they stood: the remembered ones, then what the rules make of the rest.
+  const open = episodesOf(rest.map(slimOf)).map((e) => ({ ...e, from: e.from + keptTo, to: e.to + keptTo }));
+  const idle = { ...(kept.at(-1)?.idle ?? idleStart()) };
+  for (const e of rest) idleStep(idle, e);
+  const health = healthOf({ told, cut: [...kept, ...open], known, exam: lastResult(then.map((n) => n.event)), idle: idleOf(idle) }, Date.parse(last) || 0);
+
+  let lessons: string | null = null;
+  if (process.env.TENERAL_LESSONS !== '0') {
+    const records = lessonsBefore(ray, end);
+    if (records.length > 0) {
+      const ids = lessonPlaces(records);
+      const at = ids.length === 0 ? new Map<string, number>() : past.places(ids);
+      let latest = events;
+      for (let back = 4 * RECENT; latest.length < RECENT && first > 0; back *= 4) {
+        const from = Math.max(0, end - back);
+        latest = [...past.standingFrom(from, end), ...earlier];
+        if (from === 0) break;
+      }
+      lessons = lessonTextOf(lessonsOf(records, (id) => at.get(id), Date.parse(last) || Date.now()), conversationBefore(ray, end), latest, MEMORY_MARK);
+    }
+  }
+  const head: Head = { last, knowing: knowingOf(known, last, lessons, health), told, kept, whole, pinned: held, outdated: outdatedStretches(notes, told) };
+  return { events, first, before: counts, usedBefore: (id) => used.has(id), accepted: first === 0 ? acceptanceNotes(events) : acceptedSince(ray, begin!.fromSeq), head };
 }

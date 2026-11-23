@@ -9,8 +9,9 @@ import { standing } from '../../brain/owned';
 import { known, knownText } from '../../brain/known';
 import { lessons } from '../../brain/lessons';
 import { remembered } from '../../brain/remembered';
+import { asOfEvents, sleep } from '../../brain/sleep';
 import type { Tool, ToolContext } from '../../body/tools';
-import { frameFrom, requestFrom } from '../../brain/frame';
+import { frameAsOf, frameFrom, requestFrom } from '../../brain/frame';
 import { runTurn } from '../../brain/loop';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
 import { idleStart, idleStep, idleOf } from '../../brain/idle';
@@ -392,3 +393,40 @@ real('lessons are shown from the table of their notes as from the journal: a pro
   // The lesson was in front of the agent while it was a proposal of that conversation, and again once accepted and to the point.
   expect(shown).toBeGreaterThanOrEqual(4);
 }, 120_000);
+
+real('the request a memory is formed with, as of the end of its episode, is the same from the database as from the journal', async () => {
+  // Every closed episode of a life, remembered or not: as of its end, with the notes written later that are about what came before it.
+  const all = fuller();
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-asof-')), 'journal.jsonl');
+  writeFileSync(journal, all.map(line).join(''));
+  const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+  const stands = standing(all);
+  const view = { ask: 'What do you remember of it?', tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER };
+  const closed = past.episodes().filter((e) => e.closed);
+  expect(closed.length).toBeGreaterThan(35);
+  for (const episode of closed) {
+    for (const budget of [9_000, 400_000]) {
+      expect(assemble(frameAsOf(past, episode, budget - 1, view), 'S', budget, undefined, view)).toEqual(buildMessages(asOfEvents(stands, episode), 'S', budget, undefined, view));
+    }
+  }
+
+  // And sleep itself: with the database at hand it sends, memory after memory, what it sends when it reads the journal.
+  const MEMORY = 'Title: A matter settled\nOutcome: done\n\nMy owner brought a matter and I settled it, step by step, and said so when it was done.';
+  let asOf = 0;
+  const nights = async (withPast: boolean): Promise<ChatMessage[][]> => {
+    const own = join(mkdtempSync(join(tmpdir(), 'teneral-sleep-')), 'journal.jsonl');
+    writeFileSync(own, life(40, 30).map(line).join(''));
+    const seen: ChatMessage[][] = [];
+    const provider: Provider = async (messages) => { seen.push(structuredClone(messages)); return { text: MEMORY, toolCalls: [] }; };
+    const opened = storePast(own, ray(), openStore(ray(), own, undefined, projections()), false);
+    const asked = { ...opened, notesAt: (kinds: readonly string[]) => { asOf += 1; return opened.notesAt(kinds); } };
+    for (let night = 0; night < 5; night++) await sleep({ journal: own, gen: 'g2', provider, specs: [], system: () => 'SYS', budgetChars: 30_000, ...(withPast ? { asked } : {}) });
+    return seen;
+  };
+  const read = await nights(false);
+  const served = await nights(true);
+  expect(read.length).toBeGreaterThanOrEqual(5);
+  expect(served).toEqual(read);
+  // The database was asked for each of them.
+  expect(asOf).toBeGreaterThanOrEqual(5);
+}, 180_000);

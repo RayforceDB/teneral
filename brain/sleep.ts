@@ -1,5 +1,6 @@
 import { readEvents, type EventBody, type JournalEvent, type Usage } from './journal';
-import { DEFAULT_BUDGET, buildMessages } from './memory';
+import { frameAsOf } from './frame';
+import { DEFAULT_BUDGET, assemble, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { standing } from './owned';
@@ -12,7 +13,7 @@ import { saysTooLong } from './retry';
 import { clip } from '../body/text';
 import { asText } from './stemnote';
 import { put, reflect } from './agenda';
-import { OUTDATED_KIND, WHY_CHARS, outdatedStretches, type OutdatedData } from './links';
+import { OUTDATED_KIND, WHY_CHARS, outdatedStretches, type OutdatedData, laterNoteOf } from './links';
 import type { Past } from './past';
 
 // Sleep is when the agent forms its memories. While nothing is asked of it, it takes the oldest
@@ -321,6 +322,40 @@ export function parseMemory(reply: string, chars: number): Formed | { problem: s
 const span = (e: Episode): Pick<MemoryData, 'from' | 'to' | 'start' | 'end'> => ({ from: e.first, to: e.last, start: e.start, end: e.end });
 
 /**
+ * The journal as of the end of `episode`, which a memory of it is formed from. Only the journal up
+ * to the end of the episode: the memory is formed as of then. The memories of what came before it
+ * belong to that, wherever they were journaled: they are written when there is time, which is
+ * always later than what they are about. Only those about what came before it: a stretch
+ * remembered again, after its memory was withdrawn, is not shown what followed.
+ */
+export function asOfEvents(events: JournalEvent[], episode: Pick<Episode, 'from' | 'to'>): JournalEvent[] {
+  const place = new Map(events.map((e, i) => [e.id, i]));
+  const before = (named: unknown): boolean => typeof named === 'string' && (place.get(named) ?? Infinity) < episode.from;
+  const earlier = events.slice(episode.to).filter((e) => laterNoteOf(e, before));
+  return [...events.slice(0, episode.to), ...earlier];
+}
+
+/**
+ * The request a memory of `episode` is formed with. Asked of the database where the body has a
+ * past (`frameAsOf` in brain/frame.ts): the same request, with nothing of the journal read but the
+ * end of it that is shown. Made from `asOf` when there is no past, when the database cuts the
+ * conversation otherwise just now, or when asking it fails.
+ */
+function asOfRequest(d: SleepDeps, asOf: JournalEvent[], episode: Episode, budget: number, ask: string): ChatMessage[] {
+  const system = d.system();
+  const view = { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER };
+  if (d.asked?.by === 'store') {
+    try {
+      const placed = d.asked.episodes().find((e) => e.first === episode.first && e.last === episode.last && e.from === episode.from);
+      if (placed !== undefined) return assemble(frameAsOf(d.asked, placed, budget - system.toWellFormed().length, view), system, budget, undefined, view);
+    } catch (err) {
+      console.error(`[memory] the request for a memory was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return buildMessages(asOf, system, budget, undefined, view);
+}
+
+/**
  * Forms one memory: of the oldest episode that waits for one. Throws what the provider throws; a
  * failed request writes nothing, and the episode waits on.
  */
@@ -340,23 +375,10 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
 
   const chars = targetChars(episode.chars);
   let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  // Only the journal up to the end of the episode: the memory is formed as of then. The memories of
-  // what came before it belong to that, wherever they were journaled: they are written when there is
-  // time, which is always later than what they are about.
-  // Only those about what came before it: a stretch remembered again, after its memory was withdrawn, is not shown what followed.
-  const place = new Map(events.map((e, i) => [e.id, i]));
-  const before = (named: unknown): boolean => typeof named === 'string' && (place.get(named) ?? Infinity) < episode.from;
-  const earlier = events.slice(episode.to).filter((e) => {
-    if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) return false;
-    const about = e.data as { from?: unknown; episode?: unknown };
-    if (e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND || e.kind === MERGE_KIND) return before(about.from);
-    // A fact or an intention set down with a memory names its episode; one the agent made itself, in some later turn, is no part of what it knew then.
-    return (e.kind === FACT_KIND || e.kind === INTENTION_KIND || e.kind === DONE_KIND) && before(about.episode);
-  });
-  const asOf = [...events.slice(0, episode.to), ...earlier];
+  const asOf = asOfEvents(events, episode);
   const near = nearest(d.past, asOf, episode, lived);
   const ask = question(episode, lived, chars, near);
-  let messages: ChatMessage[] = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER });
+  let messages: ChatMessage[] = asOfRequest(d, asOf, episode, budget, ask);
   let usage: Usage | undefined;
   let problem = '';
   let halved = false;
@@ -370,7 +392,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       // Characters are only an estimate of tokens: once more with half, as a turn does.
       halved = true;
       budget = Math.floor(budget / 2);
-      messages = buildMessages(asOf, d.system(), budget, undefined, { ask, tailChars: 0, resultsChars: Number.MAX_SAFE_INTEGER });
+      messages = asOfRequest(d, asOf, episode, budget, ask);
       attempt -= 1;
       continue;
     }

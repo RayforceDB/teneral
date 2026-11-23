@@ -38,6 +38,8 @@ export interface Past {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in order. */
   notes(kinds: readonly string[]): JournalEvent[];
+  /** The same, each with its number (the place of its line, when the journal is read through). */
+  notesAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /**
    * What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts).
    * Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
@@ -190,6 +192,7 @@ export function journalPast(journal: string): Past {
       return lines.all().findLast((line) => line.event.type === type && (source === undefined || named(line.event) === source))?.event ?? null;
     },
     notes: (kinds) => lines.all().flatMap((line) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [line.event] : [])),
+    notesAt: (kinds) => lines.all().flatMap((line, seq) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [{ event: line.event, seq }] : [])),
     since(id) {
       const now = lines();
       if (tied?.seen !== now.length) tied = { seen: now.length, ties: tiesOf(links(now.map((line) => line.event))) };
@@ -315,6 +318,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     notes(kinds) {
       store.sync();
       return store.noted(kinds);
+    },
+    notesAt(kinds) {
+      store.sync();
+      return store.notedAt(kinds);
     },
     since(id) {
       store.sync();
@@ -500,6 +507,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     episodes: () => through((past) => past.episodes()),
     latest: (type, source) => through((past) => past.latest(type, source)),
     notes: (kinds) => through((past) => past.notes(kinds)),
+    notesAt: (kinds) => through((past) => past.notesAt(kinds)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => { again(); through((past) => past.sync()); },
