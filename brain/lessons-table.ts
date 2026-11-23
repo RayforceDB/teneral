@@ -9,6 +9,7 @@ import { boundAs, type Projection } from './store';
 //
 //   records   seq conversation within data
 //   current   id                              the events of the conversation being lived
+//   begun     seq id                          where every conversation began: which one was being lived at any earlier moment
 //   state     data                            how the cutting stands, and which conversation that is
 //
 // A lesson belongs to a conversation as the rules alone cut the journal, without regard to what
@@ -19,7 +20,7 @@ import { boundAs, type Projection } from './store';
 
 export const LESSONS = 'lessons';
 /** Changed with the step in brain/lessons.ts, with the rules of cutting (brain/episodes.ts), or with the columns below. */
-export const LESSONS_VERSION = 1;
+export const LESSONS_VERSION = 2;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });
@@ -29,6 +30,8 @@ const bools = (data: boolean[]): Column => ({ type: 'bool', data: Uint8Array.fro
 export function lessonsProjection(): Projection {
   let state: LessonState = lessonStart();
   let seqs: number[] = [];
+  let begun: { seq: number; id: string }[] = [];
+  let begunTable: Record<string, Column> | null = null;
   /** The table of records, made again only when one was added; the rest changes with every event. */
   let records: Record<string, Column> | null = null;
   let rest: Record<string, Record<string, Column>> | null = null;
@@ -36,9 +39,11 @@ export function lessonsProjection(): Projection {
     name: LESSONS,
     version: LESSONS_VERSION,
     standing: true,
-    reset() { state = lessonStart(); seqs = []; records = null; rest = null; },
+    reset() { state = lessonStart(); seqs = []; begun = []; begunTable = null; records = null; rest = null; },
     step(e: JournalEvent, seq: number): boolean {
+      const was = state.conversation;
       if (lessonStep(state, e)) { seqs.push(seq); records = null; }
+      if (state.conversation !== was) { begun.push({ seq, id: state.conversation }); begunTable = null; }
       rest = null;
       return true;
     },
@@ -48,7 +53,8 @@ export function lessonsProjection(): Projection {
         data: strs(state.records.map((r) => JSON.stringify(r.event))),
       };
       rest ??= { current: { id: strs(state.ids) }, state: { data: strs([JSON.stringify({ rules: state.rules, conversation: state.conversation })]) } };
-      return { records, ...rest };
+      begunTable ??= { seq: nums(begun.map((b) => b.seq)), id: strs(begun.map((b) => b.id)) };
+      return { records, begun: begunTable, ...rest };
     },
     restore(tables: Record<string, Table>) {
       state = lessonStart();
@@ -62,6 +68,9 @@ export function lessonsProjection(): Projection {
       seqs = rows.map((row) => row.seq);
       state.records = rows.map(({ event, conversation, within }) => ({ event, conversation, within }));
       state.ids = [...(tables.current?.columns.id as string[] | undefined ?? [])];
+      const at = tables.begun?.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+      begun = (tables.begun?.columns.id as string[] | undefined ?? []).map((id, i) => ({ seq: Number(at[i]), id })).sort((a, b) => a.seq - b.seq);
+      begunTable = null;
       const held = (tables.state?.columns.data as string[] | undefined)?.[0];
       if (held !== undefined) {
         const was = JSON.parse(held) as Pick<LessonState, 'rules' | 'conversation'>;
@@ -82,4 +91,18 @@ export function lessonsFrom(ray: Ray): { records: LessonRecord[]; conversation: 
   const held = (ray.table(`(select {from: ${boundAs(LESSONS, 'state')} data: data})`).columns.data as string[] | undefined)?.[0];
   const conversation = held === undefined ? '' : (JSON.parse(held) as { conversation: string }).conversation;
   return { records, conversation: conversation === '' ? undefined : conversation };
+}
+
+/** The conversation that was being lived just before the event numbered `seq`: the first event of it, or nothing when the journal began later. */
+export function conversationBefore(ray: Ray, seq: number): string | undefined {
+  const ids = ray.table(`(select {from: ${boundAs(LESSONS, 'begun')} where: (< seq ${seq}) desc: seq take: 1 id: id})`).columns.id as string[] | undefined;
+  return ids?.[0];
+}
+
+/** The notes about lessons written before the event numbered `seq`. */
+export function lessonsBefore(ray: Ray, seq: number): LessonRecord[] {
+  const t = ray.table(`(select {from: ${boundAs(LESSONS, 'records')} where: (< seq ${seq}) asc: seq conversation: conversation within: within data: data})`);
+  return (t.columns.data as string[] | undefined ?? []).map((cell, i): LessonRecord => ({
+    event: JSON.parse(cell) as JournalEvent, conversation: String((t.columns.conversation as string[])[i]), within: Boolean((t.columns.within as ArrayLike<unknown>)[i]),
+  }));
 }

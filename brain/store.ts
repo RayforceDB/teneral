@@ -179,6 +179,8 @@ export interface Store {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in the journal's order: `kinds` are names written in this repository, never anything that arrived. */
   noted(kinds: readonly string[]): JournalEvent[];
+  /** The same, each with its number. */
+  notedAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /** How many notes of these kinds there are: what changes when there is something new to read of them. */
   notedCount(kinds: readonly string[]): number;
   /** The conversation as it stands from the event numbered `seq` on and before the one numbered `end` (to the last, without it), in order: without what was said in a stretch the owner took back. */
@@ -217,6 +219,16 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
   const noted = (kinds: readonly string[]): JournalEvent[] => {
     if (!mounted || kinds.length === 0) return [];
     return eventsOf(ray.table(`(select {from: ${BOUND} where: ${ofKinds(kinds)} asc: off line: line})`));
+  };
+  const notedAt = (kinds: readonly string[]): { event: JournalEvent; seq: number }[] => {
+    if (!mounted || kinds.length === 0) return [];
+    const t = ray.table(`(select {from: ${BOUND} where: ${ofKinds(kinds)} asc: seq seq: seq line: line})`);
+    const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+    const out: { event: JournalEvent; seq: number }[] = [];
+    (t.columns.line as string[] | undefined ?? []).forEach((cell, i) => {
+      try { out.push({ event: JSON.parse(cell) as JournalEvent, seq: Number(seqs[i]) }); } catch { /* a cell that is no event: as a line that is none */ }
+    });
+    return out;
   };
   const notedCount = (kinds: readonly string[]): number => {
     if (!mounted || kinds.length === 0) return 0;
@@ -547,6 +559,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       return event ?? null;
     },
     noted,
+    notedAt,
     notedCount,
     rebuilt,
   };

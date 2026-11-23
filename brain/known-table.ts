@@ -15,10 +15,14 @@ import { boundAs, type Projection } from './store';
 //   facts        seq id at text source about episode standing data
 //   intentions   seq id at text origin due waits open closed ended data
 //   gone         id
+//   puts         seq data          the replies that put to the owner something that waited, each as a reply holding only the marks it put
+//
+// What was known at an earlier moment is the same step taken over the notes up to then and those
+// replies (`knownBefore`): of every other reply the step reads nothing.
 
 export const KNOWN = 'known';
 /** Changed with the step in brain/known.ts or with the columns below. */
-export const KNOWN_VERSION = 1;
+export const KNOWN_VERSION = 2;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const syms = (data: string[]): Column => ({ type: 'sym', data });
@@ -32,12 +36,14 @@ export function knownProjection(): Projection {
   let seqs = new Map<string, number>();
   /** The tables as they were last made: the same objects until something changes, so that they are not sent or written again for nothing. */
   let made: Record<string, Record<string, Column>> | null = null;
+  let puts: { seq: number; data: string }[] = [];
   return {
     name: KNOWN,
     version: KNOWN_VERSION,
     reset() {
       state = knownStart();
       seqs = new Map();
+      puts = [];
       made = null;
     },
     step(e: JournalEvent, seq: number): boolean {
@@ -45,6 +51,11 @@ export function knownProjection(): Projection {
       const changed = knownStep(state, e);
       // A fact or an intention is set down by the note that has its id.
       if (state.facts.size !== facts || state.intentions.size !== intentions) seqs.set(e.id, seq);
+      if (changed && e.type === 'assistant') {
+        // Only what this reply put: what waited, was open, and was put at this very time.
+        const marks = [...state.intentions.values()].filter((i) => i.waits && i.ended === undefined && i.putAt === e.ts).map((i) => i.mark);
+        puts.push({ seq, data: JSON.stringify({ v: e.v, id: e.id, ts: e.ts, gen: e.gen, type: 'assistant', text: marks.join(' '), toolCalls: [] }) });
+      }
       if (changed) made = null;
       return changed;
     },
@@ -66,6 +77,7 @@ export function knownProjection(): Projection {
           data: strs(intentions.map((i) => JSON.stringify(i))),
         },
         gone: { id: strs([...state.gone]) },
+        puts: { seq: nums(puts.map((p) => p.seq)), data: strs(puts.map((p) => p.data)) },
       };
       return made;
     },
@@ -81,6 +93,8 @@ export function knownProjection(): Projection {
       for (const { item, seq } of rows<Fact>(tables.facts)) { state.facts.set(item.id, item); seqs.set(item.id, seq); }
       for (const { item, seq } of rows<Intention>(tables.intentions)) { state.intentions.set(item.id, item); seqs.set(item.id, seq); }
       for (const id of tables.gone?.columns.id as string[] | undefined ?? []) state.gone.add(id);
+      const at = tables.puts?.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+      puts = (tables.puts?.columns.data as string[] | undefined ?? []).map((data, i) => ({ seq: Number(at[i]), data })).sort((a, b) => a.seq - b.seq);
     },
   };
 }
@@ -94,3 +108,10 @@ export function knownFrom(ray: Ray): Known {
 
 /** The same from a state held in memory: what a journal read through gives. */
 export { knownOf };
+
+/** The replies that put something to the owner, each with its number, as replies holding only the marks they put. */
+export function putsFrom(ray: Ray): { event: JournalEvent; seq: number }[] {
+  const t = ray.table(`(select {from: ${boundAs(KNOWN, 'puts')} asc: seq seq: seq data: data})`);
+  const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+  return (t.columns.data as string[] | undefined ?? []).map((cell, i) => ({ event: JSON.parse(cell) as JournalEvent, seq: Number(seqs[i]) }));
+}

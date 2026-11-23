@@ -1,5 +1,6 @@
 import { splitMarkers } from '../body/images';
 import { eventChars, shownChars } from './episodes';
+import { idleStart, idleStep, type IdleState } from './idle';
 import type { JournalEvent } from './journal';
 import { OWNER_PREFIX, fromOwner } from './owned';
 import { asText } from './stemnote';
@@ -79,8 +80,12 @@ export function answers(events: JournalEvent[], at: number): { results: Map<unkn
  * stretches before a point, it is what a request that begins there must know of what it does not
  * show. The tables of the database hold the same of every episode (brain/memory-table.ts).
  */
-export function counted<T extends { from: number; to: number }>(events: JournalEvent[], cut: T[]): (T & { chars: number; shown: number; calls: number; slots: number })[] {
+export function counted<T extends { from: number; to: number }>(events: JournalEvent[], cut: T[]): (T & { chars: number; shown: number; calls: number; slots: number; idle: IdleState })[] {
+  // How the count of idle ticks stands at the end of each stretch: counted from the first event, the stretches being in order.
+  const idle = idleStart();
+  let counted = 0;
   return cut.map((stretch) => {
+    for (; counted < stretch.to; counted++) idleStep(idle, events[counted]!);
     let chars = 0, shown = 0, calls = 0, slots = 0;
     for (let i = stretch.from; i < stretch.to; i++) {
       const e = events[i]!;
@@ -98,6 +103,6 @@ export function counted<T extends { from: number; to: number }>(events: JournalE
         }
       }
     }
-    return { ...stretch, chars, shown, calls, slots };
+    return { ...stretch, chars, shown, calls, slots, idle: { ...idle } };
   });
 }

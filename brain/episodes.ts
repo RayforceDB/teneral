@@ -108,11 +108,13 @@ export interface Slim {
   calls: number;
   /** Whether it asks for a turn. */
   asks: boolean;
+  /** Whether it is a tick of the clock. */
+  clock: boolean;
 }
 
 export function slimOf(e: JournalEvent): Slim {
   const calls = e.type === 'assistant' ? (e as { toolCalls?: unknown }).toolCalls : undefined;
-  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), shown: shownChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e) };
+  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), shown: shownChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e), clock: e.type === 'stimulus' && (e as { source?: unknown }).source === 'clock' };
 }
 
 /**
