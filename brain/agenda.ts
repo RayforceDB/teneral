@@ -1,7 +1,8 @@
 import { appendEvent, type EventBody, type JournalEvent, type Usage } from './journal';
 import { DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, type Intention, type IntentionData, type Known, type WorkState } from './known';
 import { MEMORY_MARK } from './logbook';
-import { DEFAULT_BUDGET, buildMessages } from './memory';
+import { requestFrom } from './frame';
+import { DEFAULT_BUDGET } from './memory';
 import type { ChatMessage } from './provider';
 import { EPISODE_KIND } from './remembered';
 import { QUIET_REPLY, ROUND_LIMIT_REPLY } from './quiet';
@@ -262,7 +263,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
   if (!now && !reflectionDue(events)) return 'nothing';
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events)), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events)), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;
@@ -594,7 +595,7 @@ const cutShort = (events: JournalEvent[]): boolean => {
 export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.now()): Promise<Slept> {
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: settleQuestion(cutShort(events)), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: settleQuestion(cutShort(events)), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;

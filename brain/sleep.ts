@@ -84,6 +84,8 @@ export interface SleepDeps {
   append?: (body: EventBody) => void;
   /** The agent's past, to find the earlier memories nearest to a new one (see `nearest`). Without it none is shown, and none is said to be outdated. */
   past?: Pick<Past, 'find'>;
+  /** The past whole, where the body has one: the requests that look over the agenda are asked of it (`requestFrom` in brain/frame.ts). */
+  asked?: Past;
 }
 
 /** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `reflected`: the agent looked over what it is doing (brain/agenda.ts). `woken`: something arrived first, and nothing was written. */

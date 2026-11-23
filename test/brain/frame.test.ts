@@ -10,7 +10,7 @@ import { known, knownText } from '../../brain/known';
 import { lessons } from '../../brain/lessons';
 import { remembered } from '../../brain/remembered';
 import type { Tool, ToolContext } from '../../body/tools';
-import { frameFrom } from '../../brain/frame';
+import { frameFrom, requestFrom } from '../../brain/frame';
 import { runTurn } from '../../brain/loop';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
 import { idleStart, idleStep, idleOf } from '../../brain/idle';
@@ -250,6 +250,9 @@ real('the request assembled from what the database holds is the request assemble
   const end = past.count();
   expect(end).toBe(all.length + 3);
   appendFileSync(journal, line(ev({ type: 'note', kind: SHOWN_KIND, data: { through: tail[1]!.id } })));
+  // The same asked for by the events a reader holds: up to the last of them, whatever the journal has gained since.
+  expect(requestFrom(past, [...all, pin, ...tail], 'S', 30_000, undefined, { tailChars: 2_000, ask: 'What now?' })).toEqual(buildMessages([...all, pin, ...tail], 'S', 30_000, undefined, { tailChars: 2_000, ask: 'What now?' }));
+  expect(requestFrom(undefined, all, 'S', 30_000, undefined, {})).toEqual(buildMessages(all, 'S', 30_000));
   for (const from of [past, journalPast(journal)]) {
     expect(from.count()).toBe(end + 1);
     expect(assemble(frameFrom(from, 29_999, { tailChars: 2_000 }, false, end), 'S', 30_000, undefined, { tailChars: 2_000 })).toEqual(buildMessages([...all, pin, ...tail], 'S', 30_000, undefined, { tailChars: 2_000 }));

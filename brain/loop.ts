@@ -2,9 +2,9 @@ import { QUESTION_MAX, QUESTION_MIN, REMINDED_KIND, type Reminder } from './remi
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
-import { frameFrom } from './frame';
+import { requestFrom } from './frame';
 import type { ChatMessage } from './provider';
-import { DEFAULT_BUDGET, assemble, buildMessages, stemNote, type Sight } from './memory';
+import { DEFAULT_BUDGET, stemNote, type Sight, type View } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
 import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, SAME_REQUEST_REPLY, quietReply } from './quiet';
@@ -162,26 +162,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   let continued = false;
   const route = d.imageRoute;
   const journal = turnJournal(d.journal);
-  /**
-   * The request for `events`, which is the journal up to some event. Asked of the database where
-   * the turn has a past (brain/frame.ts): the same request, made from the last part of the
-   * conversation and what the tables hold of the rest. Made from `events` themselves when there is
-   * no past, or when asking it fails: a turn is not lost to the database.
-   */
-  const request = (events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: Parameters<typeof buildMessages>[4]): ChatMessage[] => {
-    const past = d.ctx.past;
-    const last = events.at(-1)?.id;
-    if (past !== undefined && last !== undefined) {
-      try {
-        // Up to the last of `events`, whatever was journaled since: the turn's own mark of what was shown, or something that arrived just now.
-        const at = past.places([last]).get(last);
-        if (at !== undefined) return assemble(frameFrom(past, budgetChars - system.toWellFormed().length, view, sight !== undefined, at + 1), system, budgetChars, sight, view);
-      } catch (err) {
-        console.error(`[memory] the request was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    return buildMessages(events, system, budgetChars, sight, view);
-  };
+  const request = (events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View): ChatMessage[] => requestFrom(d.ctx.past, events, system, budgetChars, sight, view);
   // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
   const quietTick = mayStayQuiet(journal.read().findLast(e => e.type === 'stimulus')?.source);
