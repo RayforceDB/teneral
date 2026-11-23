@@ -1,6 +1,6 @@
 import type { JournalEvent } from '../brain/journal';
 import { toRayNs, type Column, type Ray, type Table } from '../brain/ray';
-import { contacts } from './participants';
+import { contacts, CONTACT_KIND } from './participants';
 
 // The community the agent lives in, laid out for asking questions of. Every message the chat
 // layer hears, on any service, is journaled as one small note: who said it, where, how it
@@ -106,6 +106,9 @@ const str = (cells: unknown, i: number): string => String((cells as ArrayLike<un
 /** The names the table and what is asked of it are bound to in the database. */
 const TABLE = 'com_heard', ASKED = 'com_asked', CIRCLES = 'com_circles';
 
+/** The kinds of notes the community is made from. Asked for, not set down once: this file and the one the contacts are in read each other. */
+export const communityReads = (): readonly string[] => [HEARD_KIND, CONTACT_KIND];
+
 export function openCommunity(ray: Ray | null, events: JournalEvent[] = [], clock: () => number = Date.now): Community {
   const rows: Row[] = [];
   const seen = new Set<string>();
@@ -143,7 +146,10 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = [], cloc
     rows.push(row);
   }
 
-  function refresh(all: JournalEvent[]): void {
+  function refresh(given: JournalEvent[]): void {
+    // Only what was heard and the contacts are read (`communityReads`), and how far the reading has got is counted in
+    // those: so the whole journal and its notes of these kinds alone, handed over in any mixture, come to the same.
+    const all = given.filter((e) => e.type === 'note' && communityReads().includes(e.kind));
     for (; taken < all.length; taken++) take(all[taken]!);
     // The circles are the owner's to change at any moment: a few notes, read again each time.
     const held = contacts(all);

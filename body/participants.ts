@@ -190,9 +190,8 @@ export function knownOf(facts: Fact[], name: string): Fact[] {
  * Who is speaking, for the end of a stimulus: each participant with what kind they are and what
  * the agent knows of them. `fresh` are those met in this very message.
  */
-export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = [], community?: Pick<Community, 'indicators'> & Partial<Pick<Community, 'standing'>>): string {
+export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = [], community?: Pick<Community, 'indicators'> & Partial<Pick<Community, 'standing'>>, facts: Fact[] = known(standing(events)).facts): string {
   if (speakers.length === 0) return '';
-  const facts = known(standing(events)).facts;
   const held = contacts(events);
   const rows = speakers.map((p) => {
     const kind = p.bot === true ? 'a bot' : p.bot === false ? 'not a bot, by the service' : 'kind not known';

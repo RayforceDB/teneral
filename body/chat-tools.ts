@@ -1,3 +1,4 @@
+import type { Past } from '../brain/past';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
 import { openCommunity, tieWord, type Community } from './community';
@@ -445,12 +446,22 @@ export const QUIET_RUN = 12;
  * it chooses otherwise. Counted from the journal, with no model asked.
  */
 export function modeOf(events: JournalEvent[], service: string, channel: { id: string; name: string }): { mode: Mode; why: 'chosen' | 'quiet' | 'default' } {
+  return chosenMode(events, service, channel) ?? quietRun(events, service, channel);
+}
+
+/** What the agent last chose for the channel, read in its notes of that; null when it never chose. */
+export function chosenMode(events: JournalEvent[], service: string, channel: { id: string; name: string }): { mode: Mode; why: 'chosen' } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.type !== 'note' || e.kind !== ATTENTION_KIND || typeof e.data !== 'object' || e.data === null) continue;
     const d = e.data as Record<string, unknown>;
     if (d.service === service && (d.channel === channel.id || d.channel === channel.name) && (d.mode === 'ambient' || d.mode === 'mentions' || d.mode === 'muted')) return { mode: d.mode, why: 'chosen' };
   }
+  return null;
+}
+
+/** What the agent's own behaviour shows: read back from the end of the journal to the newest wake for this channel's talk that was answered, or to enough silent ones. */
+export function quietRun(events: JournalEvent[], service: string, channel: { id: string; name: string }): { mode: Mode; why: 'quiet' | 'default' } {
   const mark = memberOf(channel.name);
   // What a glance settled as nothing to say was no wake: it cost no turn, and is no sign that the agent has nothing to say here (heart/glance.ts).
   const glanced = new Set<number>();
@@ -482,6 +493,18 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
 }
 
 /**
+ * `modeOf` asked of the past: the agent's choice in its notes, and failing that its behaviour as
+ * the table of wakes holds it (brain/wakes-table.ts), where the database finds the channel's
+ * newest wakes and counts the silent ones.
+ */
+export function modeFrom(past: Past, service: string, channel: { id: string; name: string }): { mode: Mode; why: 'chosen' | 'quiet' | 'default' } {
+  const chosen = chosenMode(past.notes([ATTENTION_KIND]), service, channel);
+  if (chosen !== null) return chosen;
+  // One question: of the newest wakes for this channel's talk, were enough in a row answered with silence.
+  return past.quiet(`agent:${service}`, memberOf(channel.name), QUIET_RUN) ? { mode: 'mentions', why: 'quiet' } : { mode: 'ambient', why: 'default' };
+}
+
+/**
  * Sees to it that a channel the agent takes part in is one it hears: where the service sends a
  * channel's ordinary talk only on request and is not sending it, it is asked to, unless the agent
  * chose to hear nothing there. True when it asked. For a service with no such notion, nothing.
@@ -489,7 +512,8 @@ export function modeOf(events: JournalEvent[], service: string, channel: { id: s
 export async function ensureHeard(ctx: ToolContext, serviceName: string, channel: string, events: JournalEvent[]): Promise<boolean> {
   const service = services.get(serviceName);
   if (service?.listen === undefined || service.hears === undefined) return false;
-  if (modeOf(events, serviceName, { id: channel, name: channel }).mode === 'muted') return false;
+  // Only a choice of the agent's own mutes a channel: `events` may be its notes of that alone.
+  if (chosenMode(events, serviceName, { id: channel, name: channel })?.mode === 'muted') return false;
   if (await service.hears(ctx, channel) !== false) return false;
   await service.listen(ctx, channel, true);
   return true;

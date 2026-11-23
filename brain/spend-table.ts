@@ -6,16 +6,16 @@ import { boundAs, type Projection } from './store';
 // What the agent's own time cost, as a table of the database: a row for every reply in a turn the
 // clock began and every subagent started in one, with when it was and the tokens it took.
 //
-//   spent   seq at tokens
+//   spent   seq ms tokens
 //   state   data              whether the turn being lived is of its own time, and the subagents begun in such turns
 //
 // The owner allows a day so much for time of the agent's own; what the last day cost is a sum
-// over the rows of that day (`ownSpentSince`), where it was a reading of the whole journal. Of
+// over the rows of that day, summed by the database (`ownSpentSince`), where it was a reading of the whole journal. Of
 // everything the journal holds: what was spent in a conversation taken back was spent.
 
 export const SPEND = 'spend';
 /** Changed with the step in brain/idle.ts or with the columns below. */
-export const SPEND_VERSION = 1;
+export const SPEND_VERSION = 2;
 
 /** The cost of the agent's own time, kept in tables. The store drives it (brain/store.ts). */
 export function spendProjection(): Projection {
@@ -38,7 +38,7 @@ export function spendProjection(): Projection {
     },
     tables() {
       made ??= {
-        spent: { seq: nums(rows.map((r) => r.seq)), at: nums(rows.map((r) => r.at)), tokens: nums(rows.map((r) => r.tokens)) },
+        spent: { seq: nums(rows.map((r) => r.seq)), ms: nums(rows.map((r) => r.at)), tokens: nums(rows.map((r) => r.tokens)) },
         state: { data: { type: 'str', data: [JSON.stringify(state)] } },
       };
       return made;
@@ -46,7 +46,7 @@ export function spendProjection(): Projection {
     restore(tables: Record<string, Table>) {
       made = null;
       const t = tables.spent;
-      rows = Array.from({ length: t?.rows ?? 0 }, (_, i) => ({ seq: Number((t!.columns.seq as BigInt64Array)[i]), at: Number((t!.columns.at as BigInt64Array)[i]), tokens: Number((t!.columns.tokens as BigInt64Array)[i]) }))
+      rows = Array.from({ length: t?.rows ?? 0 }, (_, i) => ({ seq: Number((t!.columns.seq as BigInt64Array)[i]), at: Number((t!.columns.ms as BigInt64Array)[i]), tokens: Number((t!.columns.tokens as BigInt64Array)[i]) }))
         .sort((a, b) => a.seq - b.seq);
       const held = (tables.state?.columns.data as string[] | undefined)?.[0];
       state = held === undefined ? ownStart() : JSON.parse(held) as OwnState;
@@ -56,8 +56,6 @@ export function spendProjection(): Projection {
 
 /** The tokens the agent's own time took from the moment `since` on (milliseconds): `ownSpend` of brain/agenda.ts for the day before now. */
 export function ownSpentSince(ray: Ray, since: number): number {
-  const tokens = ray.table(`(select {from: ${boundAs(SPEND, 'spent')} where: (>= at ${Math.trunc(since)}) tokens: tokens})`).columns.tokens as BigInt64Array | undefined ?? new BigInt64Array(0);
-  let sum = 0;
-  for (const n of tokens) sum += Number(n);
-  return sum;
+  const spent = ray.table(`(select {from: ${boundAs(SPEND, 'spent')} where: (>= ms ${Math.trunc(since)}) spent: (sum tokens)})`).columns.spent as BigInt64Array | undefined;
+  return Number(spent?.[0] ?? 0);
 }

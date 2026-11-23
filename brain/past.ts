@@ -11,6 +11,7 @@ import { acceptanceNotes } from './acceptance';
 import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
 import { idleTicks, ownStart, ownStep } from './idle';
 import { ownSpentSince, spendProjection } from './spend-table';
+import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonsProjection } from './lessons-table';
 import { counted } from './wire';
@@ -60,6 +61,8 @@ export interface Past {
   count(): number;
   /** How the conversation stands in what is asked between turns: idle clock ticks in a row, when the owner last spoke and the clock last ticked ('' when never), and the number of the event a reading for the next report begins at. */
   stands(): Stands;
+  /** Whether the newest `run` wakes from `source` that carry `mark` (the words naming a channel) and that no glance settled were all answered with silence (brain/wakes-table.ts). */
+  quiet(source: string, mark: string, run: number): boolean;
   /** The tokens the agent's own time took from `since` on, in milliseconds (`ownSpend` in brain/agenda.ts). */
   ownSpent(since: number): number;
   /** What the stem's acceptance of a species commit says to the agent, by the id of the event that records it (brain/acceptance.ts). */
@@ -111,7 +114,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection(), wakesProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -203,6 +206,11 @@ export function journalPast(journal: string): Past {
         idle: idleTicks(events), owner: events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source))?.ts ?? '',
         clock: events.findLast((e) => e.type === 'stimulus' && e.source === 'clock')?.ts ?? '', report: 0,
       };
+    },
+    quiet(source, mark, run) {
+      const state = wakeStart();
+      lines.all().forEach((line, seq) => { wakeStep(state, line.event, seq); });
+      return quietOf(state.wakes, source, mark, run);
     },
     ownSpent(since) {
       const state = ownStart();
@@ -358,6 +366,11 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.sync();
       store.settle();
       return ownSpentSince(ray, since);
+    },
+    quiet(source, mark, run) {
+      store.sync();
+      store.settle();
+      return quietFrom(ray, source, mark, run);
     },
     places(ids) {
       store.sync();
@@ -577,6 +590,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     accepted: () => through((past) => past.accepted()),
     stands: () => through((past) => past.stands()),
     ownSpent: (since) => through((past) => past.ownSpent(since)),
+    quiet: (source, mark, run) => through((past) => past.quiet(source, mark, run)),
     places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),
