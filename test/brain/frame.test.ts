@@ -7,6 +7,9 @@ import { acceptedSince, frameProjection, namesBefore } from '../../brain/frame-t
 import { episodesFrom, memoryProjection } from '../../brain/memory-table';
 import { standing } from '../../brain/owned';
 import { remembered } from '../../brain/remembered';
+import { frameFrom } from '../../brain/frame';
+import { idleStart, idleStep, idleOf } from '../../brain/idle';
+import { journalPast, projections, storePast } from '../../brain/past';
 import { openStore } from '../../brain/store';
 import { library, ray } from './rayforce';
 import { GAP_MS, episodes } from '../../brain/episodes';
@@ -203,3 +206,76 @@ real('the database holds them, through a restart in the middle of a reply and a 
     same(stops[i]!);
   }
 }, 60_000);
+
+real('the request assembled from what the database holds is the request assembled from the journal', () => {
+  const all = fuller();
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-frame-')), 'journal.jsonl');
+  let narrowed = 0;
+  const same = (events: JournalEvent[]): void => {
+    const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+    const read = journalPast(journal);
+    for (const budget of [12_000, 30_000, 400_000]) {
+      for (const view of [{}, { tailChars: 2_000 }, { tailChars: 9_000, logbookChars: 1_500 }, { tailChars: 0 }, { tailChars: 4_000, ask: 'What do you make of it?' }]) {
+        for (const see of [undefined, sight]) {
+          const frame = frameFrom(past, budget - 1, view, see !== undefined);
+          if (frame.first > 0) narrowed += 1;
+          const want = buildMessages(events, 'S', budget, see, view);
+          expect(assemble(frame, 'S', budget, see, view)).toEqual(want);
+          // And with no database at hand.
+          expect(assemble(frameFrom(read, budget - 1, view, see !== undefined), 'S', budget, see, view)).toEqual(want);
+        }
+      }
+    }
+  };
+  let had = 0;
+  for (const upTo of [150, all.length - 9, all.length - 6, all.length - 3, all.length]) {
+    appendFileSync(journal, all.slice(had, upTo).map(line).join(''));
+    had = upTo;
+    same(all.slice(0, upTo));
+  }
+  expect(narrowed).toBeGreaterThan(40);
+  // A pinned stretch among what is told as memories: it is shown as it happened, so everything is at hand.
+  const pin = ev({ type: 'note', kind: 'memory.pin.v1', data: { event: all[3]!.id } });
+  appendFileSync(journal, line(pin));
+  same([...all, pin]);
+  // A request made again in a turn that has written its mark of what was shown: read up to that mark, it is the request made before it.
+  const tail = [ev({ type: 'stimulus', source: 'terminal', text: 'one thing more' }, LONG), ev({ type: 'assistant', text: 'cut [this reply was cut off by the provider: length]', toolCalls: [] })];
+  appendFileSync(journal, tail.map(line).join(''));
+  const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+  const end = past.count();
+  expect(end).toBe(all.length + 3);
+  appendFileSync(journal, line(ev({ type: 'note', kind: SHOWN_KIND, data: { through: tail[1]!.id } })));
+  for (const from of [past, journalPast(journal)]) {
+    expect(from.count()).toBe(end + 1);
+    expect(assemble(frameFrom(from, 29_999, { tailChars: 2_000 }, false, end), 'S', 30_000, undefined, { tailChars: 2_000 })).toEqual(buildMessages([...all, pin, ...tail], 'S', 30_000, undefined, { tailChars: 2_000 }));
+  }
+}, 120_000);
+
+test('idle ticks counted event by event are the ticks counted from the end', () => {
+  // As it was counted before: back from the end.
+  const backwards = (events: JournalEvent[]): number => {
+    let idle = 0, worked = false, answered = false;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]!;
+      if (e.type === 'assistant') { answered = true; if (e.toolCalls.length > 0) worked = true; }
+      else if (e.type === 'stimulus') {
+        if (e.source === 'clock') { if (worked) break; if (answered) idle += 1; }
+        worked = false; answered = false;
+      }
+    }
+    return idle;
+  };
+  let seed = 7;
+  const next = (): number => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const events: JournalEvent[] = [];
+  const state = idleStart();
+  for (let i = 0; i < 3000; i++) {
+    const r = next();
+    const e = r < 0.25 ? ev({ type: 'stimulus', source: 'clock', text: 'tick' }) : r < 0.32 ? ev({ type: 'stimulus', source: 'terminal', text: 'hello' })
+      : r < 0.7 ? ev({ type: 'assistant', text: 'nothing to do', toolCalls: [] }) : r < 0.8 ? ev({ type: 'assistant', text: '', toolCalls: [{ id: 'a', name: 'bash', args: {} }] })
+        : ev({ type: 'tool.result', callId: 'a', ok: true, output: 'x' });
+    events.push(e);
+    idleStep(state, e);
+    expect(idleOf(state)).toBe(backwards(events));
+  }
+});

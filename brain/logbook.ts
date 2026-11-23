@@ -3,8 +3,8 @@ import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { imageChars } from '../body/images';
 import { episodes, shownChars, type Episode } from './episodes';
-import { health, healthNote } from './health';
-import { known, knownText } from './known';
+import { health, healthNote, type Health } from './health';
+import { known, knownText, type Known } from './known';
 import { pinned } from './owned';
 import { lessonText } from './lessons';
 import { outdatedStretches } from './links';
@@ -223,12 +223,16 @@ export interface Head {
   outdated: Map<string, { why: string; since: string }>;
 }
 
+/** What the agent knows, the lessons that bear on now and how its memory stands, as one text; '' when there is nothing to show. */
+export function knowingOf(known: Known, last: string, lessons: string | null, health: Health): string {
+  return [knownText(known, last.slice(0, 10), MEMORY_MARK), lessons, healthNote(health, MEMORY_MARK)].filter((text) => text !== null).join('\n');
+}
+
 /** The head of a journal that is held whole. `events` is the conversation as it stands. */
 export function headOf(events: JournalEvent[]): Head {
   const last = events.at(-1)?.ts ?? '';
   // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
-  const ill = healthNote(health(events, Date.parse(last) || 0), MEMORY_MARK);
-  const knowing = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
+  const knowing = knowingOf(known(events), last, lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), health(events, Date.parse(last) || 0));
   const told = remembered(events);
   const cut = told.spans.length === 0 ? [] : episodes(events, told.spans).filter((e) => e.why === 'kept');
   const lies: number[] = [];

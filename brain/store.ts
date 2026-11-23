@@ -181,6 +181,10 @@ export interface Store {
   noted(kinds: readonly string[]): JournalEvent[];
   /** How many notes of these kinds there are: what changes when there is something new to read of them. */
   notedCount(kinds: readonly string[]): number;
+  /** The conversation as it stands from the event numbered `seq` on and before the one numbered `end` (to the last, without it), in order: without what was said in a stretch the owner took back. */
+  standingFrom(seq: number, end?: number): JournalEvent[];
+  /** The numbers of the events with these ids, of those that stand; the latest when an id was written twice. */
+  places(ids: string[]): Map<string, number>;
   /** Whether the store was thrown away and built again when it was opened, and why. */
   rebuilt: string | null;
 }
@@ -511,6 +515,24 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       if (!mounted || !Number.isSafeInteger(off) || off < 0) return null;
       const [event] = eventsOf(ray.table(`(select {from: ${BOUND} where: (== off ${off}) line: line})`));
       return event ?? null;
+    },
+    standingFrom(seq, end) {
+      const out: JournalEvent[] = [];
+      if (!mounted) return out;
+      const from = Number.isSafeInteger(seq) && seq > 0 ? seq : 0;
+      replay(from, (e, at) => { if ((end === undefined || at < end) && !setAside(at, e)) out.push(e); });
+      return out;
+    },
+    places(ids) {
+      const out = new Map<string, number>();
+      if (!mounted || ids.length === 0) return out;
+      ray.bind(ASKED, { ids: { type: 'str', data: ids } });
+      const t = ray.table(`(select {from: ${BOUND} where: (in id (at ${ASKED} 'ids)) asc: seq seq: seq id: id type: type})`);
+      const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+      const found = t.columns.id as string[] | undefined ?? [];
+      const types = t.columns.type as string[] | undefined ?? [];
+      found.forEach((id, i) => { if (!setAside(Number(seqs[i]), { type: types[i] } as JournalEvent)) out.set(id, Number(seqs[i])); });
+      return out;
     },
     stretch(from, to) {
       if (!mounted || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) return [];

@@ -8,7 +8,7 @@ import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from '
 import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { frameProjection } from './frame-table';
-import { knownFrom, knownProjection } from './known-table';
+import { KNOWN, KNOWN_STANDING, knownFrom, knownProjection } from './known-table';
 import { counted } from './wire';
 import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
@@ -37,8 +37,17 @@ export interface Past {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in order. */
   notes(kinds: readonly string[]): JournalEvent[];
-  /** What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts). */
-  known(): Known;
+  /**
+   * What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts).
+   * Of everything the journal holds; with `standing`, of the conversation as it stands, which is how a request reads it.
+   */
+  known(standing?: boolean): Known;
+  /** The conversation as it stands from the event numbered `seq` on (the place of its line, when the journal is read through) and before the one numbered `end`. */
+  standingFrom(seq: number, end?: number): JournalEvent[];
+  /** How many events the journal holds: the number the next one will have. */
+  count(): number;
+  /** The numbers of the events with these ids, of those that stand. */
+  places(ids: string[]): Map<string, number>;
   /** What is remembered: the memories, the stretches no memory could be formed of, and the wider memories (brain/remembered.ts). */
   remembered(): Remembered;
   /** The conversation as it stands, cut into episodes, each with the numbers of its events in the database (the place after the last for `toSeq`). */
@@ -84,7 +93,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection()];
+export const projections = (): Projection[] => [knownProjection(), knownProjection(KNOWN_STANDING), memoryProjection(), tiesProjection(), frameProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -162,7 +171,19 @@ export function journalPast(journal: string): Past {
       return counted(events, episodes(events, remembered(events).spans)).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
     },
     // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
-    known: () => known(lines.all().map((line) => line.event)),
+    known: (stands) => known((stands === true ? lines() : lines.all()).map((line) => line.event)),
+    standingFrom(seq, end) {
+      const stands = new Set(lines());
+      return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
+    },
+    count: () => lines.all().length,
+    places(ids) {
+      const wanted = new Set(ids);
+      const stands = new Set(lines());
+      const out = new Map<string, number>();
+      lines.all().forEach((line, i) => { if (wanted.has(line.event.id) && stands.has(line)) out.set(line.event.id, i); });
+      return out;
+    },
     latest(type, source) {
       const named = (e: JournalEvent): unknown => (e.type === 'stimulus' ? (e as { source?: unknown }).source : e.type === 'tool.intent' ? (e as { name?: unknown }).name : e.type === 'note' ? e.kind : '');
       return lines.all().findLast((line) => line.event.type === type && (source === undefined || named(line.event) === source))?.event ?? null;
@@ -269,10 +290,22 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.settle();
       return episodesFrom(ray);
     },
-    known() {
+    known(stands) {
       store.sync();
       store.settle();
-      return knownFrom(ray);
+      return knownFrom(ray, stands === true ? KNOWN_STANDING : KNOWN);
+    },
+    standingFrom(seq, end) {
+      store.sync();
+      return store.standingFrom(seq, end);
+    },
+    count() {
+      store.sync();
+      return store.count();
+    },
+    places(ids) {
+      store.sync();
+      return store.places(ids);
     },
     latest(type, source) {
       store.sync();
@@ -458,7 +491,10 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     get ray() { return fell ? undefined : served.ray; },
     find: (question, options) => through((past) => past.find(question, options)),
     since: (id) => through((past) => past.since(id)),
-    known: () => through((past) => past.known()),
+    known: (stands) => through((past) => past.known(stands)),
+    standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
+    count: () => through((past) => past.count()),
+    places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),
     latest: (type, source) => through((past) => past.latest(type, source)),

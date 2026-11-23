@@ -75,31 +75,8 @@ export function ownWake(source: string, text: string, held: Pick<Known, 'intenti
   return item?.origin === 'own' && (item.unsure !== true || item.allowed !== undefined);
 }
 
-/**
- * How many of the latest clock ticks in a row ended with nothing done: no tool was called between
- * the tick and whatever arrived next. A tick still being answered is not counted.
- */
-export function idleTicks(events: JournalEvent[]): number {
-  let idle = 0;
-  let worked = false;
-  let answered = false;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type === 'assistant') {
-      answered = true;
-      if (Array.isArray(e.toolCalls) && e.toolCalls.length > 0) worked = true;
-    } else if (e.type === 'stimulus') {
-      if (e.source === 'clock') {
-        if (worked) break;
-        if (answered) idle += 1;
-      }
-      // What followed something else is no part of how a tick ended.
-      worked = false;
-      answered = false;
-    }
-  }
-  return idle;
-}
+export { idleOf, idleStart, idleStep, idleTicks, type IdleState } from './idle';
+import { idleTicks } from './idle';
 
 /**
  * What the agent's initiative has come to, counted from the journal with no model asked. A memory
