@@ -7,7 +7,8 @@ import { RECENT, lessonPlaces, lessonTextOf, lessonsOf } from './lessons';
 import { lessonsFrom } from './lessons-table';
 import { LINK_NOTES, outdatedStretches } from './links';
 import { MEMORY_MARK, knowingOf, swapped, type Head, type Sizes } from './logbook';
-import { OVERLAP_EPISODES, frameOf, narrow, type Frame } from './memory';
+import { OVERLAP_EPISODES, assemble, buildMessages, frameOf, narrow, type Frame, type Sight, type View } from './memory';
+import type { ChatMessage } from './provider';
 import { PIN_KIND, UNPIN_KIND, pinned } from './owned';
 import type { JournalEvent } from './journal';
 import type { Past } from './past';
@@ -92,4 +93,24 @@ function lessonsText(past: Past, ray: Ray, events: JournalEvent[], whole: boolea
     if (from === 0) break;
   }
   return lessonTextOf(all, conversation, latest, MEMORY_MARK);
+}
+
+/**
+ * The request for `events`, which is the journal up to some event. Asked of the database where
+ * there is a past: the same request, made from the last part of the conversation and what the
+ * tables hold of the rest, read up to the last of `events` whatever was journaled since (a turn's
+ * own mark of what was shown, or something that arrived just now). Made from `events` themselves
+ * when there is no past, or when asking it fails: nothing is lost to the database.
+ */
+export function requestFrom(past: Past | undefined, events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View = {}): ChatMessage[] {
+  const last = events.at(-1)?.id;
+  if (past !== undefined && last !== undefined) {
+    try {
+      const at = past.places([last]).get(last);
+      if (at !== undefined) return assemble(frameFrom(past, budgetChars - system.toWellFormed().length, view, sight !== undefined, at + 1), system, budgetChars, sight, view);
+    } catch (err) {
+      console.error(`[memory] the request was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return buildMessages(events, system, budgetChars, sight, view);
 }

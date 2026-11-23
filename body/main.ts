@@ -544,6 +544,7 @@ async function rest(): Promise<boolean> {
       signal: stop.signal,
       append: (body) => { if (working) formed.push(body); else appendEvent(journal, gen, body); },
       past,
+      asked: past,
     }).then((slept) => {
       const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
       if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
@@ -633,7 +634,7 @@ const heart = new Heart({
     resting = true;
     try {
       const events = standing(journalNow());
-      const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events);
+      const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal, asked: past }, events);
       if (settled === 'reflected') console.error('[agenda] settled what the turn left');
       return settled;
     } finally { wake = null; resting = false; }
