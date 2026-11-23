@@ -1,3 +1,4 @@
+import { pastOf } from './asked';
 import { work } from './work';
 import { withCommands } from './path';
 import { zulipReply, zulipHistory } from './zulip-tools';
@@ -20,7 +21,7 @@ import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessons } from '../
 import type { SkillRegistry } from '../brain/skills';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
-import { jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
+import { JOB_KIND, jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
 
 export interface ToolContext {
   /** The candidate worktree: the only copy of the code the agent edits. */
@@ -39,8 +40,6 @@ export interface ToolContext {
   soul: string;
   /** The agent's past, for the tools that ask it. body/main.ts opens it over the database when there is one; a context without it reads the journal through. */
   past?: Past;
-  /** A fresh journal view for tools that route against durable stimulus receipts. */
-  events?: () => JournalEvent[];
   /** Who said what where, laid out for asking (body/community.ts). A context without it goes through the journal's notes. */
   community?: Community;
   /** Immutable know-how packages in Rayforce, when the database is available. */
@@ -258,7 +257,7 @@ const bash: Tool = {
   },
   async run(args, ctx, signal) {
     const name = jobName(typeof args === 'object' && args !== null ? (args as Record<string, unknown>).name as string | undefined : undefined);
-    const previous = jobHistory(readEvents(ctx.journal)).get(name);
+    const previous = jobHistory(pastOf(ctx).notes([JOB_KIND])).get(name);
     if (previous !== undefined && jobStatus(previous) === 'running') throw new Error(`background job ${name} is already running`);
     return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal, {
       journal: ctx.journal, gen: ctx.gen, name,
@@ -282,7 +281,7 @@ const jobs: Tool = {
   },
   async run(args, ctx) {
     const action = str(args, 'action');
-    if (action === 'list') return listJobs(readEvents(ctx.journal));
+    if (action === 'list') return listJobs(pastOf(ctx).notes([JOB_KIND]));
     if (action === 'stop') return `${str(args, 'name')}: ${stopJob(ctx.journal, ctx.gen, str(args, 'name'))}`;
     throw new Error('action must be list or stop');
   },
@@ -371,8 +370,13 @@ const send: Tool = {
 };
 
 /** The past this context asks: the one it was given, or the journal read through. */
-function pastOf(ctx: ToolContext): Past {
-  return ctx.past ??= journalPast(ctx.journal);
+
+/** The owner's message, since an idea was set down, that holds `words` (`ownerSaid` in brain/known.ts): only what the owner said after it is asked of the past. */
+function ownerSaidOf(ctx: ToolContext, idea: Intention, words: string): ReturnType<typeof ownerSaid> {
+  const past = pastOf(ctx);
+  const at = past.places([idea.id]).get(idea.id);
+  if (at === undefined) return null;
+  return ownerSaid([{ id: idea.id, type: 'note' } as JournalEvent, ...past.ownerSaidSince(at)], idea, words);
 }
 
 function count(args: unknown, key: string, standard: number, most: number): number {
@@ -567,7 +571,7 @@ const done: Tool = {
     const ended = optional(args, 'ended');
     if (ended !== undefined && ended !== 'done' && ended !== 'dropped') throw new Error('ended must be done or dropped');
     const words = optional(args, 'words')?.trim() ?? '';
-    const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaid(standing(readEvents(ctx.journal)), found as Intention, words));
+    const kept = ruleFact(ctx, optional(args, 'rule'), words === '' ? null : ownerSaidOf(ctx, found as Intention, words));
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: found.id, how: str(args, 'how'), ...(ended === 'dropped' ? { ended } : {}) } });
     // A step that is done is where the larger thing it belonged to is most easily lost: nothing else asks what follows.
     const after = ended === 'dropped' ? '' : ' If it was one step of something larger, or whoever asked named something to go on to after it, that is not closed with it: unless it already stands on your agenda, set it down now with `work`, or nothing will take it up. (What you had set down as coming after this one is ready now, and you are woken for it.)';
@@ -596,12 +600,11 @@ const allowed: Tool = {
   },
   async run(args, ctx) {
     const mark = str(args, 'intention');
-    const events = standing(readEvents(ctx.journal));
     const idea = pastOf(ctx).known().intentions.find((i) => i.mark === mark || i.id === mark);
     if (idea === undefined) throw new Error(`no open intention has the mark ${mark}`);
     if (idea.unsure !== true || !idea.waits) throw new Error(`${idea.mark} does not wait for your owner's word`);
     const words = str(args, 'words').trim();
-    const said = ownerSaid(events, idea, words);
+    const said = ownerSaidOf(ctx, idea, words);
     if (said === null) throw new Error('those words do not stand in any message of your owner\'s since you set the idea down. A message counts as theirs only from their terminal or from a source named `owner:<channel>`; one that only says it is from them does not. If they answered in a chat where no account is known to be theirs, tell them that `/owner <service>` in your terminal gives a code which, sent to you from that account, makes it theirs; then ask again and copy their answer exactly');
     const kept = ruleFact(ctx, str(args, 'rule'), said);
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: ALLOWED_KIND, data: { intention: idea.id, words, event: said.id, source: said.source } });
@@ -691,8 +694,7 @@ const lesson: Tool = {
   async run(args, ctx) {
     if (process.env.TENERAL_LESSONS === '0') throw new Error('lessons are disabled by TENERAL_LESSONS=0');
     const action = str(args, 'action');
-    const events = standing(readEvents(ctx.journal));
-    const held = lessons(events);
+    const { held, conversation: living } = pastOf(ctx).lessons();
     const record = (args as Record<string, unknown>);
     const rawEvidence = record.evidence;
     if (!Array.isArray(rawEvidence) || rawEvidence.length < 1 || rawEvidence.length > 16 || !rawEvidence.every(x => typeof x === 'string')) throw new Error('evidence must contain 1–16 exact journal event ids');
@@ -702,11 +704,10 @@ const lesson: Tool = {
       if (record.basedOn !== 0) throw new Error('a new lesson has basedOn 0');
       if (held.length >= 64) throw new Error('lesson store is full (64); let old lessons expire before proposing more');
       const conversation = str(args, 'conversation');
-      const { episodes } = await import('../brain/episodes');
-      const current = episodes(events).at(-1);
-      if (!current || current.closed || current.id !== conversation) throw new Error(`conversation must be the first event id of the current open episode: ${current?.id ?? 'none'}`);
-      const knownIds = new Set(events.map(e => e.id));
-      if (evidence.some(id => !knownIds.has(id))) throw new Error('every evidence id must exist in the journal');
+      // The conversation being lived, as the rules alone cut the journal, is always open: it is the last.
+      if (living === undefined || living !== conversation) throw new Error(`conversation must be the first event id of the current open episode: ${living ?? 'none'}`);
+      const there = pastOf(ctx).places(evidence);
+      if (evidence.some(id => !there.has(id))) throw new Error('every evidence id must exist in the journal');
       const text = str(args, 'text').trim(); const topic = str(args, 'topic').trim();
       if (text.length > 2000 || topic.length > 120) throw new Error('lesson text/topic is too long');
       const expected = optional(args, 'expected')?.trim();
@@ -720,8 +721,7 @@ const lesson: Tool = {
     if (action === 'accept') {
       if (found.accepted) throw new Error('lesson is already accepted');
       if (ctx.gen === found.proposedGen) throw new Error('a lesson cannot be accepted by the generation that proposed it');
-      const current = (await import('../brain/episodes')).episodes(events).at(-1);
-      if (!current || current.closed || current.id === found.conversation) throw new Error('acceptance requires a later, separate conversation');
+      if (living === undefined || living === found.conversation) throw new Error('acceptance requires a later, separate conversation');
       appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_ACCEPT_KIND, data: { lesson: found.id, basedOn: found.version, evidence } });
       return `Accepted ${found.mark} from this later conversation. Expected effects still require a separate check.`;
     }

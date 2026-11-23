@@ -179,6 +179,12 @@ export interface Store {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in the journal's order: `kinds` are names written in this repository, never anything that arrived. */
   noted(kinds: readonly string[]): JournalEvent[];
+  /** The newest `limit` calls of the tool `name`, as their intents were journaled, the newest first. */
+  calls(name: string, limit: number): JournalEvent[];
+  /** Every source something was ever said from. */
+  sources(): string[];
+  /** The same of the conversation as it stands, after the event numbered `seq`. */
+  stimuliAfter(sources: readonly string[], seq: number): JournalEvent[];
   /** What was said to the agent from these sources, in the journal's order. A source is whatever a sensor called itself. */
   stimuli(sources: readonly string[]): JournalEvent[];
   /** The byte of the journal just after the newest reply or interruption: where what no turn has settled yet begins. 0 when there is none. */
@@ -577,6 +583,22 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       ray.bind(ASKED, { w: { type: 'sym', data: [...sources, ...kinds].map((name) => name.slice(0, 64)) } });
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (or (== type 'stimulus) (== type 'note)) (in source (at ${ASKED} 'w))) asc: off line: line})`))
         .filter((e) => (e.type === 'stimulus' ? sources.includes(e.source) : e.type === 'note' && kinds.includes(e.kind)));
+    },
+    calls(name, limit) {
+      if (!mounted || limit <= 0) return [];
+      ray.bind(ASKED, { w: { type: 'sym', data: [name.slice(0, 64)] } });
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (== type 'tool.intent) (in source (at ${ASKED} 'w))) desc: seq take: ${Math.trunc(limit)} line: line})`));
+    },
+    sources() {
+      if (!mounted) return [];
+      return [...(ray.table(`(select {from: ${BOUND} where: (== type 'stimulus) by: source n: (count seq)})`).columns.source as string[] | undefined ?? [])];
+    },
+    stimuliAfter(sources, seq) {
+      if (!mounted || sources.length === 0) return [];
+      ray.bind(ASKED, { w: { type: 'sym', data: sources.map((source) => source.slice(0, 64)) } });
+      const t = ray.table(`(select {from: ${BOUND} where: (and (== type 'stimulus) (> seq ${Math.trunc(seq)}) (in source (at ${ASKED} 'w))) asc: seq seq: seq line: line})`);
+      const seqs = t.columns.seq as BigInt64Array | undefined ?? new BigInt64Array(0);
+      return eventsOf(t).filter((e, i) => !setAside(Number(seqs[i]), e));
     },
     stimuli(sources) {
       if (!mounted || sources.length === 0) return [];

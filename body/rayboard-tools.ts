@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readEvents, type JournalEvent } from '../brain/journal';
+import type { JournalEvent } from '../brain/journal';
+import { pastOf } from './asked';
 import { MaybeSent, chatReply, register, type ChatService } from './chat-tools';
 import { RAYBOARD_LINE, rayboardCa, rayboardToken, rayboardUrl } from './rayboard';
 import type { Tool, ToolContext } from './tools';
@@ -15,7 +16,8 @@ const MAX_BYTES = 1_000_000;
 
 interface Reach { send?: typeof fetch; url?: () => string; token?: () => string | undefined; ca?: () => string | undefined }
 
-const freshEvents = (ctx: ToolContext): JournalEvent[] => ctx.events?.() ?? readEvents(ctx.journal);
+/** What Rayboard's sensor journaled, which is where a notification the agent was shown is found: asked of the past. */
+const freshEvents = (ctx: ToolContext): JournalEvent[] => pastOf(ctx).picked(['agent:rayboard', 'owner:rayboard'], []);
 
 async function call(o: Reach, action: string, args: Row, ms = 20_000, signal?: AbortSignal): Promise<unknown> {
   signal?.throwIfAborted();

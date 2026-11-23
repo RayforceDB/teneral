@@ -587,7 +587,8 @@ const cutShort = (events: JournalEvent[]): boolean => {
  * that it was settled is journaled whatever comes of it. `now` is when a ready step may be taken.
  */
 export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.now()): Promise<Slept> {
-  const held = known(events);
+  // With a past to ask, `events` need be only the end of the journal, from the latest thing said on: what is known is asked, and the request is made by the database.
+  const held = d.asked !== undefined ? d.asked.known() : known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
   let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: settleQuestion(cutShort(events)), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;

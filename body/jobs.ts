@@ -130,7 +130,14 @@ export function stopJob(journal: string, gen: string, name: string): string {
   return stop(journal, gen, job, 'requested');
 }
 
+/** Where the notes of jobs are asked for: the body sets it to its past (`jobNotesFrom`). Without it, or when that cannot answer (the body is ending), the journal is read. */
+let asked: (() => JournalEvent[]) | null = null;
+export function jobNotesFrom(notes: (() => JournalEvent[]) | null): void { asked = notes; }
+
 function readRegistry(journal: string): JournalEvent[] {
+  if (asked !== null) {
+    try { return asked(); } catch { /* the journal, below */ }
+  }
   return readEvents(journal);
 }
 

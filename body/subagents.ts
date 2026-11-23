@@ -216,6 +216,8 @@ export function handBack(workspace: string, copy: string, branch: string, name: 
 export interface Options {
   /** The agent's journal, where the notes of a subagent go. */
   journal: string;
+  /** The notes of subagents in that journal, where the body can ask its past for them. */
+  notes?: () => JournalEvent[];
   gen: string;
   /** The agent's workspace, which each subagent gets a copy of. */
   workspace: string;
@@ -247,7 +249,8 @@ export class Subagents {
   private calm = 0;
   constructor(private o: Options) { this.limits = o.limits ?? LIMITS; this.places = this.limits.max; }
 
-  private known(): Map<string, Subagent> { return subagents(readEvents(this.o.journal)); }
+  // The notes of subagents, asked of the past where the body gave one (`notes`); read from the journal otherwise.
+  private known(): Map<string, Subagent> { return subagents(this.o.notes?.() ?? readEvents(this.o.journal)); }
   private note(s: Subagent): void { appendEvent(this.o.journal, this.o.gen, { type: 'note', kind: SUBAGENT_KIND, data: s }); }
   private named(value: unknown): string {
     if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(value)) throw new Error('a subagent\'s name is 1 to 32 characters: a-z, 0-9 or dash, not beginning with a dash');

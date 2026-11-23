@@ -43,9 +43,8 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
 import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
-import { JOB_KIND, endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
+import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
-import { journalView } from './journal-view';
 import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, communityReads, openCommunity, type Heard, type How } from './community';
@@ -63,8 +62,6 @@ function env(name: string): string {
 
 const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
-// What the journal holds now, each line parsed once: the sensors ask every few seconds (body/journal-view.ts).
-const journalNow = journalView(journal);
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = await openServedPast(journal, organs === '' ? null : organs, (line) => console.error(line));
@@ -72,6 +69,8 @@ const past = await openServedPast(journal, organs === '' ? null : organs, (line)
 // journal from the latest thing said to the agent on. None of it is the journal held whole.
 const noted = (...kinds: string[]): JournalEvent[] => past.notes(kinds);
 const ownerTyped = (): JournalEvent[] => past.stimuli(['terminal', PAIRED_SOURCE]);
+// A job is stopped by its notes, which are asked of the past.
+jobNotesFrom(() => noted(JOB_KIND));
 /** What a sensor reads to know where it was (its `…_READS`), asked for each time it looks. */
 const read = (of: { sources: string[]; kinds: string[] }) => (): JournalEvent[] => past.picked(of.sources, of.kinds);
 const sinceSaid = (): JournalEvent[] => {
@@ -82,7 +81,7 @@ const sinceSaid = (): JournalEvent[] => {
       if (tail[0]?.type === 'stimulus') return tail;
     } catch { /* read whole, below */ }
   }
-  return journalNow();
+  return readEvents(journal);
 };
 const workspace = env('TENERAL_WORKSPACE');
 // Which provider, over which protocol, with which credentials: brain/provider.ts reads that from the environment.
@@ -173,6 +172,7 @@ const community = openCommunity(past.ray ?? null, noted(...communityReads()));
 const id = env('TENERAL_ID');
 // Workers use only the base tools; the parent advertises its complete tool set to the skill registry.
 const subagents = new Subagents({
+  notes: () => noted(SUBAGENT_KIND),
   journal, gen, workspace, dir: join(dirname(workspace), 'subagents'), tools: TOOLS, id,
   provider: process.env.TENERAL_SUBAGENT_MODEL?.trim() ? connect({ ...process.env, TENERAL_MODEL: process.env.TENERAL_SUBAGENT_MODEL.trim() }) : provider,
   limits: limitsFrom(process.env), budgetChars: budgetChoice.budgetChars,
@@ -180,7 +180,7 @@ const subagents = new Subagents({
   onEnded: () => wake?.(),
 });
 const allTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: journalNow, community, toolNames: allTools.map(t => t.spec.name) };
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, community, toolNames: allTools.map(t => t.spec.name) };
 ctx.skills = openSkills(ctx);
 try { seedRecoverySkill(ctx); } catch (err) { console.error(`[skills] recovery skill was not seeded: ${err instanceof Error ? err.message : String(err)}`); }
 // A previous generation's process groups must not write into the candidate under the new gates.
@@ -675,7 +675,8 @@ let storeWrittenAt = Date.now();
 /** How often a job the agent left running is looked at, while there is one: its end sends no signal of its own. */
 const JOB_LOOK_MS = 2000;
 const heart = new Heart({
-  events: () => journalNow(),
+  // Never read while the heart is given what it asks, below.
+  events: () => readEvents(journal),
   // What the heart reads for itself, asked of the past.
   asks: { owed: () => turnOwed(past, journal), owner: () => past.stands().owner, known: () => past.known(), pulse: (now) => ({ source: 'clock', text: `${clockText(new Date(now))} ${agendaByDay(now)}` }) },
   born: () => clockMayTick(sinceSaid(), soulDir),
@@ -692,7 +693,7 @@ const heart = new Heart({
     wake = () => woken.abort();
     resting = true;
     try {
-      const events = standing(journalNow());
+      const events = sinceSaid();
       const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal, asked: past }, events);
       if (settled === 'reflected') console.error('[agenda] settled what the turn left');
       return settled;
