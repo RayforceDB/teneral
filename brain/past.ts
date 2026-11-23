@@ -41,6 +41,8 @@ export interface Past {
   notes(kinds: readonly string[]): JournalEvent[];
   /** What was said to the agent from these sources, in order: also what the owner took back, as a record of who spoke. */
   stimuli(sources: readonly string[]): JournalEvent[];
+  /** What was said from these sources and the notes of these kinds, together, in order: what a sensor reads to know where it was. Read once for as long as the journal has not grown. */
+  picked(sources: readonly string[], kinds: readonly string[]): JournalEvent[];
   /** The same, each with its number (the place of its line, when the journal is read through). */
   notesAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /**
@@ -199,6 +201,7 @@ export function journalPast(journal: string): Past {
     },
     notes: (kinds) => lines.all().flatMap((line) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [line.event] : [])),
     stimuli: (sources) => lines.all().flatMap((line) => (line.event.type === 'stimulus' && sources.includes(line.event.source) ? [line.event] : [])),
+    picked: (sources, kinds) => lines.all().flatMap((line) => ((line.event.type === 'stimulus' ? sources.includes(line.event.source) : line.event.type === 'note' && kinds.includes(line.event.kind)) ? [line.event] : [])),
     notesAt: (kinds) => lines.all().flatMap((line, seq) => (line.event.type === 'note' && kinds.includes(line.event.kind) ? [{ event: line.event, seq }] : [])),
     since(id) {
       const now = lines();
@@ -341,6 +344,15 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     stimuli(sources) {
       store.sync();
       return store.stimuli(sources);
+    },
+    picked(sources, kinds) {
+      store.sync();
+      const key = `${sources.join(' ')}\n${kinds.join(' ')}`;
+      const had = notesRead.get(key);
+      if (had !== undefined && had.count === store.count()) return had.events;
+      const events = store.picked(sources, kinds);
+      notesRead.set(key, { count: store.count(), events });
+      return events;
     },
     notesAt(kinds) {
       store.sync();
@@ -533,6 +545,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     notes: (kinds) => through((past) => past.notes(kinds)),
     notesAt: (kinds) => through((past) => past.notesAt(kinds)),
     stimuli: (sources) => through((past) => past.stimuli(sources)),
+    picked: (sources, kinds) => through((past) => past.picked(sources, kinds)),
     asked: () => through((past) => past.asked()),
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => { again(); through((past) => past.sync()); },

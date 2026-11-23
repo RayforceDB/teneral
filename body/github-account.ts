@@ -8,6 +8,8 @@ import type { Sensor } from './sensors';
 // whenever its owner signs it in to another account (./one setup github) while it runs.
 
 export const GITHUB_ACCOUNT_KIND = 'github.account.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const GITHUB_ACCOUNT_READS = { sources: [] as string[], kinds: [GITHUB_ACCOUNT_KIND] };
 
 interface Noted { type: string; kind?: string; data?: unknown }
 

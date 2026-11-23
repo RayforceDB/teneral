@@ -6,6 +6,8 @@ import type { Sensor, Stimulus } from './sensors';
 
 export const WORKSPACE_SOURCE = 'agent:workspace';
 export const WORKSPACE_CURSOR_KIND = 'workspace.cursor.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const WORKSPACE_READS = { sources: [WORKSPACE_SOURCE], kinds: [WORKSPACE_CURSOR_KIND] };
 const MAX_FILES = 4096;
 const MAX_DIRECTORIES = 1024;
 const MAX_PATH = 512;

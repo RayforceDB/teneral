@@ -436,6 +436,8 @@ export function zulipLive(o: Options, startMs = 60_000): Sensor {
 
 export const ZULIP_REACTION_SOURCE = 'agent:zulip-reaction';
 export const ZULIP_QUEUE_CURSOR_KIND = 'zulip.reactions.cursor.v1';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const ZULIP_READS = { sources: [SOURCE, OWNER_SOURCE, ZULIP_REACTION_SOURCE], kinds: [ZULIP_QUEUE_CURSOR_KIND] };
 export interface ZulipQueueCursor {
   queueId: string; eventId: number; site: string; email: string;
   /** The queue was registered for messages, edits and deletions as well as reactions. A queue is what it was registered as, for its whole life. */

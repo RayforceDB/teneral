@@ -10,6 +10,8 @@ export function rayboardOwnerId(value: unknown): string | undefined {
   return typeof value === 'string' && /^u_[a-z0-9]{1,64}$/.test(value) ? value : undefined;
 }
 const PREFIX = 'Rayboard notification ';
+/** What this sensor reads of the journal to know where it was: what it delivered, from these sources, and its notes of these kinds. */
+export const RAYBOARD_READS = { sources: [RAYBOARD_SOURCE, RAYBOARD_OWNER_SOURCE], kinds: [] as string[] };
 const MAX_BYTES = 1_000_000;
 const MAX_ITEMS = 100;
 type Row = Record<string, unknown>;
