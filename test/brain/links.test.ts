@@ -100,7 +100,10 @@ function tangled(): JournalEvent[] {
 }
 
 real('the database walks the same ties to the same answers as the journal read through', () => {
-  const events = tangled();
+  // Keep the ordering of the ten stretches, but share a storage partition: this
+  // tests graph traversal and late writes, not the cost of creating daily shards.
+  const oneDay = (e: JournalEvent): JournalEvent => ({ ...e, ts: e.ts.replace(/2026-11-(\d\d)T10:/, "2026-11-01T$1:") });
+  const events = tangled().map(oneDay);
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-links-')), 'journal.jsonl');
   writeFileSync(journal, events.map((e) => `${JSON.stringify(e)}\n`).join(''));
   const read = journalPast(journal);
@@ -116,7 +119,7 @@ real('the database walks the same ties to the same answers as the journal read t
   expect(tied).toBe(4 + 2 + 1);
 
   // A tie written later is seen by both without anything being opened again.
-  const late = outdates(10, events[21]!.id, events[24]!.id, 'reason late');
+  const late = oneDay(outdates(10, events[21]!.id, events[24]!.id, 'reason late'));
   writeFileSync(journal, [...events, late].map((e) => `${JSON.stringify(e)}\n`).join(''));
   expect(served.since(events[23]!.id)).toEqual(read.since(events[23]!.id));
   expect(served.since(events[23]!.id)?.direct.map((one) => one.why)).toEqual(['reason late']);
