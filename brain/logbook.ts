@@ -202,24 +202,63 @@ export interface Logbook {
 }
 
 /**
- * Decides how much of the conversation is shown as memories.
- *
- * `messages` is the whole journal as a conversation and `origin[i]` the position, in `events`, of
- * the event that `messages[i]` was made from. Only episodes that were remembered (or given up on)
- * can be swapped, and those are always the oldest ones. What is left over when they do not suffice
- * is for `fit` in brain/memory.ts to cut, as it did before there were memories.
+ * What the logbook is made from: everything about the journal that the remembered part of a
+ * request needs, and nothing of its events. Made from a whole journal by `headOf`; where the
+ * journal is not held (brain/past.ts), the same is asked of the tables made from it.
  */
-export function logbook(events: JournalEvent[], messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
-  // "Today" is the day of the journal's last event: the same journal always gives the same request.
+export interface Head {
+  /** The time of the journal's last event: "today" is its day, so the same journal always gives the same request. */
+  last: string;
+  /** What the agent knows and means to do, the lessons that bear on now, and how its memory stands, as it is shown; '' when there is nothing to show. */
+  knowing: string;
+  told: Remembered;
+  /** The remembered episodes, in order; `lies` is what everything up to the end of each counts for (`shownChars`), from the journal's first event. */
+  kept: (Episode & { lies: number })[];
+  /** What the whole journal counts for in that measure. */
+  whole: number;
+  /** The places, among `kept`, of the episodes that hold an event the owner pinned. */
+  pinned: Set<number>;
+  /** The remembered stretches a later memory made outdated (brain/links.ts). */
+  outdated: Map<string, { why: string; since: string }>;
+}
+
+/** The head of a journal that is held whole. `events` is the conversation as it stands. */
+export function headOf(events: JournalEvent[]): Head {
   const last = events.at(-1)?.ts ?? '';
   // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
   const ill = healthNote(health(events, Date.parse(last) || 0), MEMORY_MARK);
-  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
-  const knowing: ChatMessage[] = held === '' ? [] : [{ role: 'user', content: held }];
+  const knowing = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
+  const told = remembered(events);
+  const cut = told.spans.length === 0 ? [] : episodes(events, told.spans).filter((e) => e.why === 'kept');
+  const lies: number[] = [];
+  let whole = 0;
+  for (const e of events) lies.push(whole += shownChars(e));
+  return {
+    last, knowing, told, whole,
+    kept: cut.map((e) => ({ ...e, lies: lies[e.to - 1]! })),
+    pinned: pinnedAmong(events, cut),
+    outdated: outdatedStretches(events, told),
+  };
+}
+
+/**
+ * Decides how much of the conversation is shown as memories.
+ *
+ * `messages` is the conversation as it stands, or its last part, and `origin[i]` the place, in the
+ * whole conversation, of the event that `messages[i]` was made from. Only episodes that were
+ * remembered (or given up on) can be swapped, and those are always the oldest ones. What is left
+ * over when they do not suffice is for `fit` in brain/memory.ts to cut, as it did before there
+ * were memories.
+ *
+ * When `messages` is only the last part, it must begin no later than the first episode this
+ * leaves shown as it happened: the episodes before that are told as memories and their messages
+ * are not needed. A stretch the owner pinned is shown as it happened wherever it lies, so a
+ * journal with a pin among what is swapped must be given whole.
+ */
+export function logbook(head: Head, messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
+  const knowing: ChatMessage[] = head.knowing === '' ? [] : [{ role: 'user', content: head.knowing }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
-  const all = remembered(events);
-  if (all.spans.length === 0) return nothingSwapped;
-  const kept = episodes(events, all.spans).filter((e) => e.why === 'kept');
+  const { kept, told: all } = head;
   if (kept.length === 0) return nothingSwapped;
 
   // Where each remembered episode ends in `messages`, and how much everything before that point counts.
@@ -237,29 +276,38 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
 
   const cap = Math.min(Math.max(0, chosen.logbookChars ?? DEFAULT_LOGBOOK_CHARS), Math.floor(room * LOGBOOK_SHARE));
   const starts = (place: number): number => (place === 0 ? 0 : ends[place - 1]!);
-  const pins: Pins = { held: pinnedAmong(events, kept), verbatim: (place) => messages.slice(starts(place), ends[place]!), room: Math.floor(room * PIN_SHARE) };
-  const outdated = outdatedStretches(events, all);
-  const headOf = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all, pins, outdated), cap)), ...knowing];
-  const fits = (count: number): boolean => headOf(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
+  const pins: Pins = { held: head.pinned, verbatim: (place) => messages.slice(starts(place), ends[place]!), room: Math.floor(room * PIN_SHARE) };
+  const headOfCount = (count: number): ChatMessage[] => [...(count === 0 ? [] : trimmed(entries(kept, count, all, pins, head.outdated), cap)), ...knowing];
+  const fits = (count: number): boolean => headOfCount(count).reduce((n, m) => n + sizeOf(m), SEAM.length) + total - (count === 0 ? 0 : before[count - 1]!) <= room;
 
-  // The amount swapped, measured from the start of the journal, is a multiple of one step: it stays where it is while the journal grows by up to a step.
-  // It is measured in what the events themselves count for once they are old (`shownChars`): a sum over the journal that is the same
-  // however a request is laid out, so where an episode ends in it is known without building the conversation before it.
-  // What is wanted is the chosen size; the room is only the most that can be sent, and `fits` below holds to it by the messages themselves.
-  const want = Math.min(room, Math.max(0, chosen.tailChars ?? DEFAULT_TAIL_CHARS));
-  const step = Math.max(1, Math.floor(want * STEP));
-  const lies: number[] = [];
-  let whole = 0;
-  for (const e of events) lies.push(whole += shownChars(e));
-  const toSwap = whole > want ? Math.ceil((whole - want) / step) * step : 0;
-  let count = 0;
-  if (toSwap > 0) {
-    count = 1;
-    while (count < kept.length && lies[kept[count - 1]!.to - 1]! < toSwap) count += 1;
-  }
+  let count = swapped(head, room, chosen);
   // The memories take room themselves; one more episode at a time until it all fits or there is none left to swap.
   while (count > 0 && count < kept.length && !fits(count)) count += 1;
-  return count === 0 ? nothingSwapped : { head: headOf(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
+  return count === 0 ? nothingSwapped : { head: headOfCount(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
+}
+
+/**
+ * How many of the remembered episodes are shown as memories before the room is looked at: the
+ * least `logbook` ever swaps for this head, so what it leaves shown as it happened begins at the
+ * end of that many episodes or later.
+ *
+ * The amount swapped, measured from the start of the journal, is a multiple of one step: it stays
+ * where it is while the journal grows by up to a step. It is measured in what the events
+ * themselves count for once they are old (`shownChars`): a sum over the journal that is the same
+ * however a request is laid out, so where an episode ends in it is known without building the
+ * conversation before it. What is wanted is the chosen size; the room is only the most that can
+ * be sent, and `logbook` holds to it by the messages themselves.
+ */
+export function swapped(head: Pick<Head, 'kept' | 'whole'>, room: number, chosen: Sizes = {}): number {
+  const { kept, whole } = head;
+  if (kept.length === 0) return 0;
+  const want = Math.min(room, Math.max(0, chosen.tailChars ?? DEFAULT_TAIL_CHARS));
+  const step = Math.max(1, Math.floor(want * STEP));
+  const toSwap = whole > want ? Math.ceil((whole - want) / step) * step : 0;
+  if (toSwap <= 0) return 0;
+  let count = 1;
+  while (count < kept.length && kept[count - 1]!.lies < toSwap) count += 1;
+  return count;
 }
 
 /**

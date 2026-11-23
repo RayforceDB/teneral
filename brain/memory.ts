@@ -3,7 +3,7 @@ import { RESULT_END, RESULT_HEAD, RESULT_WHOLE, eventChars } from './episodes';
 import type { JournalEvent } from './journal';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
-import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
+import { MEMORY_MARK, headOf, logbook, sizeOf, swapped, type Head, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
@@ -99,11 +99,14 @@ function takeMarkers(message: ChatMessage, slots: Slot[]): void {
  * lines when the 5th arrives, 3 and 4 when the 7th does: between those moments nothing already
  * sent changes. A file that cannot be shown still fills its slot, so its going missing moves nothing.
  */
-function fillSlots(slots: Slot[], sight: Sight): void {
+function fillSlots(slots: Slot[], sight: Sight, before = 0): void {
   const max = Math.max(0, Math.floor(sight.max ?? DEFAULT_IMAGES));
   const step = Math.max(1, Math.floor(max / 2));
-  const earlier = slots.length > max ? Math.ceil((slots.length - max) / step) * step : 0;
-  slots.forEach(({ message, path }, i) => {
+  // `before` slots lie in the part of the journal that is not at hand: they count, and are older than every one here.
+  const all = before + slots.length;
+  const earlier = all > max ? Math.ceil((all - max) / step) * step : 0;
+  slots.forEach(({ message, path }, at) => {
+    const i = before + at;
     const name = path?.split('/').at(-1) ?? '';
     const image = path === null ? `[image not available: more than ${IMAGES_PER_MESSAGE} images in one message]`
       : sight.refused || sight.refusedImages?.has(name) ? `[image not shown: the model or the route in use does not take images: ${name}]`
@@ -317,14 +320,87 @@ function shortenResults(messages: ChatMessage[], ids: Map<ChatMessage, string>, 
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
  */
 export function buildMessages(journaled: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
-  const { ask } = view;
+  return assemble(frameOf(journaled), system, budgetChars, sight, view);
+}
+
+/**
+ * What a request is assembled from. `events` is the conversation as it stands, or only its last
+ * part: then everything the assembly needs to know of what lies before is given beside it, so
+ * that the same request comes out as from the whole journal. A whole journal gives `frameOf`;
+ * where the journal is not held, the frame is asked of the tables made from it (brain/past.ts).
+ */
+export interface Frame {
+  events: JournalEvent[];
+  /** The place of `events[0]` in the whole conversation as it stands. */
+  first: number;
+  /** Of the events before `events[0]`: what they count for (`eventChars`), how many calls their replies made, and how many images they hold a place for. */
+  before: { chars: number; calls: number; slots: number };
+  /** Whether a call before `events[0]` went out under this id, so that it cannot be used again. */
+  usedBefore: (id: string) => boolean;
+  /** What the stem's acceptance of a species commit says to the agent, by the id of the event (body/acceptance.ts). */
+  accepted: Map<string, string>;
+  head: Head;
+}
+
+/** The frame of a journal that is held whole. */
+export function frameOf(journaled: JournalEvent[]): Frame {
   // Without what the owner took back (brain/owned.ts): that is in the journal and in no request.
   // Acceptance is derived from that same view. Stem records deliberately survive a take-back:
   // forgetting the conversation does not cancel a candidate or consent that really happened.
   const events = standing(journaled);
+  return { events, first: 0, before: { chars: 0, calls: 0, slots: 0 }, usedBefore: () => false, accepted: acceptanceNotes(events), head: headOf(events) };
+}
+
+/** Episodes kept at hand before the first one a request may show as it happened: what arrived late in them is shown in the next, and a reply may be shown as one with the reply before it. */
+export const OVERLAP_EPISODES = 3;
+
+/**
+ * The frame of the last part of a journal, made from the frame of the whole: the same request
+ * comes out of both. It is what the tables of the database have to give (brain/past.ts), written
+ * here once from the journal itself, so that the two can be held against each other.
+ *
+ * `room` is what the request may take beside its system prompt, `chosen` how it is laid out and
+ * `sees` whether images are looked for: together they decide where the part shown as it happened
+ * can begin at the earliest (`swapped` in brain/logbook.ts). The part at hand begins a few
+ * remembered episodes before that. A journal with a pinned stretch, or one too short to swap
+ * anything, is given back whole.
+ */
+export function narrow(whole: Frame, room: number, chosen: Sizes = {}, sees = false): Frame {
+  const count = swapped(whole.head, room, chosen);
+  if (count === 0 || whole.head.pinned.size > 0 || whole.first !== 0) return whole;
+  const from = whole.head.kept[Math.max(0, count - 1 - OVERLAP_EPISODES)]!.from;
+  if (from <= 0) return whole;
+  const events = whole.events;
+  let chars = 0, calls = 0, slots = 0;
+  const used = new Set<string>();
+  for (let i = 0; i < from; i++) {
+    const e = events[i]!;
+    chars += eventChars(e);
+    if (e.type === 'stimulus') {
+      if (sees && (e.source === 'terminal' || e.source === 'owner:zulip')) slots += splitMarkers(stimulusText(e.source, e.text)).paths.length;
+    } else if (e.type === 'assistant') {
+      const { results } = answers(events, i);
+      for (const call of reply(e).calls) {
+        const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown };
+        calls += 1;
+        // The name a call went out under, by the rule `assemble` names calls with.
+        let wire = typeof c.id === 'string' && c.id !== '' && c.id.length <= 40 && c.id.isWellFormed() && !used.has(c.id) ? c.id : `call_${calls}`;
+        for (let n = 1; used.has(wire); n++) wire = `call_${calls}_${n}`;
+        used.add(wire);
+        const result = results.get(c.id)?.shift();
+        if (sees && c.name === 'look' && result?.ok) slots += splitMarkers(result.output).paths.length;
+      }
+    }
+  }
+  return { ...whole, events: events.slice(from), first: from, before: { chars, calls, slots }, usedBefore: (id) => used.has(id) };
+}
+
+/** The request for a frame: see `buildMessages`. */
+export function assemble(frame: Frame, system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
+  const { ask } = view;
+  const { events, accepted } = frame;
   const last = events.at(-1);
   const continuation = last?.type === 'assistant' && reply(last).text.includes('[this reply was cut off by the provider:');
-  const accepted = acceptanceNotes(events);
   const out: ChatMessage[] = [];
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
   const origin: number[] = [];
@@ -336,10 +412,10 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
   const used = new Set<string>();
-  let position = 0;
+  let position = frame.before.calls;
   const wireId = (id: unknown): string => {
     position += 1;
-    let wire = typeof id === 'string' && id !== '' && id.length <= 40 && id.isWellFormed() && !used.has(id) ? id : `call_${position}`;
+    let wire = typeof id === 'string' && id !== '' && id.length <= 40 && id.isWellFormed() && !used.has(id) && !frame.usedBefore(id) ? id : `call_${position}`;
     for (let n = 1; used.has(wire); n++) wire = `call_${position}_${n}`;
     used.add(wire);
     return wire;
@@ -437,19 +513,20 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
     out.push({ role: 'user', content: continuation ? CONTINUE : LATE });
     origin.push(events.length);
   }
-  if (sight) fillSlots(slots, sight);
+  if (sight) fillSlots(slots, sight, frame.before.slots);
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   // Before anything is measured for the cut: an older output counts for what is shown of it.
   // What lies before each event, in what events count for by themselves: `sums[i]` up to and including `events[i]`.
   const sums: number[] = [];
-  let sum = 0;
+  let sum = frame.before.chars;
   for (const e of events) sums.push(sum += eventChars(e));
   shortenResults(out, resultIds, Math.max(0, view.resultsChars ?? DEFAULT_RESULTS_CHARS), out.map((m, i) => sums[Math.min(resultAt.get(m) ?? origin[i]!, events.length - 1)] ?? 0), sum);
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
-  const { head, seam, start } = logbook(events, out, origin, room, view);
+  // The logbook reads places in the whole conversation; here they were counted from the first event at hand.
+  const { head, seam, start } = logbook(frame.head, out, origin.map((at) => at + frame.first), room, view);
   const taken = head.reduce((sum, m) => sum + size(m), 0);
   const fitted = fit(seam === null ? out : [seam, ...out.slice(start)], room - taken);
   return [{ role: 'system', content: prompt }, ...head, ...fitted];
