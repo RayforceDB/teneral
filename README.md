@@ -191,7 +191,7 @@ The launcher and a stem agree by a versioned contract, written at the top of `st
 | Command | Runs |
 |---|---|
 | `./one up`, `./one fg` | this checkout's launcher, which starts the current generation's stem |
-| `./one talk`, `./one back`, `./one approve` | the stem in `.teneral/live`, once a generation has one; this checkout's for a generation from before the launcher. `bun stem/launcher.ts home` prints which |
+| `./one talk`, `./one acp`, `./one back`, `./one approve` | the stem in `.teneral/live`, once a generation has one; this checkout's for a generation from before the launcher. `bun stem/launcher.ts home` prints which |
 | `./one setup`, `./one run <command>` | this checkout: `./one run bun keeper/back.ts` is this checkout's `back`, for when the generation's own is what is broken |
 | `./one logs`, `./one down` | no stem: Docker |
 
@@ -216,6 +216,14 @@ A merge of the species changes files outside the body, so it is a mutation that 
 The first time you start it, the agent speaks first. Its journal holds no message yet, so the first one in it becomes the letter in `BIRTH.md`. The letter asks the agent to read its own code, tell you what it found, and ask who it should be for you: its name, what you want from it, how much initiative to take. Then it writes its soul, `soul/SOUL.md` and `soul/OWNER.md`, and from then on those files are part of every turn. They are the agent's own to revise, and they are never committed.
 
 If you want a different beginning, edit `BIRTH.md` and commit it before the first start.
+
+## In an editor or a workbench
+
+`./one acp` makes the running agent an agent of the [Agent Client Protocol](https://agentclientprotocol.com): JSON-RPC, one message a line, on standard input and output. An editor or a workbench that speaks the protocol (Orca, Zed and others) is given `/path/to/this/checkout/one acp` as its agent command, and its chat is then a conversation with the agent.
+
+It is a window, like `./one talk`. The client does not start the agent and closing the client does not stop it; a session is not a second agent but another look at the one conversation, and any number can be open beside the terminal. What you type there is said to the agent as your words. What it says and what it does (each tool it calls, and how that went) comes back as it happens; the client's stop button stops the turn as `/stop` does; `/update take`, `/approve` and the other commands of the terminal are answered there too.
+
+The agent works where it lives. Nothing of the protocol that would move its hands into the client's place is offered: it reads and writes no files through the client, runs nothing in the client's terminal and asks the client for no permission. A workbench that gives each agent a worktree of its own will find this one working in its own workspace instead, and coming to your repository the way it always does: by its own clone, a branch and a pull request. Only text is taken from a prompt; a file attached by reference is named to the agent by where it is.
 
 ## Talking to it from outside
 

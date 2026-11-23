@@ -19,6 +19,12 @@ usage: ./one <command>
                   leaves. The agent goes on.
                   With its input from a pipe it is plain text, one line in and the reply out:
                   echo "..." | ./one talk [--wait <seconds>]
+  acp             attach an editor or a workbench that speaks the Agent Client Protocol: it runs
+                  this as its agent command and talks over standard input and output. What it
+                  sends is said to the agent as your words, and what the agent says and does
+                  comes back as it happens. It is a window onto the running agent, like talk:
+                  nothing is started or stopped, and the agent works where it lives, not in the
+                  client's files.
   down            stop the agent
   back [<commit>] send the agent back to the generation before, or to the earlier one named;
                   --list shows the generations it has lived in. A running agent is stopped
@@ -546,6 +552,19 @@ case "$command" in
       "${cage[@]}" ${extra[@]+"${extra[@]}"} "$image" "$@"
     ;;
 
+  acp)
+    if ! alive; then
+      say_not_running
+      exit 1
+    fi
+    # Standard output carries the protocol and nothing else: no terminal, and whatever is said to a person goes to standard error.
+    acp="$(owner_tool acp)"
+    if ! docker exec "$name" test -f "$acp"; then
+      echo "The generation that is running has no ACP window yet: it comes with the next update it takes." >&2
+      exit 1
+    fi
+    exec docker exec --interactive "$name" bun "$acp" "$@"
+    ;;
   talk)
     if ! alive; then
       say_not_running
