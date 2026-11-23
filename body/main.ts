@@ -1,5 +1,5 @@
 import { watchJournal } from "./acceptance";
-import { decideBudget, shares } from './adaptive-budget';
+import { REFUSED_KIND, SENT_KIND, decideBudget, shares } from './adaptive-budget';
 import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
 import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
@@ -10,12 +10,13 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
-import { decide, glance, overheard, setDown, unsettled } from '../heart/glance';
+import { GLANCE_KIND, OVERHEARD_KIND, SETTLED_KIND, decide, glance, overheard, setDown, unsettled } from '../heart/glance';
 import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
+import { appendEvent, readEvents, readEventsFrom, type JournalEvent } from '../brain/journal';
+import { PAIRED_SOURCE } from '../brain/owners';
 import { contextWindow } from '../brain/providers';
 import { turnOwed } from '../brain/frame';
 import { DEFAULT_BUDGET, needsTurn } from '../brain/memory';
@@ -44,7 +45,7 @@ import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
 import { endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
-import { enter, meet, whoLines } from './participants';
+import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
 import { QUIET_RUN, ensureHeard, modeOf, typingFor } from './chat-tools';
@@ -63,6 +64,23 @@ const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 // What the journal holds now, each line parsed once: the sensors ask every few seconds (body/journal-view.ts).
 const journalNow = journalView(journal);
+// The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
+const organs = process.env.TENERAL_ORGANS ?? '';
+const past = await openServedPast(journal, organs === '' ? null : organs, (line) => console.error(line));
+// What the body reads of the journal, asked of the past: the notes of some kinds, what the owner typed, and the end of the
+// journal from the latest thing said to the agent on. None of it is the journal held whole.
+const noted = (...kinds: string[]): JournalEvent[] => past.notes(kinds);
+const ownerTyped = (): JournalEvent[] => past.stimuli(['terminal', PAIRED_SOURCE]);
+const sinceSaid = (): JournalEvent[] => {
+  if (past.by === 'store') {
+    try {
+      const from = past.asked();
+      const tail = from === null ? [] : readEventsFrom(journal, from);
+      if (tail[0]?.type === 'stimulus') return tail;
+    } catch { /* read whole, below */ }
+  }
+  return journalNow();
+};
 const workspace = env('TENERAL_WORKSPACE');
 // Which provider, over which protocol, with which credentials: brain/provider.ts reads that from the environment.
 let provider: Provider;
@@ -91,7 +109,7 @@ const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
 // Characters the memories of older episodes may take. As above.
 const logbookSet = Number(process.env.TENERAL_LOGBOOK_CHARS);
 // The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
-const budgetChoice = decideBudget(journalNow(), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? DEFAULT_BUDGET);
+const budgetChoice = decideBudget(noted(SENT_KIND, REFUSED_KIND), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? DEFAULT_BUDGET);
 // How much of the past a request shows: the owner's word where it is given, else a share of that budget (body/adaptive-budget.ts).
 const tailChars = tailSet > 0 ? Math.floor(tailSet) : shares(budgetChoice.budgetChars).tailChars;
 const logbookChars = logbookSet > 0 ? Math.floor(logbookSet) : shares(budgetChoice.budgetChars).logbookChars;
@@ -128,7 +146,7 @@ const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber 
 // The owner's accounts in every chat service: what the settings name, what they typed, and what they paired (body/pairing.ts).
 // What is known is also written beside the owner's directory, for `/owner` in their terminal to show.
 const owners = new Owners({
-  events: journalNow(), emit: (s) => emit(s), note: (data) => { appendEvent(journal, gen, { type: 'note', kind: SPENT_KIND, data }); }, status: join(ownerDir, '..', 'owners.json'), log: (line) => console.error(line),
+  events: [...ownerTyped(), ...noted(SPENT_KIND)], emit: (s) => emit(s), note: (data) => { appendEvent(journal, gen, { type: 'note', kind: SPENT_KIND, data }); }, status: join(ownerDir, '..', 'owners.json'), log: (line) => console.error(line),
   settled: {
     ...(zulipOwnerId === undefined ? {} : { zulip: [String(zulipOwnerId)] }),
     ...(rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID) === undefined ? {} : { rayboard: [rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID)!] }),
@@ -147,9 +165,6 @@ try {
 // Public read-only repository activity. Empty disables it; no GitHub credential is read or sent.
 // A comma-separated setting preserves the old single-repository configuration.
 const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce,RayforceDB/teneral').split(',').map(s => s.trim()).filter(Boolean);
-// The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
-const organs = process.env.TENERAL_ORGANS ?? '';
-const past = await openServedPast(journal, organs === '' ? null : organs, (line) => console.error(line));
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
 const community = openCommunity(past.ray ?? null, journalNow());
 const id = env('TENERAL_ID');
@@ -255,7 +270,7 @@ function whoSpeaks(service: string, speakers: Speaker[]): string {
  */
 const SPOKE_TO_ME = new Set<How>(['dm', 'mention', 'quote']);
 const dealings = new Set<string>();
-for (const e of journalNow()) {
+for (const e of noted(HEARD_KIND)) {
   if (e.type !== 'note' || e.kind !== HEARD_KIND || typeof e.data !== 'object' || e.data === null || Array.isArray(e.data)) continue;
   const d = e.data as Partial<Heard>;
   if (typeof d.service === 'string' && typeof d.sender === 'string' && d.how !== undefined && SPOKE_TO_ME.has(d.how)) dealings.add(`${d.service}:${d.sender}`);
@@ -290,7 +305,7 @@ function emit(s: Stimulus): void {
   }
   if (s.overheard !== undefined && GLANCE) {
     // Talk that addressed nobody is set down and glanced at by the heart before a turn is spent on it (heart/glance.ts).
-    if (setDown(journal, gen, journalNow(), { ...s, overheard: s.overheard })) {
+    if (setDown(journal, gen, noted(OVERHEARD_KIND, GLANCE_KIND), { ...s, overheard: s.overheard })) {
       // While a turn runs the heart is not asked: the deciding is done beside it, so that what concerns the agent reaches that turn.
       if (working && process.env.TENERAL_BACKGROUND !== 'serial') void glanceBeside();
       idleWake?.();
@@ -299,7 +314,7 @@ function emit(s: Stimulus): void {
   }
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
   // A typed line may name one of the owner's chat accounts, or take the accounts of a service back (brain/owners.ts).
-  if (s.source === 'terminal' && / (is|account is) me$/i.test(s.text.trim())) owners.heard(journalNow());
+  if (s.source === 'terminal' && / (is|account is) me$/i.test(s.text.trim())) owners.heard(ownerTyped());
   if (ownerStimulus(s)) {
     ownerArrived += 1;
     // Only the owner's own channels end a wait for a failed turn. A tick, a peer, or another
@@ -355,7 +370,9 @@ function ownersOn(service: string) {
 /** Journals the owner's words that wait. A word about something the journal does not hold is dropped. */
 function settleWords(): void {
   for (const word of words.splice(0)) {
-    const note = noteOf(word, journalNow());
+    // Only the events the word names are looked up: whether they are there, and what they are.
+    const names = word.do === 'withdraw' ? word.ids : [word.do === 'back' ? word.to : word.event];
+    const note = noteOf(word, names.flatMap((id) => { const found = past.around(id, 0, 0); return found === null ? [] : [found.events[found.at]!]; }));
     if (note === null) console.error(`[owner] nothing in the journal for the word "${word.do}"; it was dropped`);
     else appendEvent(journal, gen, note);
   }
@@ -443,10 +460,10 @@ const sensors: Sensor[] = [
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => journalNow(),
-    ownerId: confirmedZulipOwnerId(journalNow(), zulipOwnerId), owners: ownersOn('zulip'), keepImage: keepZulipImage,
+    ownerId: confirmedZulipOwnerId(ownerTyped(), zulipOwnerId), owners: ownersOn('zulip'), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
     mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'), peer: peerOn('zulip'),
-    entered: (stream, members) => enter(journal, gen, journalNow(), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
+    entered: (stream, members) => enter(journal, gen, noted(PLACE_KIND, PARTICIPANT_KIND, CONTACT_KIND), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
       const pending = past.latest('note', ZULIP_QUEUE_CURSOR_KIND);
@@ -621,9 +638,9 @@ let storeWrittenAt = Date.now();
 const JOB_LOOK_MS = 2000;
 const heart = new Heart({
   events: () => journalNow(),
-  born: () => clockMayTick(journalNow(), soulDir),
+  born: () => clockMayTick(sinceSaid(), soulDir),
   emit,
-  overheard: () => GLANCE && (overheard(journalNow()).length > 0 || unsettled(journalNow()).length > 0),
+  overheard: () => { if (!GLANCE) return false; const talk = noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND); return overheard(talk).length > 0 || unsettled(talk).length > 0; },
   glance: async () => {
     // One that was begun beside the turn that has just ended is let finish: the same talk is not decided twice.
     if (glancing !== null) await glancing;
@@ -673,13 +690,13 @@ const heart = new Heart({
   },
 });
 // A journal with no stimulus yet means this individual was never born: the letter goes first.
-const firstWords = birth(journalNow(), letter);
+const firstWords = birth(sinceSaid(), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
 // The channels it has heard from before are ones it takes part in: each is seen to once at the start.
 {
   const known = new Set<string>();
-  for (const e of journalNow()) {
+  for (const e of noted(HEARD_KIND)) {
     if (e.type !== 'note' || e.kind !== HEARD_KIND || typeof e.data !== 'object' || e.data === null || Array.isArray(e.data)) continue;
     const d = e.data as Partial<Heard>;
     if (typeof d.service === 'string' && typeof d.where === 'string' && d.how !== 'dm' && known.size < 50) known.add(`${d.service}\n${d.where}`);

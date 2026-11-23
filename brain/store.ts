@@ -179,6 +179,8 @@ export interface Store {
   latest(type: string, source?: string): JournalEvent | null;
   /** The notes of these kinds, in the journal's order: `kinds` are names written in this repository, never anything that arrived. */
   noted(kinds: readonly string[]): JournalEvent[];
+  /** What was said to the agent from these sources, in the journal's order. A source is whatever a sensor called itself. */
+  stimuli(sources: readonly string[]): JournalEvent[];
   /** The same, each with its number. */
   notedAt(kinds: readonly string[]): { event: JournalEvent; seq: number }[];
   /** How many notes of these kinds there are: what changes when there is something new to read of them. */
@@ -560,6 +562,12 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
     },
     noted,
     notedAt,
+    stimuli(sources) {
+      if (!mounted || sources.length === 0) return [];
+      // The names go over as a column, never as part of the statement.
+      ray.bind(ASKED, { w: { type: 'sym', data: sources.map((source) => source.slice(0, 64)) } });
+      return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (== type 'stimulus) (in source (at ${ASKED} 'w))) asc: off line: line})`));
+    },
     notedCount,
     rebuilt,
   };
