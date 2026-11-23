@@ -9,6 +9,7 @@ import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { frameProjection } from './frame-table';
 import { knownFrom, knownProjection } from './known-table';
+import { lessonsProjection } from './lessons-table';
 import { counted } from './wire';
 import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
@@ -93,7 +94,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;

@@ -7,6 +7,7 @@ import { acceptedSince, frameProjection, namesBefore } from '../../brain/frame-t
 import { episodesFrom, memoryProjection } from '../../brain/memory-table';
 import { standing } from '../../brain/owned';
 import { known, knownText } from '../../brain/known';
+import { lessons } from '../../brain/lessons';
 import { remembered } from '../../brain/remembered';
 import type { Tool, ToolContext } from '../../body/tools';
 import { frameFrom } from '../../brain/frame';
@@ -342,4 +343,49 @@ real('a turn with the database at hand sends, round for round, the requests a tu
   expect(served.asked.every((end) => end > seeded.length - 1)).toBe(true);
   // The requests were made from the last part: they open with memories, not with the first thing ever said.
   expect(JSON.stringify(served.seen[0])).not.toContain('matter 0 ');
+}, 120_000);
+
+real('lessons are shown from the table of their notes as from the journal: a proposal, its acceptance in a later conversation, a check, and what is refused', () => {
+  const seeded = [...life(30, 24), ev({ type: 'assistant', text: 'nothing more for now', toolCalls: [] })];
+  const g2 = (e: JournalEvent): JournalEvent => ({ ...e, gen: 'g2' });
+  const asked = ev({ type: 'stimulus', source: 'terminal', text: 'the foreground mutation hangs again' }, LONG);
+  const did = ev({ type: 'assistant', text: 'aborted the running turn first', toolCalls: [] });
+  const lesson = (patch: Record<string, unknown> = {}) => ev({ type: 'note', kind: 'memory.lesson.v1', data: {
+    text: 'Abort a running foreground turn before handing off.', topic: 'foreground mutation', conversation: asked.id, evidence: [asked.id, did.id],
+    expected: 'The next late terminal line receives an answer.', version: 1, ...patch } });
+  const proposed = lesson();
+  // Refused: evidence from another conversation, and a conversation that is no beginning of one.
+  const foreign = lesson({ evidence: [seeded[0]!.id] });
+  const adrift = lesson({ conversation: did.id });
+  const promoted = g2(ev({ type: 'generation.promoted', commit: 'b', previous: 'a' } as unknown as EventBody, LONG));
+  const later = g2(ev({ type: 'stimulus', source: 'terminal', text: 'review the foreground mutation lesson' }));
+  const accept = g2(ev({ type: 'note', kind: 'memory.lesson.accept.v1', data: { lesson: proposed.id, basedOn: 1, evidence: [later.id] } }));
+  const seen = g2(ev({ type: 'assistant', text: 'the late line was answered', toolCalls: [] }));
+  const early = g2(ev({ type: 'note', kind: 'memory.lesson.check.v1', data: { lesson: proposed.id, basedOn: 1, outcome: 'observed', evidence: [asked.id] } }));
+  const check = g2(ev({ type: 'note', kind: 'memory.lesson.check.v1', data: { lesson: proposed.id, basedOn: 1, outcome: 'observed', evidence: [seen.id] } }));
+  const now = g2(ev({ type: 'stimulus', source: 'terminal', text: 'is the foreground mutation safe now?' }, LONG));
+  const all = [...seeded, asked, did, proposed, foreign, adrift, promoted, later, accept, seen, early, check, now];
+  const whole = lessons(all);
+  expect(whole).toHaveLength(1);
+  expect(whole[0]!.accepted?.id).toBe(accept.id);
+  // The check whose evidence lies before the acceptance is refused; the one after it counts.
+  expect(whole[0]!.checks.map((c) => c.id)).toEqual([check.id]);
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-lessons-')), 'journal.jsonl');
+  let had = 0;
+  let shown = 0;
+  for (const upTo of [seeded.length + 3, seeded.length + 5, seeded.length + 8, all.length - 2, all.length]) {
+    appendFileSync(journal, all.slice(had, upTo).map(line).join(''));
+    had = upTo;
+    // Opened anew each time: what the reading holds between events is read back from the tables.
+    const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+    for (const [budget, view] of [[12_000, { tailChars: 2_000 }], [400_000, {}]] as const) {
+      const want = buildMessages(all.slice(0, upTo), 'S', budget, undefined, view);
+      const frame = frameFrom(past, budget - 1, view);
+      expect(assemble(frame, 'S', budget, undefined, view)).toEqual(want);
+      if (want.some((m) => m.content?.includes('Lessons are evidence-linked'))) shown += 1;
+    }
+    past.persist();
+  }
+  // The lesson was in front of the agent while it was a proposal of that conversation, and again once accepted and to the point.
+  expect(shown).toBeGreaterThanOrEqual(4);
 }, 120_000);

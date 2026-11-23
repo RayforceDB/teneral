@@ -1,5 +1,5 @@
 import type { JournalEvent } from './journal';
-import { episodes } from './episodes';
+import { ruleStart, ruleStep, slimOf, type RuleState } from './episodes';
 
 // A lesson is a hypothesis from one conversation, not a new owner rule. Only a later
 // conversation, running a different generation, can make it permanent. The journal remains the
@@ -35,13 +35,50 @@ const validIds = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0
 const future = (at: string, days: number): string => new Date(Date.parse(at) + days * 86_400_000).toISOString();
 export const lessonExpiry = future;
 
-/** Current lesson state. Malformed or stale-version notes are ignored, as old journal notes must be. */
-export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.ts ?? '') || Date.now()): Lesson[] {
-  const byEvent = new Map(events.map((e, i) => [e.id, i]));
-  const episodeAt = new Map<string, string>();
-  for (const ep of episodes(events)) for (let i = ep.from; i < ep.to; i++) episodeAt.set(events[i]!.id, ep.id);
+/** The kinds of notes lessons are made from. */
+export const LESSON_NOTES: readonly string[] = [LESSON_KIND, LESSON_ACCEPT_KIND, LESSON_CHECK_KIND];
+
+/**
+ * A note about a lesson, with what could be said of it when it was written: the conversation it
+ * lies in (the first event of its episode, as the rules cut the journal), and for a proposal
+ * whether everything it gives as evidence lies in that same conversation.
+ */
+export interface LessonRecord { event: JournalEvent; conversation: string; within: boolean }
+
+/** What reading a journal for its lessons holds between two events. Only the conversation being lived is kept of the journal. */
+export interface LessonState {
+  rules: RuleState;
+  /** The first event of the conversation being lived, and every event in it so far. */
+  conversation: string;
+  ids: string[];
+  records: LessonRecord[];
+}
+
+export const lessonStart = (): LessonState => ({ rules: ruleStart(), conversation: '', ids: [], records: [] });
+
+/** Takes one more event in; true when a note about a lesson was recorded. */
+export function lessonStep(state: LessonState, e: JournalEvent): boolean {
+  if (ruleStep(state.rules, slimOf(e)) !== null || state.ids.length === 0) {
+    state.conversation = e.id;
+    state.ids = [];
+  }
+  state.ids.push(e.id);
+  if (e.type !== 'note' || !LESSON_NOTES.includes(e.kind) || typeof e.data !== 'object' || e.data === null) return false;
+  const evidence = (e.data as { evidence?: unknown }).evidence;
+  const within = e.kind === LESSON_KIND && validIds(evidence) && evidence.every((id) => state.ids.includes(id));
+  state.records.push({ event: e, conversation: state.conversation, within });
+  return true;
+}
+
+/**
+ * Current lesson state, from the notes about lessons as they were recorded. `placeOf` gives the
+ * place of an event in the conversation as it stands (any numbers that keep its order), or
+ * nothing for an event that is not there. Malformed or stale-version notes are ignored, as old
+ * journal notes must be.
+ */
+export function lessonsOf(records: LessonRecord[], placeOf: (id: string) => number | undefined, now: number): Lesson[] {
   const held = new Map<string, Lesson>();
-  for (const e of events) {
+  for (const { event: e, conversation, within } of records) {
     if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) continue;
     const d = e.data as Record<string, unknown>;
     if (e.kind === LESSON_KIND) {
@@ -49,10 +86,9 @@ export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.
       const atMs = Date.parse(e.ts);
       if (!Number.isFinite(atMs) || atMs >= now + 1000) continue;
       const evidence = d.evidence as string[];
-      const conversation = episodeAt.get(d.conversation);
       // The record itself belongs to the same conversation as its evidence; it must not be
       // silently folded into a later episode merely because no new stimulus intervened.
-      if (conversation === undefined || d.conversation !== conversation || episodeAt.get(e.id) !== conversation || evidence.some(id => episodeAt.get(id) !== conversation)) continue;
+      if (d.conversation !== conversation || !within) continue;
       held.set(e.id, {
         id: e.id, mark: `L${e.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}`,
         text: (d.text as string).trim(), topic: (d.topic as string).trim(), evidence,
@@ -62,9 +98,7 @@ export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.
     } else if (e.kind === LESSON_ACCEPT_KIND && typeof d.lesson === 'string') {
       const lesson = held.get(d.lesson);
       if (!lesson || lesson.accepted || d.basedOn !== lesson.version || e.gen === lesson.proposedGen) continue;
-      if (e.gen === lesson.proposedGen) continue;
-      const conversation = episodeAt.get(e.id);
-      if (conversation === undefined || conversation === lesson.conversation) continue;
+      if (conversation === lesson.conversation) continue;
       lesson.accepted = { id: e.id, at: e.ts, gen: e.gen, conversation };
       lesson.expiresAt = future(e.ts, ACCEPTED_DAYS);
       // Acceptance is another reader's act, not a content edit by the proposer.
@@ -73,7 +107,8 @@ export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.
       const lesson = held.get(d.lesson);
       if (!lesson?.accepted || !lesson.expected || d.basedOn !== lesson.version || (d.outcome !== 'observed' && d.outcome !== 'not_observed') || !validIds(d.evidence)) continue;
       const evidence = d.evidence as string[];
-      if (evidence.some(id => (byEvent.get(id) ?? -1) < (byEvent.get(lesson.accepted!.id) ?? events.length))) continue;
+      const accepted = placeOf(lesson.accepted.id) ?? Number.MAX_SAFE_INTEGER;
+      if (evidence.some(id => (placeOf(id) ?? -1) < accepted)) continue;
       lesson.checks.push({ id: e.id, at: e.ts, outcome: d.outcome, evidence });
       lesson.version += 1;
     }
@@ -81,15 +116,45 @@ export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.
   return [...held.values()].filter(l => Date.parse(l.expiresAt) > now);
 }
 
+/** The ids `lessonsOf` asks the place of: the acceptances, and what the checks give as evidence. */
+export function lessonPlaces(records: LessonRecord[]): string[] {
+  const ids = new Set<string>();
+  for (const { event: e } of records) {
+    if (e.type !== 'note') continue;
+    if (e.kind === LESSON_ACCEPT_KIND) ids.add(e.id);
+    const evidence = (e.data as { evidence?: unknown } | null)?.evidence;
+    if (e.kind === LESSON_CHECK_KIND && validIds(evidence)) for (const id of evidence) ids.add(id);
+  }
+  return [...ids];
+}
+
+/** Current lesson state of a journal held whole. */
+export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.ts ?? '') || Date.now()): Lesson[] {
+  const state = lessonStart();
+  for (const e of events) lessonStep(state, e);
+  const byEvent = new Map(events.map((e, i) => [e.id, i]));
+  return lessonsOf(state.records, (id) => byEvent.get(id), now);
+}
+
 const words = (text: string): Set<string> => new Set(text.toLowerCase().match(/[a-z0-9_./-]{4,}/g) ?? []);
 
 /** Relevant accepted lessons, plus proposals local to the conversation now being lived. */
 export function lessonText(events: JournalEvent[], enabled = process.env.TENERAL_LESSONS !== '0', mark = '[memory]'): string | null {
   if (!enabled) return null;
-  const all = lessons(events);
+  const state = lessonStart();
+  for (const e of events) lessonStep(state, e);
+  if (state.records.length === 0) return null;
+  const byEvent = new Map(events.map((e, i) => [e.id, i]));
+  return lessonTextOf(lessonsOf(state.records, (id) => byEvent.get(id), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), state.conversation === '' ? undefined : state.conversation, events.slice(-RECENT), mark);
+}
+
+/** How many of the latest events say what the agent is at now. */
+export const RECENT = 30;
+
+/** The same from the lessons themselves, the conversation being lived (the first event of it) and the latest `RECENT` events. */
+export function lessonTextOf(all: Lesson[], current: string | undefined, latest: JournalEvent[], mark = '[memory]'): string | null {
   if (all.length === 0) return null;
-  const current = episodes(events).at(-1)?.id;
-  const recent = events.slice(-30).filter(e => e.type === 'stimulus' || e.type === 'tool.intent').map(e => {
+  const recent = latest.slice(-RECENT).filter(e => e.type === 'stimulus' || e.type === 'tool.intent').map(e => {
     const r = e as { text?: unknown; name?: unknown; args?: unknown };
     return `${typeof r.text === 'string' ? r.text : ''} ${typeof r.name === 'string' ? r.name : ''} ${r.args === undefined ? '' : JSON.stringify(r.args)}`;
   }).join(' ');
