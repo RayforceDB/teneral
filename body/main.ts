@@ -9,9 +9,9 @@ import { githubRemote, gitRemote } from '../species/github';
 import { install as speciesInstall, retireStale, retiredText } from '../species/offer';
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
-import { Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
+import { SUBAGENT_KIND, Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
 import { GLANCE_KIND, OVERHEARD_KIND, SETTLED_KIND, decide, glance, overheard, setDown, unsettled } from '../heart/glance';
-import { dueWork, heldByInterrupt, importLegacyWork, workDueAt } from './work';
+import { dueWorkOf, heldByInterrupt, importLegacyWork, workDueAtOf } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -27,14 +27,14 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { GITHUB_ACCOUNT_KIND, githubAccount, GITHUB_ACCOUNT_READS } from './github-account';
 import { TIMER_MAX_MS, clockMayTick, clockTick, inbox, owner, ownerStimulus, terminal, tickAt, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
-import { noteOf, parseWord, standing, type Word } from '../brain/owned';
+import { BACK_KIND, noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
-import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
+import { followUps, lookedAt, offered, reportAsk, settle, tickDueOf, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
 import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
 import { libraryAt } from '../brain/ray';
-import { memoryHealth, sleep } from '../brain/sleep';
+import { memoryHealth, sleep, waitingOf } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey, MAIL_READS } from './mail';
 import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor, ZULIP_READS } from './zulip';
@@ -42,14 +42,14 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
 import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
-import { endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
+import { JOB_KIND, endedJob, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { journalView } from './journal-view';
 import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
 import { QUIET_RUN, ensureHeard, modeOf, typingFor } from './chat-tools';
-import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
+import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn, restInOf } from '../heart/coordinator';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -608,25 +608,44 @@ process.on('exit', () => subagents.stopAll());
 /** When this body started: the clock counts from here until it has given a tick of its own. */
 const startedAt = Date.now();
 const heartbeatMs = heartbeatMinutes * 60_000;
+/**
+ * The conversation since the thing said before the last report to the owner, which is all `reportAsk` reads (brain/agenda.ts):
+ * read once, and added to as the journal grows. Read again from its beginning when a later report moves it, or when a
+ * conversation was taken back, which changes what stands.
+ */
+let reported = { from: -1, upTo: 0, events: [] as JournalEvent[] };
+function sinceReport(): JournalEvent[] {
+  const from = past.stands().report, upTo = past.count();
+  if (reported.from !== from) reported = { from, upTo: from, events: [] };
+  if (upTo > reported.upTo) {
+    const more = past.standingFrom(reported.upTo, upTo);
+    reported = more.some((e) => e.type === 'note' && e.kind === BACK_KIND) ? { from, upTo, events: past.standingFrom(from, upTo) } : { from, upTo, events: [...reported.events, ...more] };
+  }
+  return reported.events;
+}
+/** What a tick asks when it is time to tell the owner what the agent did on its own; '' when it is not. */
+const report = (now: number): string => reportAsk(sinceReport(), now, reportHours * 3_600_000, past.known());
+/** The agenda as a tick offers it (`agendaFor` in heart/coordinator.ts), from what the past holds. */
+const agendaNow = (now: number): string => offered(past.known(), now, past.stands().idle, report(now));
 /** When the next tick of the clock is due; undefined with no clock. */
-function nextTickAt(events: JournalEvent[]): number | undefined {
-  const last = events.findLast((e) => e.type === 'stimulus' && e.source === 'clock');
-  return tickAt(startedAt, last === undefined ? undefined : Date.parse(last.ts), heartbeatMs);
+function nextTickAt(): number | undefined {
+  const last = past.stands().clock;
+  return tickAt(startedAt, last === '' ? undefined : Date.parse(last), heartbeatMs);
 }
 /** Whether time of its own may be given now. Heartbeat and /heart share the same pulse construction; only the owner command is manual. */
-function mayTick(events: JournalEvent[], now: number): boolean {
+function mayTick(now: number): boolean {
   // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
-  if (!clockMayTick(events, soulDir) || (ownTokensDay !== null && ownSpend(events, now) >= ownTokensDay)) return false;
+  if (!clockMayTick(sinceSaid(), soulDir) || (ownTokensDay !== null && past.ownSpent(now - 24 * 3_600_000) >= ownTokensDay)) return false;
   // Time of its own is time at rest: no tick while the owner is in conversation, none when the
   // agenda holds nothing that can be acted on now, and fewer when the last ones came to nothing.
-  const current = standing(events);
-  return restIn(current, now, restMs) === 0 && tickDue(current, now, heartbeatMs)
-    && worthATick(known(current), now, reportAsk(current, now, reportHours * 3_600_000));
+  const stands = past.stands();
+  return restInOf(stands.owner, now, restMs) === 0 && tickDueOf(stands.idle, stands.clock, now, heartbeatMs)
+    && worthATick(past.known(), now, report(now));
 }
 /** What a tick offers; what waits and is offered for a look is not offered again before a wait that doubles. */
-function tickAgenda(events: JournalEvent[], now: number): string {
-  const text = agendaFor(events, now, reportHours * 3_600_000);
-  for (const item of followUps(known(standing(events)), now).slice(0, 5)) {
+function tickAgenda(now: number): string {
+  const text = agendaNow(now);
+  for (const item of followUps(past.known(), now).slice(0, 5)) {
     if (item.work !== undefined) appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: item.id, work: lookedAt(item.work, now) } });
   }
   return text;
@@ -640,6 +659,8 @@ let storeWrittenAt = Date.now();
 const JOB_LOOK_MS = 2000;
 const heart = new Heart({
   events: () => journalNow(),
+  // What the heart reads for itself, asked of the past.
+  asks: { owed: () => turnOwed(past, journal), owner: () => past.stands().owner, known: () => past.known(), pulse: (now) => ({ source: 'clock', text: `${clockText(new Date(now))} ${agendaNow(now)}` }) },
   born: () => clockMayTick(sinceSaid(), soulDir),
   emit,
   overheard: () => { if (!GLANCE) return false; const talk = noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND); return overheard(talk).length > 0 || unsettled(talk).length > 0; },
@@ -664,27 +685,28 @@ const heart = new Heart({
   // What the agent waits for: a job it left running, then its own work that has come due. An owner's interruption holds both until something new arrives.
   arrived: () => {
     if (quitting) return null;
-    const events = journalNow(), now = Date.now();
-    const own = heldByInterrupt(events) ? null : endedJob(journal, gen, events) ?? endedSubagent(journal, gen, events) ?? dueWork(journal, gen, now, events);
+    const now = Date.now();
+    // Each asks for what it reads: an interruption lies after the latest thing said, a job and a subagent are notes of their own, and work is what is known.
+    const own = heldByInterrupt(sinceSaid()) ? null : endedJob(journal, gen, noted(JOB_KIND)) ?? endedSubagent(journal, gen, noted(SUBAGENT_KIND)) ?? dueWorkOf(journal, gen, now, past.known());
     // And the species, heard from now and then: an offer it has moved past is retired, and the agent told.
     return own ?? staleOffers(now);
   },
   nextLook: () => {
-    const events = journalNow(), now = Date.now();
-    const due = heldByInterrupt(events) ? undefined : workDueAt(events);
-    const job = !heldByInterrupt(events) && jobsLeftRunning(events, gen);
+    const now = Date.now(), held = heldByInterrupt(sinceSaid());
+    const due = held ? undefined : workDueAtOf(past.known());
+    const job = !held && jobsLeftRunning(noted(JOB_KIND), gen);
     return Math.min(offersLookAt - now, ...(due === undefined ? [] : [due - now]), ...(job ? [JOB_LOOK_MS] : []));
   },
   // The clock: time of the agent's own, offered at rest when a tick is due and there is something to offer.
   tick: () => {
-    const events = journalNow(), now = Date.now();
-    return clockTick(now, nextTickAt(events), () => mayTick(events, now), () => tickAgenda(events, now));
+    const now = Date.now();
+    return clockTick(now, nextTickAt(), () => mayTick(now), () => tickAgenda(now));
   },
   nextTick: () => {
-    const at = nextTickAt(journalNow());
+    const at = nextTickAt();
     return at === undefined ? undefined : at - Date.now();
   },
-  backlog: () => memoryHealth(standing(journalNow())).waiting,
+  backlog: () => waitingOf(past.episodes(), past.remembered()).length,
   restMs,
   onError: error => {
     console.error(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);

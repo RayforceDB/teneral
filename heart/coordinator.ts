@@ -47,8 +47,12 @@ const AGENDA_TOOLS = new Set(['work', 'intend', 'done', 'allowed']);
  * put rest off, or a busy inbox would mean it never remembers anything.
  */
 export function restIn(events: JournalEvent[], now: number, restMs: number): number {
-  const last = events.findLast(e => e.type === 'stimulus' && fromOwner(e.source));
-  return last === undefined ? 0 : Math.max(0, Date.parse(last.ts) + restMs - now);
+  return restInOf(events.findLast(e => e.type === 'stimulus' && fromOwner(e.source))?.ts ?? '', now, restMs);
+}
+
+/** The same from the time the owner last spoke ('' when never). */
+export function restInOf(owner: string, now: number, restMs: number): number {
+  return owner === '' ? 0 : Math.max(0, Date.parse(owner) + restMs - now);
 }
 
 /**
@@ -87,8 +91,21 @@ export function agendaFor(events: JournalEvent[], now = Date.now(), reportMs?: n
 export function agendaPulse(events: JournalEvent[], now = Date.now(), reportMs?: number): Stimulus {
   return { source: 'clock', text: `${clockText(new Date(now))} ${agendaFor(events, now, reportMs)}` };
 }
+/** What the heart reads of the journal, answered without the journal held whole (body/main.ts asks the past). Each is what the heart would read from `events`. */
+export interface HeartAsks {
+  /** Whether a turn is owed (`needsTurn`). */
+  owed: () => boolean;
+  /** When the owner last spoke, '' when never: for `restIn`. */
+  owner: () => string;
+  known: () => Known;
+  /** The clock's tick with the agenda in it (`agendaPulse`). */
+  pulse: (now: number) => Stimulus;
+}
+
 export interface HeartDeps {
   events: () => JournalEvent[];
+  /** Where given, the heart asks these and does not read `events` for itself. */
+  asks?: HeartAsks;
   /** No idle work while the individual has not written its first soul and met its owner. */
   born: () => boolean;
   emit: (s: Stimulus) => void;
@@ -136,7 +153,13 @@ export class Heart {
   requestPulse(): void { this.state.pulse = true; }
   completed(events: JournalEvent[], enabled = true, from?: number): void { afterTurn(this.state, events, enabled, from); }
   /** Milliseconds until rest begins, 0 at rest: how long the body may sleep before asking again. */
-  restIn(): number { return restIn(standing(this.d.events()), this.now(), this.d.restMs ?? REST_MINUTES * 60_000); }
+  restIn(): number {
+    const restMs = this.d.restMs ?? REST_MINUTES * 60_000;
+    return this.d.asks !== undefined ? restInOf(this.d.asks.owner(), this.now(), restMs) : restIn(standing(this.d.events()), this.now(), restMs);
+  }
+  private owed(): boolean { return this.d.asks !== undefined ? this.d.asks.owed() : needsTurn(standing(this.d.events())); }
+  private known(): Known { return this.d.asks !== undefined ? this.d.asks.known() : known(standing(this.d.events())); }
+  private pulse(): Stimulus { return this.d.asks !== undefined ? this.d.asks.pulse(this.now()) : agendaPulse(this.d.events(), this.now()); }
   /**
    * How long the body may sleep when there is nothing to do, unless something arrives: until rest
    * begins, or until what the agent waits for may have come, whichever is sooner. Undefined: until something arrives.
@@ -183,14 +206,14 @@ export class Heart {
   }
 
   async next(): Promise<Beat> {
-    if (needsTurn(standing(this.d.events()))) return 'turn';
+    if (this.owed()) return 'turn';
     // An empty soul means the birth dialogue is still under way. Do not replace it with
     // reflection, agenda discovery or autonomous work, even when this heart was already asked.
     if (!this.d.born()) { this.state = { look: false, pulse: false }; return 'wait'; }
     if (this.state.pulse) {
       // The owner asked for the agenda by hand: that is not held back for rest.
       this.state.pulse = false;
-      this.d.emit(agendaPulse(this.d.events(), this.now()));
+      this.d.emit(this.pulse());
       return 'pulse';
     }
     if (this.state.look) {
@@ -217,12 +240,11 @@ export class Heart {
         if (tick !== null) { this.d.emit(tick); return 'pulse'; }
       } catch (error) { this.d.onError(error); }
     }
-    const before = standing(this.d.events());
-    const had = pulseNeeded(known(before), this.now()) || followUps(known(before), this.now()).length > 0;
+    const before = this.known();
+    const had = pulseNeeded(before, this.now()) || followUps(before, this.now()).length > 0;
     if (!(await this.during(() => this.d.remember()))) return 'wait';
     // A look ahead may have set down something that can be begun: offer it now, not at the next tick.
-    const after = standing(this.d.events());
-    if (!had && !needsTurn(after) && this.restIn() === 0 && pulseNeeded(known(after), this.now())) this.d.emit(agendaPulse(after, this.now()));
+    if (!had && !this.owed() && this.restIn() === 0 && pulseNeeded(this.known(), this.now())) this.d.emit(this.pulse());
     return 'remember';
   }
 }

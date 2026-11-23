@@ -6,7 +6,10 @@ import { acceptanceNotes } from '../../body/acceptance';
 import { acceptedSince, frameProjection, namesBefore } from '../../brain/frame-table';
 import { episodesFrom, memoryProjection } from '../../brain/memory-table';
 import { standing } from '../../brain/owned';
+import { ownSpend, reportAsk } from '../../brain/agenda';
+import { idleTicks } from '../../brain/idle';
 import { known, knownText } from '../../brain/known';
+import { fromOwner } from '../../brain/owned';
 import { lessons } from '../../brain/lessons';
 import { remembered } from '../../brain/remembered';
 import { asOfEvents, sleep } from '../../brain/sleep';
@@ -452,4 +455,59 @@ real('whether a turn is owed is the same asked of the past as read from the whol
     answers.add(want);
   }
   expect(answers.size).toBe(2);
+}, 120_000);
+
+real('how the conversation stands, what the time of its own cost and what a report reads are the same asked of the past as read from the whole journal, through restarts', () => {
+  n = 9000;
+  clock = Date.parse('2026-11-18T00:00:00.000Z');
+  const HOUR = 3_600_000;
+  const all: JournalEvent[] = [];
+  const idea = (text: string) => ev({ type: 'note', kind: 'memory.intention.v1', data: { text, origin: 'own' } });
+  const used = (text: string, calls: { id: string; name: string; args: Record<string, unknown> }[] = []) => ({ ...ev({ type: 'assistant', text, toolCalls: calls }), usage: { input: 1000, output: 50 } }) as JournalEvent;
+  const ideas: JournalEvent[] = [];
+  for (let day = 0; day < 4; day++) {
+    all.push(ev({ type: 'stimulus', source: day % 2 === 0 ? 'terminal' : 'owner:zulip', text: `good morning ${day}` }, 6 * HOUR), used('morning'));
+    const mine = idea(`Tidy the notes of day ${day}`);
+    ideas.push(mine);
+    all.push(mine);
+    for (let tick = 0; tick < 5; tick++) {
+      all.push(ev({ type: 'stimulus', source: 'clock', text: 'tick' }, HOUR));
+      if (tick === 1) {
+        // Work in time of its own, and a subagent begun in it that ends in someone else's turn.
+        all.push(used('', [{ id: `w${day}`, name: 'bash', args: { note: mine.id } }]), ev({ type: 'tool.result', callId: `w${day}`, ok: true, output: 'ok' }),
+          ev({ type: 'note', kind: 'body.subagent.v1', data: { name: `helper${day}`, gen: 'g1', task: 't', dir: '/tmp', state: 'running' } }), used('begun'));
+      } else all.push(used(tick === 3 && day === 2 ? `Told my owner. R202611${20 + day}` : 'nothing to do'));
+    }
+    all.push(ev({ type: 'stimulus', source: 'agent:rayboard', text: 'someone else' }, HOUR), used('answered them'),
+      ev({ type: 'note', kind: 'body.subagent.v1', data: { name: `helper${day}`, gen: 'g1', task: 't', dir: '/tmp', state: 'ended', usage: { input: 7000, output: 300 } } }),
+      ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: mine.id, how: 'tidied' } }));
+  }
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-clock-')), 'journal.jsonl');
+  let had = 0;
+  let asked = 0;
+  for (const upTo of [9, 14, 31, 47, 58, all.length - 3, all.length]) {
+    appendFileSync(journal, all.slice(had, upTo).map(line).join(''));
+    had = upTo;
+    const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+    const events = all.slice(0, upTo);
+    const stands = past.stands();
+    expect(stands.idle).toBe(idleTicks(events));
+    expect(stands.owner).toBe(events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source))?.ts ?? '');
+    expect(stands.clock).toBe(events.findLast((e) => e.type === 'stimulus' && e.source === 'clock')?.ts ?? '');
+    expect(journalPast(journal).stands()).toEqual({ ...stands, report: 0 });
+    for (const later of [0, 5 * HOUR, 30 * HOUR, 9 * 24 * HOUR]) {
+      const now = Date.parse(events.at(-1)!.ts) + later;
+      expect(past.ownSpent(now - 24 * HOUR)).toBe(ownSpend(events, now));
+      expect(journalPast(journal).ownSpent(now - 24 * HOUR)).toBe(ownSpend(events, now));
+      const want = reportAsk(events, now, 24 * HOUR);
+      expect(reportAsk(past.standingFrom(stands.report), now, 24 * HOUR, past.known())).toBe(want);
+      if (want !== '') asked += 1;
+    }
+    past.persist();
+  }
+  // The life has what is counted: own time that cost something, a report made, and moments at which the next is asked for.
+  expect(ownSpend(all, Date.parse(all.at(-1)!.ts))).toBeGreaterThan(7000);
+  expect(asked).toBeGreaterThan(3);
+  const last = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false).stands();
+  expect(last.report).toBeGreaterThan(40);
 }, 120_000);
