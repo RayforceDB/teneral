@@ -3,7 +3,7 @@ import { episodesOf, shownChars, slimOf } from './episodes';
 import { acceptedSince, idleFrom, namesBefore } from './frame-table';
 import { idleOf, idleStart, idleStep, idleTicks } from './idle';
 import { RESULT_KIND, lastResult } from './exam';
-import { healthOf } from './health';
+import { countsOf, healthOf } from './health';
 import { KNOWN_NOTES, knownOf, knownStart, knownStep } from './known';
 import { putsFrom } from './known-table';
 import { RECENT, lessonPlaces, lessonTextOf, lessonsOf } from './lessons';
@@ -37,11 +37,9 @@ export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = f
   if (past.by !== 'store' || past.ray === undefined) return narrow(frameOf(past.standingFrom(0, end), past.known()), room, chosen, sees);
   const ray = past.ray;
   const told = past.remembered();
-  const cut = past.episodes();
-  let lies = 0;
-  const all = cut.map((e) => ({ ...e, lies: lies += e.shown }));
-  const kept = all.filter((e) => e.why === 'kept');
-  const whole = lies;
+  // The remembered episodes with the running sum of what they count for, and what all episodes count for: sums the database keeps.
+  const kept = past.kept();
+  const { whole } = past.countedBefore(0);
 
   // The episodes that hold an event the owner pinned: such a stretch is shown as it happened wherever it lies.
   const marked = pinned(past.notes([PIN_KIND, UNPIN_KIND]));
@@ -58,13 +56,8 @@ export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = f
   const begin = count === 0 || held.size > 0 ? null : kept[Math.max(0, count - 1 - OVERLAP_EPISODES)]!;
   const first = begin === null ? 0 : begin.from;
   const events = past.standingFrom(first === 0 ? 0 : begin!.fromSeq, end);
-  const before = { chars: 0, calls: 0, slots: 0 };
-  for (const e of all) {
-    if (e.to > first) break;
-    before.chars += e.chars;
-    before.calls += e.calls;
-    if (sees) before.slots += e.slots;
-  }
+  const counted = first === 0 ? { chars: 0, calls: 0, slots: 0 } : past.countedBefore(first);
+  const before = { chars: counted.chars, calls: counted.calls, slots: sees ? counted.slots : 0 };
   let used = new Set<string>();
   if (before.calls > 0) {
     const ids: string[] = [];
@@ -78,7 +71,7 @@ export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = f
   const last = events.at(-1)?.ts ?? '';
   const known = past.known();
   const lessons = process.env.TENERAL_LESSONS === '0' ? null : lessonsText(past, ray, events, first === 0, last, end);
-  const health = healthOf({ told, cut, known, exam: lastResult(past.notes([RESULT_KIND])), idle: first === 0 ? idleTicks(events) : idleFrom(ray) }, Date.parse(last) || 0);
+  const health = healthOf({ ...past.counts(), known, exam: lastResult(past.notes([RESULT_KIND])), idle: first === 0 ? idleTicks(events) : idleFrom(ray) }, Date.parse(last) || 0);
   const head: Head = { last, knowing: knowingOf(known, last, lessons, health), told, kept, whole, pinned: held, outdated: outdatedStretches(past.notes(LINK_NOTES), told) };
   return { events, first, before, usedBefore: (id) => used.has(id), accepted: first === 0 ? acceptanceNotes(events) : acceptedSince(ray, begin!.fromSeq), head };
 }
@@ -199,7 +192,7 @@ export function frameAsOf(past: Past, episode: Placed, room: number, chosen: Siz
   const open = episodesOf(rest.map(slimOf)).map((e) => ({ ...e, from: e.from + keptTo, to: e.to + keptTo }));
   const idle = { ...(kept.at(-1)?.idle ?? idleStart()) };
   for (const e of rest) idleStep(idle, e);
-  const health = healthOf({ told, cut: [...kept, ...open], known, exam: lastResult(then.map((n) => n.event)), idle: idleOf(idle) }, Date.parse(last) || 0);
+  const health = healthOf({ ...countsOf([...kept, ...open], told), known, exam: lastResult(then.map((n) => n.event)), idle: idleOf(idle) }, Date.parse(last) || 0);
 
   let lessons: string | null = null;
   if (process.env.TENERAL_LESSONS !== '0') {

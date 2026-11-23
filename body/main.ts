@@ -10,7 +10,7 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { SUBAGENT_KIND, Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
-import { GLANCE_KIND, GLANCE_SAID, OVERHEARD_KIND, SETTLED_KIND, decide, glance, lastSaid, overheard, setDown, unsettled } from '../heart/glance';
+import { GLANCE_SAID, decide, glance, ignoredTalk, lastSaid, setDown, waitingTalk } from '../heart/glance';
 import { dueWorkOf, heldByInterrupt, importLegacyWork, workDueAtOf } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -238,7 +238,7 @@ function hearIn(service: string, channel: string): void {
   const key = `${service}:${channel}`;
   if (askedToHear.has(key)) return;
   askedToHear.add(key);
-  void ensureHeard(ctx, service, channel, noted(ATTENTION_KIND))
+  void ensureHeard(ctx, service, channel, { muted: past.stateOf('attention', [`${service}\n${channel}`]) === 'muted' })
     .then((asked) => { if (asked) console.error(`[chat] ${service} was not sending the talk of ${channel}; asked it to`); })
     .catch((err) => console.error(`[chat] ${service} could not be asked for the talk of ${channel}: ${err instanceof Error ? err.message : String(err)}`));
 }
@@ -293,8 +293,8 @@ function heardOn(service: string): (m: ChatMessage, how: How) => void {
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 // A glance reads the overheard talk and what was decided of it, what the agent last said, and its agenda: each asked of the past.
 const glanceDeps = () => ({
-  journal, gen, provider: glanceProvider, who: soulHead, emit, events: () => noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND),
-  asks: { said: saidLately, agenda: (now: number) => agendaByDay(now) },
+  journal, gen, provider: glanceProvider, who: soulHead, emit, events: (): JournalEvent[] => [],
+  asks: { said: saidLately, agenda: (now: number) => agendaByDay(now), waiting: () => waitingTalk(past), ignored: () => ignoredTalk(past) },
 });
 /** What the agent last said in words (`lastSaid` in heart/glance.ts): looked for from the journal's end, further back while too few are found. */
 function saidLately(): string[] {
@@ -322,7 +322,7 @@ function emit(s: Stimulus): void {
   }
   if (s.overheard !== undefined && GLANCE) {
     // Talk that addressed nobody is set down and glanced at by the heart before a turn is spent on it (heart/glance.ts).
-    if (setDown(journal, gen, noted(OVERHEARD_KIND, GLANCE_KIND), { ...s, overheard: s.overheard })) {
+    if (setDown(journal, gen, waitingTalk(past), { ...s, overheard: s.overheard })) {
       // While a turn runs the heart is not asked: the deciding is done beside it, so that what concerns the agent reaches that turn.
       if (working && process.env.TENERAL_BACKGROUND !== 'serial') void glanceBeside();
       idleWake?.();
@@ -680,7 +680,7 @@ const heart = new Heart({
   asks: { owed: () => turnOwed(past, journal), owner: () => past.stands().owner, known: () => past.known(), pulse: (now) => ({ source: 'clock', text: `${clockText(new Date(now))} ${agendaByDay(now)}` }) },
   born: () => clockMayTick(sinceSaid(), soulDir),
   emit,
-  overheard: () => { if (!GLANCE) return false; const talk = noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND); return overheard(talk).length > 0 || unsettled(talk).length > 0; },
+  overheard: () => GLANCE && (past.states('overheard', { state: 'waiting' }).length > 0 || past.states('overheard', { state: 'ignored' }).length > 0),
   glance: async () => {
     // One that was begun beside the turn that has just ended is let finish: the same talk is not decided twice.
     if (glancing !== null) await glancing;
@@ -704,14 +704,14 @@ const heart = new Heart({
     if (quitting) return null;
     const now = Date.now();
     // Each asks for what it reads: an interruption lies after the latest thing said, a job and a subagent are notes of their own, and work is what is known.
-    const own = heldByInterrupt(sinceSaid()) ? null : endedJob(journal, gen, noted(JOB_KIND)) ?? endedSubagent(journal, gen, noted(SUBAGENT_KIND)) ?? dueWorkOf(journal, gen, now, past.known());
+    const own = heldByInterrupt(sinceSaid()) ? null : endedJob(journal, gen, past.states('job', { state: 'running', gen }).map((row) => row.event)) ?? endedSubagent(journal, gen, past.states('subagent', { state: 'ended' }).map((row) => row.event)) ?? dueWorkOf(journal, gen, now, past.known());
     // And the species, heard from now and then: an offer it has moved past is retired, and the agent told.
     return own ?? staleOffers(now);
   },
   nextLook: () => {
     const now = Date.now(), held = heldByInterrupt(sinceSaid());
     const due = held ? undefined : workDueAtOf(past.known());
-    const job = !held && jobsLeftRunning(noted(JOB_KIND), gen);
+    const job = !held && past.states('job', { state: 'running', gen }).length > 0;
     return Math.min(offersLookAt - now, ...(due === undefined ? [] : [due - now]), ...(job ? [JOB_LOOK_MS] : []));
   },
   // The clock: time of the agent's own, offered at rest when a tick is due and there is something to offer.
@@ -723,7 +723,7 @@ const heart = new Heart({
     const at = nextTickAt();
     return at === undefined ? undefined : at - Date.now();
   },
-  backlog: () => waitingOf(past.episodes(), past.remembered()).length,
+  backlog: () => past.counts().waiting,
   restMs,
   onError: error => {
     console.error(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);

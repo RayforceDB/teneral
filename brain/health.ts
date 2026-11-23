@@ -3,6 +3,9 @@ import { episodes, type Episode } from './episodes';
 import { QUESTIONS_MIN, lastResult, rate, type Result } from './exam';
 import type { JournalEvent } from './journal';
 import { agenda, known, type Known } from './known';
+import { countsOf, type MemoryCounts } from './memory-table';
+
+export { countsOf };
 import { remembered, type Remembered } from './remembered';
 
 // How the agent's memory stands, as one word with its reasons. A memory fails quietly: episodes
@@ -52,14 +55,11 @@ function since(hours: number): string {
 /** How the memory stands in `events`, as of `now`. The same journal and the same moment always give the same answer. */
 export function health(events: JournalEvent[], now: number, of: Known = known(events)): Health {
   const all = remembered(events);
-  return healthOf({ told: all, cut: episodes(events, all.spans), known: of, exam: lastResult(events), idle: idleTicks(events) }, now);
+  return healthOf({ ...countsOf(episodes(events, all.spans), all), known: of, exam: lastResult(events), idle: idleTicks(events) }, now);
 }
 
 /** What the health of the memory is read from. A journal held whole gives it in `health`; the tables of the database give the same (brain/frame.ts). */
-export interface HealthParts {
-  told: Remembered;
-  /** The conversation as it stands, cut into episodes. */
-  cut: Episode[];
+export interface HealthParts extends MemoryCounts {
   known: Known;
   exam: ReturnType<typeof lastResult>;
   /** `idleTicks` of the conversation. */
@@ -67,22 +67,20 @@ export interface HealthParts {
 }
 
 export function healthOf(parts: HealthParts, now: number): Health {
-  const { told: all, cut } = parts;
-  const owed = cut.filter((e) => e.closed && (e.why !== 'kept' || (!all.memories.has(e.first) && !all.quarantined.has(e.first))));
-  const oldest = owed[0]?.end ?? null;
+  const { oldest } = parts;
   const hours = oldest === null ? 0 : Math.max(0, (now - Date.parse(oldest)) / 3_600_000);
   const today = new Date(now).toISOString().slice(0, 10);
   const overdue = parts.known.intentions.filter((i) => i.due !== undefined && i.due < today).length;
   const exam = parts.exam;
-  const formed = all.memories.size + all.quarantined.size;
-  const mechanical = all.merges.filter((m) => m.mechanical === true).length;
+  const formed = parts.remembered + parts.quarantined;
+  const mechanical = parts.mechanical;
 
   const failing: string[] = [];
   const behind: string[] = [];
-  if (owed.length >= WAITING_FAILING.count && hours >= WAITING_FAILING.hours) failing.push(`${owed.length} episodes wait to be remembered, the oldest for ${since(hours)}`);
-  else if (owed.length >= WAITING_BEHIND.count && hours >= WAITING_BEHIND.hours) behind.push(`${owed.length} episodes wait to be remembered, the oldest for ${since(hours)}`);
-  if (all.quarantined.size >= QUARANTINED.count && all.quarantined.size / formed > QUARANTINED.share) failing.push(`of ${all.quarantined.size} stretches in ${formed} no memory could be formed`);
-  if (mechanical >= MECHANICAL.count && mechanical / all.merges.length > MECHANICAL.share) failing.push(`${mechanical} of ${all.merges.length} wider memories are only lists of titles`);
+  if (parts.waiting >= WAITING_FAILING.count && hours >= WAITING_FAILING.hours) failing.push(`${parts.waiting} episodes wait to be remembered, the oldest for ${since(hours)}`);
+  else if (parts.waiting >= WAITING_BEHIND.count && hours >= WAITING_BEHIND.hours) behind.push(`${parts.waiting} episodes wait to be remembered, the oldest for ${since(hours)}`);
+  if (parts.quarantined >= QUARANTINED.count && parts.quarantined / formed > QUARANTINED.share) failing.push(`of ${parts.quarantined} stretches in ${formed} no memory could be formed`);
+  if (mechanical >= MECHANICAL.count && mechanical / parts.merges > MECHANICAL.share) failing.push(`${mechanical} of ${parts.merges} wider memories are only lists of titles`);
   if (exam !== null && exam.recall.questions >= QUESTIONS_MIN && rate(exam.recall) < rate(exam.plain)) failing.push('recall finds less than looking for the words as they stand');
   if (exam !== null && exam.written && rate(exam.told) < TOLD_LOW) behind.push(`the memories tell ${Math.round(rate(exam.told) * 100)}% of what the exam asks`);
   const idle = parts.idle;
@@ -93,7 +91,7 @@ export function healthOf(parts: HealthParts, now: number): Health {
   return {
     state: failing.length > 0 ? 'failing' : behind.length > 0 ? 'behind' : 'well',
     reasons: [...failing, ...behind],
-    remembered: all.memories.size, waiting: owed.length, oldest, quarantined: all.quarantined.size, overdue, exam,
+    remembered: parts.remembered, waiting: parts.waiting, oldest, quarantined: parts.quarantined, overdue, exam,
   };
 }
 

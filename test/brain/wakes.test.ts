@@ -7,9 +7,10 @@ import { ATTENTION_KIND, QUIET_RUN, modeFrom, modeOf } from '../../body/chat-too
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { journalPast, projections, storePast, type Past } from '../../brain/past';
 import { QUIET_REPLY } from '../../brain/quiet';
+import { statesOf } from '../../brain/states-table';
 import { openStore } from '../../brain/store';
 import { MEMBER_OF, SETTLED, quietOf, wakeStart, wakeStep } from '../../brain/wakes-table';
-import { SETTLED_KIND } from '../../heart/glance';
+import { GLANCE_KIND, OVERHEARD_KIND, SETTLED_KIND, ignoredTalk, overheard, unsettled, waitingTalk } from '../../heart/glance';
 import { library, ray } from './rayforce';
 
 const real = test.skipIf(library === null);
@@ -49,9 +50,9 @@ function talk(seed: number, length: number, quietShare: number): JournalEvent[] 
 }
 
 /** A past that answers from a journal held here, the wakes by the step the table takes. */
-function held(events: JournalEvent[]): Pick<Past, 'notes' | 'quiet'> {
+function held(events: JournalEvent[]): Pick<Past, 'stateOf' | 'quiet'> {
   return {
-    notes: (kinds) => events.filter((e) => e.type === 'note' && kinds.includes(e.kind)),
+    stateOf: (name, keys) => statesOf(events, name).findLast((row) => keys.includes(row.key))?.state ?? null,
     quiet(source, mark, run) {
       const state = wakeStart();
       events.forEach((e, seq) => { wakeStep(state, e, seq); });
@@ -107,4 +108,66 @@ real('the database holds the wakes, through restarts in the middle of an answer'
     past.persist();
   }
   expect(seen.has('quiet')).toBe(true);
+}, 120_000);
+
+real('how jobs and subagents stand is the last said of each, asked of the database as of the journal', async () => {
+  const { JOB_KIND, jobHistory } = await import('../../body/jobs');
+  const { SUBAGENT_KIND, subagents } = await import('../../body/subagents');
+  let s = 5;
+  const next = (): number => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const events: JournalEvent[] = [];
+  for (let i = 0; i < 160; i++) {
+    const name = `n${Math.floor(next() * 9)}`, gen = next() < 0.7 ? 'g1' : 'g2';
+    if (next() < 0.5) events.push(ev({ type: 'note', kind: JOB_KIND, data: { name, gen, pgid: 100 + i, cwd: '/tmp', command: `run ${i}`, members: [{ pid: 100 + i, started: '1' }], state: next() < 0.6 ? 'running' : 'stopped' } }));
+    else events.push(ev({ type: 'note', kind: SUBAGENT_KIND, data: { name, gen, task: 't', dir: '/tmp', state: ['queued', 'running', 'ended', 'told'][Math.floor(next() * 4)] } }));
+    // A note that is not one: it changes nothing.
+    if (next() < 0.1) events.push(ev({ type: 'note', kind: JOB_KIND, data: { name, state: 'running' } }), ev({ type: 'note', kind: SUBAGENT_KIND, data: { name, state: 'gone' } }));
+  }
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-states-')), 'journal.jsonl');
+  writeFileSync(journal, '');
+  let had = 0;
+  for (const upTo of [30, 90, 200, events.length]) {
+    const to = Math.min(upTo, events.length);
+    appendFileSync(journal, events.slice(had, to).map((e) => `${JSON.stringify(e)}\n`).join(''));
+    had = to;
+    const now = events.slice(0, to);
+    for (const past of [storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false), journalPast(journal)]) {
+      for (const gen of ['g1', 'g2']) {
+        const want = [...jobHistory(now).values()].filter((j) => j.gen === gen && j.state === 'running').map((j) => j.name).sort();
+        expect(past.states('job', { state: 'running', gen }).map((row) => row.key).sort()).toEqual(want);
+        // And handed on as the notes themselves, they read as the same jobs.
+        expect([...jobHistory(past.states('job', { state: 'running', gen }).map((row) => row.event)).keys()].sort()).toEqual(want);
+      }
+      expect(past.states('subagent', { state: 'ended' }).map((row) => row.key).sort()).toEqual([...subagents(now).values()].filter((x) => x.state === 'ended').map((x) => x.name).sort());
+      expect(past.states('subagent').length).toBe(subagents(now).size);
+    }
+  }
+}, 120_000);
+
+real('the overheard talk that waits and the talk that was only ignored are what stands so in the database, as the journal read through has them', () => {
+  let s = 11;
+  const next = (): number => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const events: JournalEvent[] = [];
+  for (let i = 0; i < 140; i++) {
+    const r = next();
+    const waiting = overheard(events), ignored = unsettled(events);
+    if (r < 0.5 || waiting.length + ignored.length === 0) events.push(ev({ type: 'note', kind: OVERHEARD_KIND, data: { source: 'agent:rayboard', text: `talk ${i}\nmore`, ...(next() < 0.5 ? { lines: `lines ${i}` } : {}) } }));
+    else if (r < 0.8 && waiting.length > 0) events.push(ev({ type: 'note', kind: GLANCE_KIND, data: { of: waiting.slice(0, 1 + Math.floor(next() * waiting.length)).map((t) => t.id), verdict: next() < 0.6 ? 'ignore' : 'look', why: 'x' } }));
+    else if (ignored.length > 0) events.push(ev({ type: 'note', kind: SETTLED_KIND, data: { of: ignored.map((t) => t.id) } }));
+    else events.push(ev({ type: 'note', kind: OVERHEARD_KIND, data: { source: 7, text: 'not a piece of talk' } }));
+  }
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-overheard-')), 'journal.jsonl');
+  writeFileSync(journal, '');
+  let had = 0, some = 0;
+  for (let upTo = 10; upTo <= events.length; upTo += 13) {
+    appendFileSync(journal, events.slice(had, upTo).map((e) => `${JSON.stringify(e)}\n`).join(''));
+    had = upTo;
+    const now = events.slice(0, upTo);
+    for (const past of [storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false), journalPast(journal)]) {
+      expect(waitingTalk(past)).toEqual(overheard(now));
+      expect(ignoredTalk(past)).toEqual(unsettled(now));
+    }
+    if (overheard(now).length > 0 && unsettled(now).length > 0) some += 1;
+  }
+  expect(some).toBeGreaterThan(1);
 }, 120_000);
