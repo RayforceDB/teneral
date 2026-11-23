@@ -3,12 +3,15 @@ import { acceptedSince, idleFrom, namesBefore } from './frame-table';
 import { idleTicks } from './idle';
 import { RESULT_KIND, lastResult } from './exam';
 import { healthOf } from './health';
-import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessonText } from './lessons';
+import { RECENT, lessonPlaces, lessonTextOf, lessonsOf } from './lessons';
+import { lessonsFrom } from './lessons-table';
 import { LINK_NOTES, outdatedStretches } from './links';
 import { MEMORY_MARK, knowingOf, swapped, type Head, type Sizes } from './logbook';
 import { OVERLAP_EPISODES, frameOf, narrow, type Frame } from './memory';
 import { PIN_KIND, UNPIN_KIND, pinned } from './owned';
+import type { JournalEvent } from './journal';
 import type { Past } from './past';
+import type { Ray } from './ray';
 import { reply } from './wire';
 
 /**
@@ -68,10 +71,25 @@ export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = f
 
   const last = events.at(-1)?.ts ?? '';
   const known = past.known();
-  // Lessons are read against the journal cut by the rules alone, which no table holds: with none ever written, as now, nothing is read for them.
-  const lessons = process.env.TENERAL_LESSONS === '0' || past.notes([LESSON_KIND, LESSON_ACCEPT_KIND, LESSON_CHECK_KIND]).length === 0
-    ? null : lessonText(first === 0 ? events : past.standingFrom(0, end), true, MEMORY_MARK);
+  const lessons = process.env.TENERAL_LESSONS === '0' ? null : lessonsText(past, ray, events, first === 0, last, end);
   const health = healthOf({ told, cut, known, exam: lastResult(past.notes([RESULT_KIND])), idle: first === 0 ? idleTicks(events) : idleFrom(ray) }, Date.parse(last) || 0);
   const head: Head = { last, knowing: knowingOf(known, last, lessons, health), told, kept, whole, pinned: held, outdated: outdatedStretches(past.notes(LINK_NOTES), told) };
   return { events, first, before, usedBefore: (id) => used.has(id), accepted: first === 0 ? acceptanceNotes(events) : acceptedSince(ray, begin!.fromSeq), head };
+}
+
+/** The lessons that bear on now, as they are shown (`lessonText` in brain/lessons.ts), from the notes about them the tables hold. */
+function lessonsText(past: Past, ray: Ray, events: JournalEvent[], whole: boolean, last: string, end: number | undefined): string | null {
+  const { records, conversation } = lessonsFrom(ray);
+  if (records.length === 0) return null;
+  const ids = lessonPlaces(records);
+  const places = ids.length === 0 ? new Map<string, number>() : past.places(ids);
+  const all = lessonsOf(records, (id) => places.get(id), Date.parse(last) || Date.now());
+  // What the agent is at now is read in the latest events: more of them are asked for when the part at hand is shorter than that.
+  let latest = events;
+  for (let back = 4 * RECENT; latest.length < RECENT && !whole; back *= 4) {
+    const from = Math.max(0, (end ?? past.count()) - back);
+    latest = past.standingFrom(from, end);
+    if (from === 0) break;
+  }
+  return lessonTextOf(all, conversation, latest, MEMORY_MARK);
 }

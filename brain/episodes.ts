@@ -116,6 +116,59 @@ export function slimOf(e: JournalEvent): Slim {
 }
 
 /**
+ * What cutting by the rules holds between two events. A boundary is decided at the event an
+ * episode begins with and is never moved afterwards, so a journal can be cut as it grows, with
+ * nothing kept of what lies before the episode being read.
+ */
+export interface RuleState {
+  /** How many events the episode being read has. */
+  size: number;
+  chars: number;
+  /** Whether a turn is owed after the events read so far: the same reading as `needsTurn` in brain/memory.ts. */
+  owed: boolean;
+  /** Calls of the latest reply that have no result yet. A new reply means the round before it is over, answered or not. */
+  pending: number;
+  /** Whether the episode being read has anything in it that the agent was shown. */
+  begun: boolean;
+  /** The time of the event before. */
+  before: string;
+}
+
+export const ruleStart = (): RuleState => ({ size: 0, chars: 0, owed: false, pending: 0, begun: false, before: '' });
+
+/** Takes the next event in. Returns why an episode begins with it, or null when it goes with the one being read. */
+export function ruleStep(state: RuleState, e: Slim): Boundary | null {
+  let reason: Boundary | null = null;
+  // An episode begins with something said to the agent. Records nobody is shown, such as the notes of its own
+  // memory, may lie before that; they are no episode of their own and go with the one that follows.
+  if (state.size > 0 && state.begun) {
+    const quiet = e.asks && !state.owed;
+    const betweenRounds = e.type === 'assistant' || (e.asks && state.pending <= 0);
+    reason = !quiet ? (betweenRounds && state.chars >= EPISODE_HARD_CHARS ? 'size' : null)
+      : e.type === 'generation.promoted' || e.type === 'generation.rolledback' ? 'generation'
+      : between(state.before, e.ts) > GAP_MS ? 'gap'
+      : state.chars >= EPISODE_CHARS ? 'size'
+      : null;
+    if (reason !== null) {
+      state.size = 0;
+      state.chars = 0;
+      state.begun = false;
+    }
+  }
+  state.size += 1;
+  state.before = e.ts;
+  if (e.asks || e.type === 'assistant') state.begun = true;
+  state.chars += e.chars;
+  if (e.type === 'assistant') {
+    state.pending = e.calls;
+    state.owed = state.pending > 0;
+  } else if (e.type === 'tool.result') state.pending -= 1;
+  else if (e.type === 'turn.interrupted') state.owed = false;
+  else if (e.asks) state.owed = true;
+  return reason;
+}
+
+/**
  * The journal as episodes, in order, covering every event exactly once.
  *
  * `kept` names the stretches that were remembered already (brain/sleep.ts journals them). Each is
@@ -147,41 +200,14 @@ export function episodesOf(events: Slim[], kept: Span[] = []): Episode[] {
 
   let from = next;
   let why: Boundary = 'start';
-  let chars = 0;
-  // Whether a turn is owed after the events read so far: the same reading as `needsTurn` in brain/memory.ts.
-  let owed = false;
-  // Calls of the latest reply that have no result yet. A new reply means the round before it is over, answered or not.
-  let pending = 0;
-  /** Whether the episode being read has anything in it that the agent was shown. */
-  let begun = false;
+  const rules = ruleStart();
   for (let i = next; i < events.length; i++) {
-    const e = events[i]!;
-    // An episode begins with something said to the agent. Records nobody is shown, such as the notes of its own
-    // memory, may lie before that; they are no episode of their own and go with the one that follows.
-    if (i > from && begun) {
-      const quiet = e.asks && !owed;
-      const betweenRounds = e.type === 'assistant' || (e.asks && pending <= 0);
-      const reason: Boundary | null = !quiet ? (betweenRounds && chars >= EPISODE_HARD_CHARS ? 'size' : null)
-        : e.type === 'generation.promoted' || e.type === 'generation.rolledback' ? 'generation'
-        : between(events[i - 1]!.ts, e.ts) > GAP_MS ? 'gap'
-        : chars >= EPISODE_CHARS ? 'size'
-        : null;
-      if (reason !== null) {
-        push(from, i, why);
-        from = i;
-        why = reason;
-        chars = 0;
-        begun = false;
-      }
+    const reason = ruleStep(rules, events[i]!);
+    if (reason !== null) {
+      push(from, i, why);
+      from = i;
+      why = reason;
     }
-    if (e.asks || e.type === 'assistant') begun = true;
-    chars += e.chars;
-    if (e.type === 'assistant') {
-      pending = e.calls;
-      owed = pending > 0;
-    } else if (e.type === 'tool.result') pending -= 1;
-    else if (e.type === 'turn.interrupted') owed = false;
-    else if (e.asks) owed = true;
   }
   push(from, events.length, why);
   // The last one is where the agent is now, unless it is a remembered span with nothing after it.
