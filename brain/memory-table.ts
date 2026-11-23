@@ -1,19 +1,28 @@
 import { episodesOf, slimOf, type Episode, type Slim } from './episodes';
 import type { JournalEvent } from './journal';
+import { imagePlaces, reply, showsImages, stimulusText } from './wire';
 import { WITHDRAW_KIND } from './owned';
 import type { Column, Ray, Table } from './ray';
 import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
+import { asText } from './stemnote';
 import { boundAs, type Projection } from './store';
 
 // How the journal is cut into episodes, and what is remembered of each, as tables of the database.
 //
-//   episodes     ord from to from_seq to_seq first last start end chars why closed kept
+//   episodes     ord from to from_seq to_seq first last start end chars shown calls slots why closed kept
 //   memories     ord from data          the memory of each stretch that has one, by its first event
 //   quarantined  ord from data          the stretches no memory could be formed of
 //   merges       ord data               the memories that stand for several
 //   spans        ord from to            every stretch that was remembered or given up on, in order
 //   notes        seq data               the notes all of that is made from
-//   open         seq id ts type chars calls asks      the events not remembered yet, as the cutting reads them
+//   open         seq id ts type chars shown calls slots asks      the events not remembered yet, as the cutting reads them
+//   reply        seq data               the last reply and which of its calls were answered, while results may still come
+//
+// Beside what the cutting needs, an episode holds what a request counts of it (brain/memory.ts):
+// what its events count for when they are old (`shown`), how many calls its replies made, and how
+// many images it holds a place for (`slots`: in what the owner said, and in what `look` returned
+// to a call of a reply in it). Summed over the episodes before a point, they are what a request
+// that begins there has to know of everything it does not show.
 //
 // It is made by the functions that read a whole journal (`episodesOf` in brain/episodes.ts,
 // `remembered` in brain/remembered.ts), fed here with no more than they read. What is remembered
@@ -29,7 +38,7 @@ import { boundAs, type Projection } from './store';
 
 export const MEMORY = 'memory';
 /** Changed with the cutting, with what a memory is, or with the columns below. */
-export const MEMORY_VERSION = 1;
+export const MEMORY_VERSION = 2;
 
 const NOTES: readonly string[] = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, WITHDRAW_KIND];
 
@@ -38,8 +47,14 @@ const syms = (data: string[]): Column => ({ type: 'sym', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });
 const bools = (data: boolean[]): Column => ({ type: 'bool', data: Uint8Array.from(data, (b) => (b ? 1 : 0)) });
 
-/** An episode with the numbers of its events: `to_seq` is the number after its last. */
-export interface Placed extends Episode { fromSeq: number; toSeq: number }
+/** An episode with the numbers of its events (`to_seq` is the number after its last) and what a request counts of it. */
+export interface Placed extends Episode { fromSeq: number; toSeq: number; shown: number; calls: number; slots: number }
+
+/** A call id as a key: ids are the model's, and may be anything. One that is no plain value answers to nothing, as in a journal read whole. */
+const keyOf = (id: unknown): string | null => (id === undefined ? 'u' : typeof id === 'object' && id !== null ? null : `j${JSON.stringify(id)}`);
+
+/** The last reply, while results of its calls may still come: the nth call with an id gets the nth result (`answers` in brain/memory.ts). */
+interface Reply { seq: number; calls: { key: string | null; look: boolean }[]; got: Record<string, number> }
 
 interface State {
   /** The notes memories are made from, each with its number. */
@@ -50,11 +65,44 @@ interface State {
   kept: Placed[];
   /** The stretches already looked at: one that was not next in line when it was recorded is passed over for good, as reading the whole journal passes it over. */
   seen: Set<string>;
-  /** The events after the last remembered stretch, as the cutting reads them, each with its number. */
-  open: { slim: Slim; seq: number }[];
+  /** The events after the last remembered stretch, as the cutting reads them, each with its number and the images it holds a place for. */
+  open: { slim: Slim; seq: number; slots: number }[];
+  reply: Reply | null;
 }
 
-const start = (): State => ({ notes: [], told: remembered([]), kept: [], seen: new Set(), open: [] });
+const start = (): State => ({ notes: [], told: remembered([]), kept: [], seen: new Set(), open: [], reply: null });
+
+const sum = <T>(items: T[], of: (item: T) => number): number => items.reduce((n, item) => n + of(item), 0);
+
+/** Images a result holds a place for belong to the reply that made the call, wherever that reply lies by now. */
+function credit(state: State, seq: number, slots: number): void {
+  for (let i = state.open.length - 1; i >= 0 && state.open[i]!.seq >= seq; i--) {
+    if (state.open[i]!.seq === seq) { state.open[i]!.slots += slots; return; }
+  }
+  const held = state.kept.find((e) => e.fromSeq <= seq && seq < e.toSeq);
+  if (held !== undefined) held.slots += slots;
+}
+
+/** The images `e` holds a place for by itself, and the pairing of results with the calls of the last reply. */
+function slotsOf(state: State, e: JournalEvent, seq: number): number {
+  if (e.type === 'stimulus') return showsImages(e.source) ? imagePlaces(stimulusText(e.source, e.text)) : 0;
+  if (e.type === 'assistant') {
+    state.reply = { seq, got: {}, calls: reply(e).calls.map((call) => {
+      const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown };
+      return { key: keyOf(c.id), look: c.name === 'look' };
+    }) };
+    return 0;
+  }
+  if (e.type === 'tool.result' && state.reply !== null) {
+    const key = keyOf(e.callId);
+    if (key === null) return 0;
+    const nth = state.reply.got[key] ?? 0;
+    state.reply.got[key] = nth + 1;
+    const call = state.reply.calls.filter((c) => c.key === key)[nth];
+    if (call?.look === true && e.ok === true) credit(state, state.reply.seq, imagePlaces(asText(e.output)));
+  }
+  return 0;
+}
 
 /** Takes the stretches recorded since the last look, in order: each is kept when it begins where the remembered part ends. */
 function keep(state: State): void {
@@ -68,7 +116,8 @@ function keep(state: State): void {
     const from = state.kept.at(-1)?.to ?? 0;
     state.kept.push({
       id: span.from, from, to: from + taken.length, first: span.from, last: span.to, start: taken[0]!.slim.ts, end: taken.at(-1)!.slim.ts,
-      chars: taken.reduce((sum, one) => sum + one.slim.chars, 0), why: 'kept', closed: true, fromSeq: taken[0]!.seq, toSeq: taken.at(-1)!.seq + 1,
+      chars: sum(taken, (one) => one.slim.chars), why: 'kept', closed: true, fromSeq: taken[0]!.seq, toSeq: taken.at(-1)!.seq + 1,
+      shown: sum(taken, (one) => one.slim.shown), calls: sum(taken, (one) => one.slim.calls), slots: sum(taken, (one) => one.slots),
     });
   }
 }
@@ -76,9 +125,13 @@ function keep(state: State): void {
 /** Every episode as it stands: the remembered ones, then what the rules make of the rest. */
 function placed(state: State): Placed[] {
   const at = state.kept.at(-1)?.to ?? 0;
-  const rest = episodesOf(state.open.map((one) => one.slim)).map((e): Placed => ({
-    ...e, from: e.from + at, to: e.to + at, fromSeq: state.open[e.from]!.seq, toSeq: state.open[e.to - 1]!.seq + 1,
-  }));
+  const rest = episodesOf(state.open.map((one) => one.slim)).map((e): Placed => {
+    const its = state.open.slice(e.from, e.to);
+    return {
+      ...e, from: e.from + at, to: e.to + at, fromSeq: its[0]!.seq, toSeq: its.at(-1)!.seq + 1,
+      shown: sum(its, (one) => one.slim.shown), calls: sum(its, (one) => one.slim.calls), slots: sum(its, (one) => one.slots),
+    };
+  });
   return [...state.kept, ...rest];
 }
 
@@ -108,7 +161,8 @@ export function memoryProjection(): Projection {
     standing: true,
     reset() { state = start(); fromNotes = null; fromEvents = null; },
     step(e: JournalEvent, seq: number): boolean {
-      state.open.push({ slim: slimOf(e), seq });
+      const slots = slotsOf(state, e, seq);
+      state.open.push({ slim: slimOf(e), seq, slots });
       fromEvents = null;
       if (e.type === 'note' && NOTES.includes(e.kind)) {
         state.notes.push({ seq, event: e });
@@ -126,11 +180,14 @@ export function memoryProjection(): Projection {
         episodes: {
           ord: nums(all.map((_, i) => i)), from: nums(all.map((e) => e.from)), to: nums(all.map((e) => e.to)), from_seq: nums(all.map((e) => e.fromSeq)), to_seq: nums(all.map((e) => e.toSeq)),
           first: strs(all.map((e) => e.first)), last: strs(all.map((e) => e.last)), start: strs(all.map((e) => e.start)), end: strs(all.map((e) => e.end)),
-          chars: nums(all.map((e) => e.chars)), why: syms(all.map((e) => e.why)), closed: bools(all.map((e) => e.closed)), kept: bools(all.map((e) => e.why === 'kept')),
+          chars: nums(all.map((e) => e.chars)), shown: nums(all.map((e) => e.shown)), calls: nums(all.map((e) => e.calls)), slots: nums(all.map((e) => e.slots)),
+          why: syms(all.map((e) => e.why)), closed: bools(all.map((e) => e.closed)), kept: bools(all.map((e) => e.why === 'kept')),
         },
+        reply: state.reply === null ? { seq: nums([]), data: strs([]) } : { seq: nums([state.reply.seq]), data: strs([JSON.stringify(state.reply)]) },
         open: {
           seq: nums(state.open.map((one) => one.seq)), id: strs(state.open.map((one) => one.slim.id)), ts: strs(state.open.map((one) => one.slim.ts)), type: syms(state.open.map((one) => one.slim.type)),
-          chars: nums(state.open.map((one) => one.slim.chars)), calls: nums(state.open.map((one) => one.slim.calls)), asks: bools(state.open.map((one) => one.slim.asks)),
+          chars: nums(state.open.map((one) => one.slim.chars)), shown: nums(state.open.map((one) => one.slim.shown)), calls: nums(state.open.map((one) => one.slim.calls)),
+          slots: nums(state.open.map((one) => one.slots)), asks: bools(state.open.map((one) => one.slim.asks)),
         },
       };
       return { ...noteTables(), ...fromEvents };
@@ -145,10 +202,12 @@ export function memoryProjection(): Projection {
       state.kept = episodesIn(tables.episodes).filter((e) => e.why === 'kept');
       // Every stretch recorded so far has had its turn: kept then, or passed over.
       state.seen = new Set(state.told.spans.map((span) => span.from));
-      state.open = rows(tables.open, ['seq', 'id', 'ts', 'type', 'chars', 'calls', 'asks']).sort((a, b) => Number(a.seq) - Number(b.seq)).map((row) => ({
-        seq: Number(row.seq),
-        slim: { id: String(row.id), ts: String(row.ts), type: String(row.type), chars: Number(row.chars), calls: Number(row.calls), asks: Boolean(row.asks) },
+      state.open = rows(tables.open, ['seq', 'id', 'ts', 'type', 'chars', 'shown', 'calls', 'slots', 'asks']).sort((a, b) => Number(a.seq) - Number(b.seq)).map((row) => ({
+        seq: Number(row.seq), slots: Number(row.slots),
+        slim: { id: String(row.id), ts: String(row.ts), type: String(row.type), chars: Number(row.chars), shown: Number(row.shown), calls: Number(row.calls), asks: Boolean(row.asks) },
       }));
+      const last = rows(tables.reply, ['data'])[0]?.data;
+      state.reply = last === undefined ? null : JSON.parse(String(last)) as Reply;
     },
   };
 }
@@ -161,9 +220,10 @@ function rows(table: Table | undefined, names: string[]): Record<string, unknown
 
 /** The episodes a table of them holds, in order. */
 function episodesIn(table: Table | undefined): Placed[] {
-  return rows(table, ['ord', 'from', 'to', 'from_seq', 'to_seq', 'first', 'last', 'start', 'end', 'chars', 'why', 'closed']).sort((a, b) => Number(a.ord) - Number(b.ord)).map((row) => ({
+  return rows(table, ['ord', 'from', 'to', 'from_seq', 'to_seq', 'first', 'last', 'start', 'end', 'chars', 'shown', 'calls', 'slots', 'why', 'closed']).sort((a, b) => Number(a.ord) - Number(b.ord)).map((row) => ({
     id: String(row.first), from: Number(row.from), to: Number(row.to), first: String(row.first), last: String(row.last), start: String(row.start), end: String(row.end),
     chars: Number(row.chars), why: String(row.why) as Episode['why'], closed: Boolean(row.closed), fromSeq: Number(row.from_seq), toSeq: Number(row.to_seq),
+    shown: Number(row.shown), calls: Number(row.calls), slots: Number(row.slots),
   }));
 }
 

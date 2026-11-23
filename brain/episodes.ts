@@ -102,6 +102,8 @@ export interface Slim {
   type: string;
   /** `eventChars` of it. */
   chars: number;
+  /** `shownChars` of it. */
+  shown: number;
   /** How many calls a reply made. */
   calls: number;
   /** Whether it asks for a turn. */
@@ -110,7 +112,7 @@ export interface Slim {
 
 export function slimOf(e: JournalEvent): Slim {
   const calls = e.type === 'assistant' ? (e as { toolCalls?: unknown }).toolCalls : undefined;
-  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e) };
+  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), shown: shownChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e) };
 }
 
 /**

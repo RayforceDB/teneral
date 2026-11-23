@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { GAP_MS, episodes } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { episodesFrom, memoryProjection, rememberedFrom } from '../../brain/memory-table';
+import { counted } from '../../brain/memory';
 import { standing } from '../../brain/owned';
 import { journalPast, storePast } from '../../brain/past';
 import { remembered, type Remembered } from '../../brain/remembered';
@@ -75,7 +76,7 @@ function same(journal: string, events: JournalEvent[], upTo: number): void {
   const told = remembered(stands);
   expect(flat(rememberedFrom(ray()))).toEqual(flat(told));
   const placed = episodesFrom(ray());
-  expect(placed.map(bare)).toEqual(episodes(stands, told.spans));
+  expect(placed.map(bare)).toEqual(counted(stands, episodes(stands, told.spans)));
   // The numbers name the same events in the journal as it lies: its lines, counted from the first.
   const all = events.slice(0, upTo);
   for (const e of placed) {

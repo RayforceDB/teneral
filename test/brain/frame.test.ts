@@ -1,8 +1,18 @@
 import { expect, test } from 'bun:test';
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { acceptanceNotes } from '../../body/acceptance';
+import { acceptedSince, frameProjection, namesBefore } from '../../brain/frame-table';
+import { episodesFrom, memoryProjection } from '../../brain/memory-table';
+import { standing } from '../../brain/owned';
+import { remembered } from '../../brain/remembered';
+import { openStore } from '../../brain/store';
+import { library, ray } from './rayforce';
 import { GAP_MS, episodes } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { swapped } from '../../brain/logbook';
-import { assemble, buildMessages, frameOf, narrow, type Sight } from '../../brain/memory';
+import { assemble, buildMessages, counted, frameOf, narrow, wireNames, type Sight } from '../../brain/memory';
 import { EPISODE_KIND } from '../../brain/remembered';
 import { SHOWN_KIND } from '../../brain/shown';
 
@@ -103,3 +113,93 @@ test('a journal with a pinned stretch, or with nothing to swap, is not narrowed'
   expect(narrow(frameOf(events), 10_000_000, {}).first).toBe(0);
   expect(narrow(frameOf(life(8, 0)), 12_000, { tailChars: 2_000 }).first).toBe(0);
 });
+
+const real = test.skipIf(library === null);
+const line = (e: JournalEvent): string => `${JSON.stringify(e)}\n`;
+const COMMIT = 'c'.repeat(40);
+
+/** The life above with a stretch taken back in it and an acceptance of a species commit after a refusal. */
+function fuller(): JournalEvent[] {
+  const events = life(40, 30);
+  const calls = events.reduce((sum, e) => sum + (e.type === 'assistant' ? e.toolCalls.length : 0), 0);
+  const forget = ev({ type: 'stimulus', source: 'terminal', text: 'forget the last of it' }, LONG);
+  clock -= LONG;
+  return [
+    ...events,
+    // An id that is the name the next call's place would give it, and then a call that needs that name.
+    ev({ type: 'assistant', text: 'Two more.', toolCalls: [{ id: `call_${calls + 2}`, name: 'bash', args: {} }, { id: 'call_0', name: 'bash', args: {} }] }),
+    ev({ type: 'assistant', text: 'I will try that.', toolCalls: [{ id: 'call_3', name: 'look', args: {} }] }),
+    ev({ type: 'tool.intent', callId: 'call_3', name: 'look', args: {} }),
+    ev({ type: 'tool.result', callId: 'call_3', ok: true, output: `there\n${image(1)}` }),
+    ev({ type: 'mutation.rejected', gate: 'species', commit: 'd'.repeat(40), output: `Your owner has not accepted that commit: it moves the species to ${COMMIT}, and with that its kernel.` } as unknown as EventBody),
+    ev({ type: 'species.accepted', commit: COMMIT } as unknown as EventBody),
+    { ...forget, ts: new Date(clock += LONG).toISOString() },
+    ev({ type: 'assistant', text: 'As you say.', toolCalls: [{ id: 'gone1', name: 'bash', args: {} }] }),
+    ev({ type: 'note', kind: 'memory.back.v1', data: { to: forget.id } }),
+    ev({ type: 'stimulus', source: 'terminal', text: `and this ${image(2)}` }, LONG),
+    ev({ type: 'assistant', text: 'Seen.', toolCalls: [{ id: 'call_1', name: 'bash', args: {} }] }),
+  ];
+}
+
+/** What the whole journal gives, for the events up to `upTo`. */
+function reference(all: JournalEvent[], upTo: number) {
+  const stands = standing(all.slice(0, upTo));
+  const names: string[] = [];
+  const name = wireNames();
+  for (const e of stands) if (e.type === 'assistant') for (const call of e.toolCalls as { id?: unknown }[]) names.push(name(call.id));
+  return { stands, names, episodes: counted(stands, episodes(stands, remembered(stands).spans)), accepted: acceptanceNotes(stands) };
+}
+
+test('fed event by event, the tables hold what a request counts of every episode, the names of the calls and the acceptance notes', () => {
+  const all = fuller();
+  for (const upTo of [30, 111, 240, all.length - 9, all.length - 8, all.length - 7, all.length - 5, all.length - 2, all.length]) {
+    const want = reference(all, upTo);
+    const stands = new Set(want.stands);
+    const [memory, frame] = [memoryProjection(), frameProjection()];
+    all.slice(0, upTo).forEach((e, seq) => { if (stands.has(e)) { memory.step(e, seq); frame.step(e, seq); } });
+    const episodesTable = memory.tables().episodes!;
+    for (const column of ['chars', 'shown', 'calls', 'slots'] as const) {
+      expect([...(episodesTable[column]!.data as BigInt64Array)].map(Number)).toEqual(want.episodes.map((e) => e[column]));
+    }
+    expect(frame.tables().names!.name!.data).toEqual(want.names);
+    expect(frame.tables().accepted!.id!.data).toEqual([...want.accepted.keys()]);
+    expect(frame.tables().accepted!.note!.data).toEqual([...want.accepted.values()]);
+  }
+  const whole = reference(all, all.length);
+  // The life has what is being counted: images in both kinds of place, names that had to be made, and an acceptance.
+  expect(whole.episodes.reduce((sum, e) => sum + e.slots, 0)).toBeGreaterThan(10);
+  expect(whole.names.some((name) => /^call_\d+_\d+$/.test(name))).toBe(true);
+  expect(whole.accepted.size).toBe(1);
+  expect(whole.names).not.toContain('gone1');
+});
+
+real('the database holds them, through a restart in the middle of a reply and a conversation taken back', () => {
+  const all = fuller();
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-frame-')), 'journal.jsonl');
+  const same = (upTo: number): void => {
+    const want = reference(all, upTo);
+    expect(episodesFrom(ray()).map(({ chars, shown, calls, slots }) => ({ chars, shown, calls, slots }))).toEqual(want.episodes.map(({ chars, shown, calls, slots }) => ({ chars, shown, calls, slots })));
+    for (const calls of [0, 1, 7, Math.floor(want.names.length / 2), want.names.length]) {
+      const before = new Set(want.names.slice(0, calls));
+      const asked = ['call_0', 'call_1', 'call_3', 'c5x0', 'c7x1', 'never', '', 'with "quotes" in it'];
+      const got = namesBefore(ray(), calls, asked);
+      for (const id of asked) expect(got.has(id)).toBe(before.has(id));
+      // And every journaled id that looks like a made name, asked about or not.
+      for (const name of before) if (/^call_\d+(_\d+)?$/.test(name) && got.has(name) === false) expect(want.names.indexOf(name)).toBeGreaterThan(-1);
+    }
+    expect([...acceptedSince(ray(), 0)]).toEqual([...want.accepted]);
+    expect(acceptedSince(ray(), upTo).size).toBe(0);
+  };
+  // It stops in the middle of a reply's results, and again between a refusal and its acceptance.
+  const stops = [200, all.length - 9, all.length - 6, all.length - 3, all.length];
+  writeFileSync(journal, all.slice(0, stops[0]!).map(line).join(''));
+  let store = openStore(ray(), journal, undefined, [memoryProjection(), frameProjection()]);
+  same(stops[0]!);
+  for (let i = 1; i < stops.length; i++) {
+    store.persist();
+    appendFileSync(journal, all.slice(stops[i - 1]!, stops[i]!).map(line).join(''));
+    store = openStore(ray(), journal, undefined, [memoryProjection(), frameProjection()]);
+    store.settle();
+    same(stops[i]!);
+  }
+}, 60_000);
