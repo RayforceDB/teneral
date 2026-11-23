@@ -1,3 +1,4 @@
+import { readsState } from '../brain/states-table';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
@@ -70,6 +71,9 @@ function record(value: unknown): JobRecord | null {
     && typeof (m as JobMember).started === 'string' && /^\d+$/.test((m as JobMember).started));
   return { name: j.name, gen: j.gen, pgid: j.pgid!, cwd: j.cwd, command: j.command, members, state: j.state, ...(typeof j.reason === 'string' ? { reason: j.reason } : {}) };
 }
+
+// How a job stands is the last said of its name (brain/states-table.ts): the database is asked which are running.
+readsState(JOB_KIND, 'job', (e) => { const j = record(e.data); return j === null ? null : { key: j.name, state: j.state, gen: j.gen }; });
 
 export function jobHistory(events: JournalEvent[]): Map<string, JobRecord> {
   const jobs = new Map<string, JobRecord>();

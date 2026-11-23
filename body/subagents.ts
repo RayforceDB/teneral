@@ -1,3 +1,4 @@
+import { readsState } from '../brain/states-table';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
@@ -123,6 +124,13 @@ const RATE_RETRIES = 3;
 const CALM = 5;
 
 const LAST_WORD = 'You have reached the limit set for a subagent and cannot take another step. Reply now, with no tool call, with your report: what you did, what you found, what you changed and where, and exactly where you stopped.';
+
+// How a subagent stands is the last said of its name (brain/states-table.ts): the database is asked which have ended.
+readsState(SUBAGENT_KIND, 'subagent', (e) => {
+  const s = (typeof e.data === 'object' && e.data !== null ? e.data : {}) as Partial<Subagent>;
+  if (typeof s.name !== 'string' || typeof s.gen !== 'string' || typeof s.task !== 'string' || typeof s.dir !== 'string') return null;
+  return s.state === 'queued' || s.state === 'running' || s.state === 'ended' || s.state === 'told' ? { key: s.name, state: s.state, gen: s.gen } : null;
+});
 
 /** Every subagent the journal knows, by name, as it last stood. A name used again is the later one. */
 export function subagents(events: JournalEvent[]): Map<string, Subagent> {

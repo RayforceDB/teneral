@@ -11,11 +11,12 @@ import { acceptanceNotes } from './acceptance';
 import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
 import { idleTicks, ownStart, ownStep } from './idle';
 import { ownSpentSince, spendProjection } from './spend-table';
+import { firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
 import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonsProjection } from './lessons-table';
 import { counted } from './wire';
-import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
+import { countedBefore, countsFrom, countsOf, episodesFrom, keptFrom, memoryProjection, rememberedFrom, type MemoryCounts, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
 import { TIES, tiesProjection } from './ties-table';
 import { boundAs, openStore, readLine, scan, type Line, type Projection, type Store } from './store';
@@ -61,6 +62,12 @@ export interface Past {
   count(): number;
   /** How the conversation stands in what is asked between turns: idle clock ticks in a row, when the owner last spoke and the clock last ticked ('' when never), and the number of the event a reading for the next report begins at. */
   stands(): Stands;
+  /** How everything of one kind stands (brain/states-table.ts): the last said of each key, in the order said; with `state` or `gen`, only those that stand so. */
+  states(name: string, where?: { state?: string; gen?: string }): StateRow[];
+  /** The first note about each of `keys`, in the order said. */
+  firstStates(name: string, keys: string[]): StateRow[];
+  /** How the newest note about any of `keys` says it stands; null when none was ever said. */
+  stateOf(name: string, keys: string[]): string | null;
   /** Whether the newest `run` wakes from `source` that carry `mark` (the words naming a channel) and that no glance settled were all answered with silence (brain/wakes-table.ts). */
   quiet(source: string, mark: string, run: number): boolean;
   /** The tokens the agent's own time took from `since` on, in milliseconds (`ownSpend` in brain/agenda.ts). */
@@ -73,6 +80,12 @@ export interface Past {
   remembered(): Remembered;
   /** The conversation as it stands, cut into episodes, each with the numbers of its events in the database (the place after the last for `toSeq`). */
   episodes(): Placed[];
+  /** The remembered episodes in order, each with what everything up to its end counts for once old. */
+  kept(): (Placed & { lies: number })[];
+  /** What the episodes ending at or before the place `to` count for together (characters, calls, places for images), and what all episodes count for once old. */
+  countedBefore(to: number): { chars: number; calls: number; slots: number; whole: number };
+  /** How the memory stands in numbers: remembered, given up on, wider memories and the mechanical among them, episodes waiting and the end of the oldest. */
+  counts(): MemoryCounts;
   /** What became of a memory or a fact since it was written: what made it outdated, and what stands now in its place (brain/links.ts). Null when nothing did. */
   since(id: string): Since | null;
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
@@ -114,7 +127,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection(), wakesProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection(), wakesProjection(), statesProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -191,6 +204,19 @@ export function journalPast(journal: string): Past {
       const place = new Map(lines.all().map((line, i) => [line.event.id, i]));
       return counted(events, episodes(events, remembered(events).spans)).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
     },
+    kept() {
+      let lies = 0;
+      return this.episodes().filter((e) => e.why === 'kept').map((e) => ({ ...e, lies: lies += e.shown }));
+    },
+    countedBefore(to) {
+      const out = { chars: 0, calls: 0, slots: 0, whole: 0 };
+      for (const e of this.episodes()) {
+        out.whole += e.shown;
+        if (e.to <= to) { out.chars += e.chars; out.calls += e.calls; out.slots += e.slots; }
+      }
+      return out;
+    },
+    counts() { return countsOf(this.episodes(), this.remembered()); },
     // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
     known: () => known(lines.all().map((line) => line.event)),
     standingFrom(seq, end) {
@@ -207,6 +233,9 @@ export function journalPast(journal: string): Past {
         clock: events.findLast((e) => e.type === 'stimulus' && e.source === 'clock')?.ts ?? '', report: 0,
       };
     },
+    states(name, where) { return lastOf(statesOf(lines.all().map((line) => line.event), name), where); },
+    stateOf(name, keys) { return statesOf(lines.all().map((line) => line.event), name).findLast((row) => keys.includes(row.key))?.state ?? null; },
+    firstStates(name, keys) { return firstOf(statesOf(lines.all().map((line) => line.event), name), keys); },
     quiet(source, mark, run) {
       const state = wakeStart();
       lines.all().forEach((line, seq) => { wakeStep(state, line.event, seq); });
@@ -335,6 +364,21 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.settle();
       return episodesFrom(ray);
     },
+    kept() {
+      store.sync();
+      store.settle();
+      return keptFrom(ray);
+    },
+    countedBefore(to) {
+      store.sync();
+      store.settle();
+      return countedBefore(ray, to);
+    },
+    counts() {
+      store.sync();
+      store.settle();
+      return countsFrom(ray);
+    },
     known() {
       store.sync();
       store.settle();
@@ -371,6 +415,21 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.sync();
       store.settle();
       return quietFrom(ray, source, mark, run);
+    },
+    states(name, where) {
+      store.sync();
+      store.settle();
+      return lastStates(ray, name, where);
+    },
+    stateOf(name, keys) {
+      store.sync();
+      store.settle();
+      return newestState(ray, name, keys);
+    },
+    firstStates(name, keys) {
+      store.sync();
+      store.settle();
+      return firstStates(ray, name, keys);
     },
     places(ids) {
       store.sync();
@@ -591,9 +650,15 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     stands: () => through((past) => past.stands()),
     ownSpent: (since) => through((past) => past.ownSpent(since)),
     quiet: (source, mark, run) => through((past) => past.quiet(source, mark, run)),
+    states: (name, where) => through((past) => past.states(name, where)),
+    stateOf: (name, keys) => through((past) => past.stateOf(name, keys)),
+    firstStates: (name, keys) => through((past) => past.firstStates(name, keys)),
     places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),
+    kept: () => through((past) => past.kept()),
+    countedBefore: (to) => through((past) => past.countedBefore(to)),
+    counts: () => through((past) => past.counts()),
     latest: (type, source) => through((past) => past.latest(type, source)),
     notes: (kinds) => through((past) => past.notes(kinds)),
     notesAt: (kinds) => through((past) => past.notesAt(kinds)),

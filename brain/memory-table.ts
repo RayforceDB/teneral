@@ -13,7 +13,7 @@ import { boundAs, type Projection } from './store';
 //   episodes     ord from to from_seq to_seq first last start end chars shown calls slots idle why closed kept
 //   memories     ord from data          the memory of each stretch that has one, by its first event
 //   quarantined  ord from data          the stretches no memory could be formed of
-//   merges       ord data               the memories that stand for several
+//   merges       ord mechanical data    the memories that stand for several, and whether one is only a list of titles
 //   spans        ord from to            every stretch that was remembered or given up on, in order
 //   notes        seq data               the notes all of that is made from
 //   open         seq id ts type chars shown calls slots asks clock      the events not remembered yet, as the cutting reads them
@@ -40,7 +40,7 @@ import { boundAs, type Projection } from './store';
 
 export const MEMORY = 'memory';
 /** Changed with the cutting, with what a memory is, or with the columns below. */
-export const MEMORY_VERSION = 3;
+export const MEMORY_VERSION = 4;
 
 const NOTES: readonly string[] = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, WITHDRAW_KIND];
 
@@ -162,7 +162,7 @@ export function memoryProjection(): Projection {
     fromNotes = {
       memories: { ord: nums(memories.map((_, i) => i)), from: strs(memories.map(([from]) => from)), data: strs(memories.map(([, memory]) => JSON.stringify(memory))) },
       quarantined: { ord: nums(quarantined.map((_, i) => i)), from: strs(quarantined.map(([from]) => from)), data: strs(quarantined.map(([, given]) => JSON.stringify(given))) },
-      merges: { ord: nums(state.told.merges.map((_, i) => i)), data: strs(state.told.merges.map((merge) => JSON.stringify(merge))) },
+      merges: { ord: nums(state.told.merges.map((_, i) => i)), mechanical: bools(state.told.merges.map((merge) => merge.mechanical === true)), data: strs(state.told.merges.map((merge) => JSON.stringify(merge))) },
       spans: { ord: nums(state.told.spans.map((_, i) => i)), from: strs(state.told.spans.map((span) => span.from)), to: strs(state.told.spans.map((span) => span.to)) },
       notes: { seq: nums(state.notes.map((note) => note.seq)), data: strs(state.notes.map((note) => JSON.stringify(note.event))) },
     };
@@ -258,3 +258,51 @@ export function rememberedFrom(ray: Ray): Remembered {
     merges: of<Merge>('merges').map((row) => row.item),
   };
 }
+
+// What is asked of these tables as a number is asked of the database as one: a sum, a count, a
+// running sum, the rows that have no match in another table. The names of the other tables'
+// columns are set aside under names of their own before a select reads them: inside a select a
+// quoted name that is also a column of the table selected from is read as that column.
+
+/** The remembered episodes in order, each with what everything up to its end counts for once old (`lies`): the running sum of `shown`, kept by the database. */
+export function keptFrom(ray: Ray): (Placed & { lies: number })[] {
+  // The rows whole, and beside them the running sum: a column named `from` cannot be named in a select, whose own word that is.
+  const rows = episodesIn(ray.table(`(select {from: ${boundAs(MEMORY, 'episodes')} where: kept})`));
+  const lies = ray.table(`(select {from: ${boundAs(MEMORY, 'episodes')} where: kept asc: ord lies: (sums shown)})`).columns.lies as BigInt64Array | undefined ?? new BigInt64Array(0);
+  return rows.map((e, i) => ({ ...e, lies: Number(lies[i]) }));
+}
+
+/** What the episodes that end at or before the place `to` count for together, and what all of them count for once old. */
+export function countedBefore(ray: Ray, to: number): { chars: number; calls: number; slots: number; whole: number } {
+  const one = (t: Table, name: string): number => Number((t.columns[name] as ArrayLike<bigint | number> | undefined)?.[0] ?? 0);
+  const before = ray.table(`(select {from: ${boundAs(MEMORY, 'episodes')} where: (<= to ${Math.trunc(to)}) chars: (sum chars) calls: (sum calls) slots: (sum slots)})`);
+  const all = ray.table(`(select {from: ${boundAs(MEMORY, 'episodes')} whole: (sum shown)})`);
+  return { chars: one(before, 'chars'), calls: one(before, 'calls'), slots: one(before, 'slots'), whole: one(all, 'whole') };
+}
+
+/** How the memory stands in numbers (brain/health.ts): what is remembered, what could not be, the wider memories and those that are only lists, and the episodes that are over and have neither a memory nor a record of there being none. */
+export interface MemoryCounts { remembered: number; quarantined: number; merges: number; mechanical: number; waiting: number; oldest: string | null }
+
+export function countsFrom(ray: Ray): MemoryCounts {
+  const [episodes, memories, quarantined, merges] = ['episodes', 'memories', 'quarantined', 'merges'].map((name) => boundAs(MEMORY, name)) as [string, string, string, string];
+  const n = (source: string): number => { const v = ray.query(source); return typeof v === 'bigint' || typeof v === 'number' ? Number(v) : 0; };
+  ray.run(`(set mem_memory_has (at ${memories} 'from))`);
+  ray.run(`(set mem_memory_gave (at ${quarantined} 'from))`);
+  // Over, and either cut by the rules, or a stretch that was remembered once and has neither a memory nor a record of none now.
+  const owed = `(select {from: ${episodes} where: (and closed (or (not kept) (and (not (in first mem_memory_has)) (not (in first mem_memory_gave))))) asc: ord end: end})`;
+  const ends = ray.table(owed).columns.end as string[] | undefined ?? [];
+  return {
+    remembered: n(`(count ${memories})`), quarantined: n(`(count ${quarantined})`), merges: n(`(count ${merges})`),
+    mechanical: n(`(count (select {from: ${merges} where: mechanical ord: ord}))`), waiting: ends.length, oldest: ends[0] ?? null,
+  };
+}
+
+/** The numbers of a journal held whole, as the tables of the database count them (`countsFrom`). */
+export function countsOf(cut: Episode[], told: Pick<Remembered, 'memories' | 'quarantined' | 'merges'>): MemoryCounts {
+  const owed = cut.filter((e) => e.closed && (e.why !== 'kept' || (!told.memories.has(e.first) && !told.quarantined.has(e.first))));
+  return {
+    remembered: told.memories.size, quarantined: told.quarantined.size, merges: told.merges.length, mechanical: told.merges.filter((m) => m.mechanical === true).length,
+    waiting: owed.length, oldest: owed[0]?.end ?? null,
+  };
+}
+
