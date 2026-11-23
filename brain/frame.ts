@@ -25,7 +25,7 @@ import { reply } from './wire';
  * what was shown, brain/shown.ts). Only such notes may lie at `end` and after.
  */
 export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = false, end?: number): Frame {
-  if (past.by !== 'store' || past.ray === undefined) return narrow(frameOf(past.standingFrom(0, end)), room, chosen, sees);
+  if (past.by !== 'store' || past.ray === undefined) return narrow(frameOf(past.standingFrom(0, end), past.known()), room, chosen, sees);
   const ray = past.ray;
   const told = past.remembered();
   const cut = past.episodes();
@@ -67,7 +67,7 @@ export function frameFrom(past: Past, room: number, chosen: Sizes = {}, sees = f
   }
 
   const last = events.at(-1)?.ts ?? '';
-  const known = past.known(true);
+  const known = past.known();
   // Lessons are read against the journal cut by the rules alone, which no table holds: with none ever written, as now, nothing is read for them.
   const lessons = process.env.TENERAL_LESSONS === '0' || past.notes([LESSON_KIND, LESSON_ACCEPT_KIND, LESSON_CHECK_KIND]).length === 0
     ? null : lessonText(first === 0 ? events : past.standingFrom(0, end), true, MEMORY_MARK);

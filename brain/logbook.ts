@@ -228,11 +228,15 @@ export function knowingOf(known: Known, last: string, lessons: string | null, he
   return [knownText(known, last.slice(0, 10), MEMORY_MARK), lessons, healthNote(health, MEMORY_MARK)].filter((text) => text !== null).join('\n');
 }
 
-/** The head of a journal that is held whole. `events` is the conversation as it stands. */
-export function headOf(events: JournalEvent[]): Head {
+/**
+ * The head of a journal that is held whole. `events` is the conversation as it stands, and
+ * `of` what is known: read of everything the journal holds, because what was put to the owner in
+ * a conversation taken back was put all the same (one reading, for a request and for every tool).
+ */
+export function headOf(events: JournalEvent[], of: Known = known(events)): Head {
   const last = events.at(-1)?.ts ?? '';
   // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
-  const knowing = knowingOf(known(events), last, lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), health(events, Date.parse(last) || 0));
+  const knowing = knowingOf(of, last, lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), health(events, Date.parse(last) || 0, of));
   const told = remembered(events);
   const cut = told.spans.length === 0 ? [] : episodes(events, told.spans).filter((e) => e.why === 'kept');
   const lies: number[] = [];

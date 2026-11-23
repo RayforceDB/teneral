@@ -8,7 +8,7 @@ import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from '
 import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { frameProjection } from './frame-table';
-import { KNOWN, KNOWN_STANDING, knownFrom, knownProjection } from './known-table';
+import { knownFrom, knownProjection } from './known-table';
 import { counted } from './wire';
 import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
@@ -39,9 +39,9 @@ export interface Past {
   notes(kinds: readonly string[]): JournalEvent[];
   /**
    * What the agent knows and means to do now: the facts that hold, the intentions that are open, and the ones that were closed (brain/known.ts).
-   * Of everything the journal holds; with `standing`, of the conversation as it stands, which is how a request reads it.
+   * Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
    */
-  known(standing?: boolean): Known;
+  known(): Known;
   /** The conversation as it stands from the event numbered `seq` on (the place of its line, when the journal is read through) and before the one numbered `end`. */
   standingFrom(seq: number, end?: number): JournalEvent[];
   /** How many events the journal holds: the number the next one will have. */
@@ -93,7 +93,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), knownProjection(KNOWN_STANDING), memoryProjection(), tiesProjection(), frameProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -171,7 +171,7 @@ export function journalPast(journal: string): Past {
       return counted(events, episodes(events, remembered(events).spans)).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
     },
     // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
-    known: (stands) => known((stands === true ? lines() : lines.all()).map((line) => line.event)),
+    known: () => known(lines.all().map((line) => line.event)),
     standingFrom(seq, end) {
       const stands = new Set(lines());
       return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
@@ -290,10 +290,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.settle();
       return episodesFrom(ray);
     },
-    known(stands) {
+    known() {
       store.sync();
       store.settle();
-      return knownFrom(ray, stands === true ? KNOWN_STANDING : KNOWN);
+      return knownFrom(ray);
     },
     standingFrom(seq, end) {
       store.sync();
@@ -491,7 +491,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     get ray() { return fell ? undefined : served.ray; },
     find: (question, options) => through((past) => past.find(question, options)),
     since: (id) => through((past) => past.since(id)),
-    known: (stands) => through((past) => past.known(stands)),
+    known: () => through((past) => past.known()),
     standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
     count: () => through((past) => past.count()),
     places: (ids) => through((past) => past.places(ids)),

@@ -50,9 +50,9 @@ function since(hours: number): string {
 }
 
 /** How the memory stands in `events`, as of `now`. The same journal and the same moment always give the same answer. */
-export function health(events: JournalEvent[], now: number): Health {
+export function health(events: JournalEvent[], now: number, of: Known = known(events)): Health {
   const all = remembered(events);
-  return healthOf({ told: all, cut: episodes(events, all.spans), known: known(events), exam: lastResult(events), idle: idleTicks(events) }, now);
+  return healthOf({ told: all, cut: episodes(events, all.spans), known: of, exam: lastResult(events), idle: idleTicks(events) }, now);
 }
 
 /** What the health of the memory is read from. A journal held whole gives it in `health`; the tables of the database give the same (brain/frame.ts). */

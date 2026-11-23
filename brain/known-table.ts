@@ -17,8 +17,6 @@ import { boundAs, type Projection } from './store';
 //   gone         id
 
 export const KNOWN = 'known';
-/** The same of the conversation as it stands: without the replies of a stretch the owner took back, which is how a request reads it. */
-export const KNOWN_STANDING = 'stands';
 /** Changed with the step in brain/known.ts or with the columns below. */
 export const KNOWN_VERSION = 1;
 
@@ -28,16 +26,15 @@ const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.fro
 const bools = (data: boolean[]): Column => ({ type: 'bool', data: Uint8Array.from(data, (b) => (b ? 1 : 0)) });
 
 /** What is known, kept in tables. The store drives it (brain/store.ts). */
-export function knownProjection(name: string = KNOWN): Projection {
+export function knownProjection(): Projection {
   let state: KnownState = knownStart();
   /** The number of the note each fact and intention was set down in: the order they are given out in. */
   let seqs = new Map<string, number>();
   /** The tables as they were last made: the same objects until something changes, so that they are not sent or written again for nothing. */
   let made: Record<string, Record<string, Column>> | null = null;
   return {
-    name,
+    name: KNOWN,
     version: KNOWN_VERSION,
-    ...(name === KNOWN_STANDING ? { standing: true } : {}),
     reset() {
       state = knownStart();
       seqs = new Map();
@@ -89,9 +86,9 @@ export function knownProjection(name: string = KNOWN): Projection {
 }
 
 /** What is known, asked of the tables: the same `Known` that `known` makes of the journal the tables were made from. */
-export function knownFrom(ray: Ray, name: string = KNOWN): Known {
+export function knownFrom(ray: Ray): Known {
   const of = <T>(table: string, where: string): T[] =>
-    ((ray.table(`(select {from: ${boundAs(name, table)} where: ${where} asc: seq data: data})`).columns.data as string[] | undefined) ?? []).map((cell) => JSON.parse(cell) as T);
+    ((ray.table(`(select {from: ${boundAs(KNOWN, table)} where: ${where} asc: seq data: data})`).columns.data as string[] | undefined) ?? []).map((cell) => JSON.parse(cell) as T);
   return { facts: of<Fact>('facts', 'standing'), intentions: of<Intention>('intentions', 'open'), closed: of<Intention>('intentions', 'closed') };
 }
 

@@ -1,6 +1,7 @@
 import { acceptanceNotes } from './acceptance';
 import { RESULT_END, RESULT_HEAD, RESULT_WHOLE, eventChars, shownChars } from './episodes';
 import type { JournalEvent } from './journal';
+import { known, type Known } from './known';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
 import { answers, counted, imagePlaces, reply, showsImages, stimulusText, wireNames } from './wire';
@@ -313,12 +314,12 @@ export interface Frame {
 }
 
 /** The frame of a journal that is held whole. */
-export function frameOf(journaled: JournalEvent[]): Frame {
+export function frameOf(journaled: JournalEvent[], of: Known = known(journaled)): Frame {
   // Without what the owner took back (brain/owned.ts): that is in the journal and in no request.
   // Acceptance is derived from that same view. Stem records deliberately survive a take-back:
   // forgetting the conversation does not cancel a candidate or consent that really happened.
   const events = standing(journaled);
-  return { events, first: 0, before: { chars: 0, calls: 0, slots: 0 }, usedBefore: () => false, accepted: acceptanceNotes(events), head: headOf(events) };
+  return { events, first: 0, before: { chars: 0, calls: 0, slots: 0 }, usedBefore: () => false, accepted: acceptanceNotes(events), head: headOf(events, of) };
 }
 
 /** Episodes kept at hand before the first one a request may show as it happened: what arrived late in them is shown in the next, and a reply may be shown as one with the reply before it. */

@@ -6,6 +6,7 @@ import { acceptanceNotes } from '../../body/acceptance';
 import { acceptedSince, frameProjection, namesBefore } from '../../brain/frame-table';
 import { episodesFrom, memoryProjection } from '../../brain/memory-table';
 import { standing } from '../../brain/owned';
+import { known, knownText } from '../../brain/known';
 import { remembered } from '../../brain/remembered';
 import { frameFrom } from '../../brain/frame';
 import { idleStart, idleStep, idleOf } from '../../brain/idle';
@@ -279,3 +280,30 @@ test('idle ticks counted event by event are the ticks counted from the end', () 
     expect(idleOf(state)).toBe(backwards(events));
   }
 });
+
+real('a question put to the owner in a conversation taken back was put all the same: a request, from the journal or the database, reads what is known of everything', () => {
+  n = 5000;
+  clock = Date.parse('2026-11-20T00:00:00.000Z');
+  const first = ev({ type: 'stimulus', source: 'terminal', text: 'what would you do next?' }, LONG);
+  const idea = ev({ type: 'note', kind: 'memory.intention.v1', data: { text: 'Ask whether the report may go out', origin: 'ask' } });
+  const mark = known([idea]).intentions[0]!.mark;
+  const again = ev({ type: 'stimulus', source: 'terminal', text: 'go on' }, LONG);
+  const asking = ev({ type: 'assistant', text: `${mark} May the report go out?`, toolCalls: [] });
+  const back = ev({ type: 'note', kind: 'memory.back.v1', data: { to: again.id } });
+  const now = ev({ type: 'stimulus', source: 'terminal', text: 'and now?' }, LONG);
+  const all = [first, ev({ type: 'assistant', text: 'I have an idea.', toolCalls: [] }), idea, again, asking, back, now];
+  // The reply that asked is set aside; that it asked is not.
+  expect(standing(all)).not.toContain(asking);
+  expect(known(all).intentions[0]!.put).toBe(true);
+  expect(known(standing(all)).intentions[0]!.put).toBe(false);
+  const told = knownText(known(all), now.ts.slice(0, 10), '[memory]')!;
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-frame-')), 'journal.jsonl');
+  writeFileSync(journal, all.map(line).join(''));
+  const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+  const requests = [buildMessages(all, 'S', 100_000), assemble(frameFrom(past, 99_999), 'S', 100_000), assemble(frameFrom(journalPast(journal), 99_999), 'S', 100_000)];
+  for (const request of requests) {
+    expect(request).toEqual(requests[0]!);
+    expect(request.some((m) => m.content?.includes(told))).toBe(true);
+    expect(request.some((m) => m.content?.includes('May the report go out?'))).toBe(false);
+  }
+}, 60_000);
