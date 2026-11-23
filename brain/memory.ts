@@ -1,8 +1,9 @@
-import { acceptanceNotes } from '../body/acceptance';
-import { RESULT_END, RESULT_HEAD, RESULT_WHOLE, eventChars } from './episodes';
+import { acceptanceNotes } from './acceptance';
+import { RESULT_END, RESULT_HEAD, RESULT_WHOLE, eventChars, shownChars } from './episodes';
 import type { JournalEvent } from './journal';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
+import { answers, counted, imagePlaces, reply, showsImages, stimulusText, wireNames } from './wire';
 import { MEMORY_MARK, headOf, logbook, sizeOf, swapped, type Head, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
@@ -31,11 +32,6 @@ const STOPPED =
   'Do not take that work up again unless your owner asks; when you next reply, say in a line where it stopped.';
 
 /** An assistant event's text and calls. Older generations may have written it without one or the other. */
-function reply(e: JournalEvent): { text: string; calls: unknown[] } {
-  const r = e as { text?: unknown; toolCalls?: unknown };
-  return { text: asText(r.text), calls: Array.isArray(r.toolCalls) ? r.toolCalls : [] };
-}
-
 /** A tool name in the characters every provider accepts. */
 function wireName(name: unknown): string {
   const clean = typeof name === 'string' ? name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) : '';
@@ -231,33 +227,7 @@ const CONTINUE =
 
 const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role === 'assistant' && m.tool_calls === undefined;
 
-/** A stimulus as the agent reads it. Only stem events may say `[stem]`; anything else that does is forging a note. */
-function stimulusText(source: unknown, text: unknown): string {
-  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]')
-    // Nor may anything that arrives pass for the agent's own memory (brain/logbook.ts).
-    .replaceAll(MEMORY_MARK, '[not memory]');
-  // Only the label a sensor gave says whose word something is (brain/owned.ts): the same label inside what someone else sent is their text.
-  const honest = fromOwner(source) ? shown : shown.replaceAll(`[${OWNER_PREFIX}`, `[not ${OWNER_PREFIX}`);
-  // No provider takes an empty message, and the agent should still know that something arrived.
-  return honest.trim() === '' ? '[empty message]' : honest;
-}
-
-/**
- * What was journaled for the calls of the reply at `at`: only the events up to the next reply.
- * Call ids are the model's and may repeat, in a later reply or within one, so an id alone does
- * not say which call a result belongs to. Calls run in order: the nth call with an id gets the nth result.
- */
-function answers(events: JournalEvent[], at: number): { results: Map<unknown, { output: string; ok: boolean; id: string; at: number }[]>; started: Map<unknown, number> } {
-  const results = new Map<unknown, { output: string; ok: boolean; id: string; at: number }[]>();
-  const started = new Map<unknown, number>();
-  for (let j = at + 1; j < events.length; j++) {
-    const e = events[j]!;
-    if (e.type === 'assistant') break;
-    if (e.type === 'tool.intent') started.set(e.callId, (started.get(e.callId) ?? 0) + 1);
-    if (e.type === 'tool.result') results.set(e.callId, [...(results.get(e.callId) ?? []), { output: asText(e.output), ok: e.ok === true, id: e.id, at: j }]);
-  }
-  return { results, started };
-}
+export { counted, wireNames } from './wire';
 
 /** How a request is laid out, beyond its budget: how much is shown as it happened (brain/logbook.ts), and a closing question. */
 export interface View extends Sizes {
@@ -371,28 +341,14 @@ export function narrow(whole: Frame, room: number, chosen: Sizes = {}, sees = fa
   const from = whole.head.kept[Math.max(0, count - 1 - OVERLAP_EPISODES)]!.from;
   if (from <= 0) return whole;
   const events = whole.events;
-  let chars = 0, calls = 0, slots = 0;
+  const { chars, calls, slots } = counted(events, [{ from: 0, to: from }])[0]!;
   const used = new Set<string>();
+  const name = wireNames();
   for (let i = 0; i < from; i++) {
     const e = events[i]!;
-    chars += eventChars(e);
-    if (e.type === 'stimulus') {
-      if (sees && (e.source === 'terminal' || e.source === 'owner:zulip')) slots += splitMarkers(stimulusText(e.source, e.text)).paths.length;
-    } else if (e.type === 'assistant') {
-      const { results } = answers(events, i);
-      for (const call of reply(e).calls) {
-        const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown };
-        calls += 1;
-        // The name a call went out under, by the rule `assemble` names calls with.
-        let wire = typeof c.id === 'string' && c.id !== '' && c.id.length <= 40 && c.id.isWellFormed() && !used.has(c.id) ? c.id : `call_${calls}`;
-        for (let n = 1; used.has(wire); n++) wire = `call_${calls}_${n}`;
-        used.add(wire);
-        const result = results.get(c.id)?.shift();
-        if (sees && c.name === 'look' && result?.ok) slots += splitMarkers(result.output).paths.length;
-      }
-    }
+    if (e.type === 'assistant') for (const call of reply(e).calls) used.add(name((typeof call === 'object' && call !== null ? call as { id?: unknown } : {}).id));
   }
-  return { ...whole, events: events.slice(from), first: from, before: { chars, calls, slots }, usedBefore: (id) => used.has(id) };
+  return { ...whole, events: events.slice(from), first: from, before: { chars, calls, slots: sees ? slots : 0 }, usedBefore: (id) => used.has(id) };
 }
 
 /** The request for a frame: see `buildMessages`. */
@@ -411,21 +367,13 @@ export function assemble(frame: Frame, system: string, budgetChars = DEFAULT_BUD
   const resultAt = new Map<ChatMessage, number>();
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
-  const used = new Set<string>();
-  let position = frame.before.calls;
-  const wireId = (id: unknown): string => {
-    position += 1;
-    let wire = typeof id === 'string' && id !== '' && id.length <= 40 && id.isWellFormed() && !used.has(id) && !frame.usedBefore(id) ? id : `call_${position}`;
-    for (let n = 1; used.has(wire); n++) wire = `call_${position}_${n}`;
-    used.add(wire);
-    return wire;
-  };
+  const wireId = wireNames(frame.before.calls, frame.usedBefore);
 
   const { after, during } = arrivals(events, e => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id));
   const show = (e: JournalEvent & { type: 'stimulus' }, i: number, at: number): void => {
     const text = stimulusText(e.source, e.text);
     const message: ChatMessage = { role: 'user', content: during.has(i) ? `${ARRIVED}\n${text}` : text };
-    if (sight && (e.source === 'terminal' || e.source === 'owner:zulip')) takeMarkers(message, slots);
+    if (sight && showsImages(e.source)) takeMarkers(message, slots);
     out.push(message);
     origin.push(at);
   };

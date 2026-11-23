@@ -1,3 +1,4 @@
+import { MEMORY_MARK } from './wire';
 import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
 import { imageChars } from '../body/images';
@@ -48,8 +49,8 @@ export interface Sizes {
   logbookChars?: number;
 }
 
-/** The mark of everything this file puts in a request. No stimulus can carry it: see `stimulusText` in brain/memory.ts. */
-export const MEMORY_MARK = '[memory]';
+/** The mark of everything this file puts in a request. No stimulus can carry it: see `stimulusText` in brain/wire.ts. */
+export { MEMORY_MARK };
 
 /** A journal time as the agent reads it: to the minute, in UTC. */
 function when(ts: string): string {

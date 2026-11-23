@@ -1,4 +1,4 @@
-import { acceptanceNotes } from '../body/acceptance';
+import { acceptanceNotes } from './acceptance';
 import { stemNote } from './stemnote';
 import type { JournalEvent } from './journal';
 import { standing } from './owned';

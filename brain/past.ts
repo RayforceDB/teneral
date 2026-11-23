@@ -7,7 +7,9 @@ import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
+import { frameProjection } from './frame-table';
 import { knownFrom, knownProjection } from './known-table';
+import { counted } from './wire';
 import { episodesFrom, memoryProjection, rememberedFrom, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
 import { TIES, tiesProjection } from './ties-table';
@@ -82,7 +84,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -157,7 +159,7 @@ export function journalPast(journal: string): Past {
       const events = standing.map((line) => line.event);
       // A journal read through has no numbers but the places of its lines: the place of each event among all the journal holds.
       const place = new Map(lines.all().map((line, i) => [line.event.id, i]));
-      return episodes(events, remembered(events).spans).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
+      return counted(events, episodes(events, remembered(events).spans)).map((e) => ({ ...e, fromSeq: place.get(e.first) ?? e.from, toSeq: (place.get(e.last) ?? e.to - 1) + 1 }));
     },
     // Of everything the journal holds: what was put to the owner in a conversation taken back was put all the same.
     known: () => known(lines.all().map((line) => line.event)),
