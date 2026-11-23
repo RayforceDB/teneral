@@ -42,7 +42,7 @@ import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCu
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
-import { SKILL_TOOLS, openSkills, seedRecoverySkill } from './skill-tools';
+import { SKILL_TOOLS, keepVerified, offerFor, openSkills, seedRecoverySkill, skillUse } from './skill-tools';
 import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
@@ -183,6 +183,8 @@ const allTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, community, toolNames: allTools.map(t => t.spec.name) };
 ctx.skills = openSkills(ctx);
 try { seedRecoverySkill(ctx); } catch (err) { console.error(`[skills] recovery skill was not seeded: ${err instanceof Error ? err.message : String(err)}`); }
+// A verification holds for one generation: the enabled skills are verified again for this one, so that they go on being found and offered.
+try { const again = keepVerified(ctx); if (again > 0) console.error(`[skills] verified ${again} enabled ${again === 1 ? 'skill' : 'skills'} for this generation`); } catch (err) { console.error(`[skills] the enabled skills could not be verified again: ${err instanceof Error ? err.message : String(err)}`); }
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -509,6 +511,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, logbookChars, sight,
       // Older memories the thing just said brings back: the search `recall` makes, asked once before the turn's first request. One a later memory made outdated is left out.
       // The latest reminders are asked of the past: the turn hands over only the end of the journal it holds.
+      // A skill the agent keeps that fits what was said: offered by a line, opened by the agent if it judges that it fits.
+      offer: (question) => offerFor(ctx, question),
       remind: (question, inFront) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12 }), inFront, lately(past.notes([REMINDED_KIND])), past); },
       imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
@@ -850,7 +854,7 @@ for (;;) {
     // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
     try {
       // Whether it is due is read in the notes of the memories and of the last exam; the exam itself reads the conversation, asked of the past for that once.
-      if (due(noted(RESULT_KIND, EPISODE_KIND, MERGE_KIND))) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, past.standingFrom(0)) });
+      if (due(noted(RESULT_KIND, EPISODE_KIND, MERGE_KIND))) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: { ...sit(past, past.standingFrom(0)), skills: skillUse(ctx) } });
     } catch (err) {
       console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
     }

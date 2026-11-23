@@ -37,6 +37,10 @@ const NEAR_BEST = 0.6;
 /** What was brought back in this many of the latest reminders is not brought back again. */
 const REMEMBERED_REMINDERS = 20;
 
+/** The note of a skill offered at the start of a turn: `hash`, and `text`, the line the agent is shown. */
+export const OFFERED_KIND = 'skill.offered.v1';
+export interface Offer { hash: string; id: string; text: string }
+
 export interface Reminder { ids: string[]; text: string }
 
 /** The ids of the memories the latest reminders brought back. */
@@ -83,7 +87,8 @@ export function chooseReminder(found: Found[], inFront: string, already: Readonl
 
 /** What the agent is shown where a reminder lies in its journal; null for any other event. */
 export function remindedNote(e: JournalEvent): string | null {
-  if (e.type !== 'note' || e.kind !== REMINDED_KIND) return null;
+  // A skill that was offered is shown the same way (brain/skills.ts): a line of the agent's own memory, where it was journaled.
+  if (e.type !== 'note' || (e.kind !== REMINDED_KIND && e.kind !== OFFERED_KIND)) return null;
   const text = (e.data as { text?: unknown } | null)?.text;
   return typeof text === 'string' && text !== '' ? text : null;
 }

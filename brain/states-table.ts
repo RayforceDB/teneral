@@ -120,6 +120,18 @@ export function lastOf(rows: StateRow[], where: { state?: string; gen?: string }
   return [...last.values()].filter((r) => (where.state === undefined || r.state === where.state) && (where.gen === undefined || r.gen === where.gen)).sort((a, b) => a.seq - b.seq);
 }
 
+/** How often each key of one kind was said to stand in each way: a count by key and state, by the database. */
+export function countStates(ray: Ray, name: string): { key: string; state: string; n: number }[] {
+  ray.bind(ASKED, { w: { type: 'sym', data: [name] } });
+  const t = ray.table(`(select {from: ${boundAs(STATES, 'states')} where: (== kind (at (at ${ASKED} 'w) 0)) by: {key: key state: state} n: (count seq)})`);
+  return Array.from({ length: t.rows }, (_, i) => ({ key: String((t.columns.key as string[])[i]), state: String((t.columns.state as string[])[i]), n: Number((t.columns.n as BigInt64Array)[i]) }));
+}
+export function countOf(rows: StateRow[]): { key: string; state: string; n: number }[] {
+  const counts = new Map<string, { key: string; state: string; n: number }>();
+  for (const row of rows) { const at = `${row.key}\n${row.state}`; counts.set(at, { key: row.key, state: row.state, n: (counts.get(at)?.n ?? 0) + 1 }); }
+  return [...counts.values()];
+}
+
 /** The first note about each of `keys`, in the order said: what a thing was when it was first set down. */
 export function firstStates(ray: Ray, name: string, keys: string[]): StateRow[] {
   if (keys.length === 0) return [];
