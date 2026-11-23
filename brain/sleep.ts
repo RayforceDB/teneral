@@ -7,7 +7,7 @@ import { standing } from './owned';
 import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Source } from './known';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
-import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData } from './remembered';
+import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
 import type { ChatMessage, Provider, ToolSpec } from './provider';
 import { saysTooLong } from './retry';
 import { clip } from '../body/text';
@@ -106,9 +106,14 @@ export function targetChars(episodeChars: number): number {
 
 /** The episodes that are over and have neither a memory nor a record of there being none, oldest first. */
 export function waiting(events: JournalEvent[]): Episode[] {
-  const { spans, memories, quarantined } = remembered(events);
+  const told = remembered(events);
+  return waitingOf(episodes(events, told.spans), told);
+}
+
+/** The same from the episodes and what is remembered, wherever they are read. */
+export function waitingOf<T extends Episode>(cut: T[], { memories, quarantined }: Pick<Remembered, 'memories' | 'quarantined'>): T[] {
   // Also a stretch that was remembered once and whose memory the owner withdrew: it is the stretch it was, and has none.
-  return episodes(events, spans).filter((e) => e.closed && (e.why !== 'kept' || (!memories.has(e.first) && !quarantined.has(e.first))));
+  return cut.filter((e) => e.closed && (e.why !== 'kept' || (!memories.has(e.first) && !quarantined.has(e.first))));
 }
 
 /** How the agent's memory stands, for its owner to see: what is still to be remembered and what could not be. */

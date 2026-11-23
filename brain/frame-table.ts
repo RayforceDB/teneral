@@ -1,6 +1,7 @@
 import { acceptanceStart, acceptanceStep, type AcceptanceState } from './acceptance';
-import { idleOf, idleStart, idleStep, type IdleState } from './idle';
+import { REPORT_MARK, idleOf, idleStart, idleStep, type IdleState } from './idle';
 import type { JournalEvent } from './journal';
+import { fromOwner } from './owned';
 import { reply, wireNames } from './wire';
 import type { Column, Ray, Table } from './ray';
 import { boundAs, type Projection } from './store';
@@ -10,7 +11,9 @@ import { boundAs, type Projection } from './store';
 //
 //   names      ord name odd     the name every call went out under, in order from the first
 //   accepted   seq id note      what the stem's acceptance of a species commit says to the agent
-//   state      data idle        what the reading holds between two events, and how many clock ticks in a row ended with nothing done
+//   state      data idle owner clock report    what the reading holds between two events; how many clock ticks in a row ended with
+//                                              nothing done; when the owner last spoke and the clock last ticked; and the number of
+//                                              the event a reading for the next report to the owner begins at
 //
 // A call goes out under its journaled id where that will do, otherwise under one made from its
 // place among all the calls (`wireNames` in brain/memory.ts); and a name that went out once is
@@ -23,7 +26,7 @@ import { boundAs, type Projection } from './store';
 
 export const FRAME = 'frame';
 /** Changed with the naming of calls, with the acceptance step, or with the columns below. */
-export const FRAME_VERSION = 2;
+export const FRAME_VERSION = 3;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });
@@ -40,12 +43,18 @@ interface State {
   acceptance: AcceptanceState;
   accepted: { seq: number; id: string; note: string }[];
   idle: IdleState;
+  /** When the owner last said something, and when the clock last ticked: '' when never. */
+  owner: string;
+  clock: string;
+  /** The number of the latest thing said, and of the thing said before the latest reply that carried a report's mark: what was done since is read from there (`reportAsk` in brain/agenda.ts). */
+  said: number;
+  report: number;
 }
 
 function start(names: string[] = [], odd: boolean[] = []): State {
   const used = new Set(names);
   // The names so far are given as names that went out before; the namer adds its own to those.
-  return { names, odd, used, name: wireNames(names.length, (name) => used.has(name)), acceptance: acceptanceStart(), accepted: [], idle: idleStart() };
+  return { names, odd, used, name: wireNames(names.length, (name) => used.has(name)), acceptance: acceptanceStart(), accepted: [], idle: idleStart(), owner: '', clock: '', said: 0, report: 0 };
 }
 
 /** The names of the calls and the acceptance notes, kept in tables. The store drives it (brain/store.ts). */
@@ -72,6 +81,15 @@ export function frameProjection(): Projection {
       if (acceptanceStep(state.acceptance, e)) state.accepted.push({ seq, id: e.id, note: state.acceptance.notes.get(e.id)! });
       if (state.acceptance.pending !== pending) changed = true;
       if (idleStep(state.idle, e)) changed = true;
+      if (e.type === 'stimulus') {
+        state.said = seq;
+        if (fromOwner(e.source)) state.owner = e.ts;
+        if (e.source === 'clock') state.clock = e.ts;
+        changed = true;
+      } else if (e.type === 'assistant' && REPORT_MARK.test(`${e.text}\n${Array.isArray(e.toolCalls) && e.toolCalls.length > 0 ? JSON.stringify(e.toolCalls) : ''}`)) {
+        state.report = state.said;
+        changed = true;
+      }
       if (changed) made = null;
       return changed;
     },
@@ -79,7 +97,10 @@ export function frameProjection(): Projection {
       made ??= {
         names: { ord: nums(state.names.map((_, i) => i + 1)), name: strs(state.names), odd: bools(state.odd) },
         accepted: { seq: nums(state.accepted.map((a) => a.seq)), id: strs(state.accepted.map((a) => a.id)), note: strs(state.accepted.map((a) => a.note)) },
-        state: { data: strs([JSON.stringify({ pending: state.acceptance.pending ?? null, idle: state.idle })]), idle: nums([idleOf(state.idle)]) },
+        state: {
+          data: strs([JSON.stringify({ pending: state.acceptance.pending ?? null, idle: state.idle, said: state.said })]), idle: nums([idleOf(state.idle)]),
+          owner: strs([state.owner]), clock: strs([state.clock]), report: nums([state.report]),
+        },
       };
       return made;
     },
@@ -95,7 +116,11 @@ export function frameProjection(): Projection {
         .sort((x, y) => x.seq - y.seq);
       for (const one of state.accepted) state.acceptance.notes.set(one.id, one.note);
       const held = (tables.state?.columns.data as string[] | undefined)?.[0];
-      const was = held === undefined ? null : JSON.parse(held) as { pending: AcceptanceState['pending'] | null; idle: IdleState };
+      const was = held === undefined ? null : JSON.parse(held) as { pending: AcceptanceState['pending'] | null; idle: IdleState; said?: number };
+      state.said = was?.said ?? 0;
+      state.owner = String((tables.state?.columns.owner as string[] | undefined)?.[0] ?? '');
+      state.clock = String((tables.state?.columns.clock as string[] | undefined)?.[0] ?? '');
+      state.report = Number((tables.state?.columns.report as BigInt64Array | undefined)?.[0] ?? 0);
       if (was?.pending) state.acceptance.pending = was.pending;
       if (was?.idle) state.idle = was.idle;
     },
@@ -132,4 +157,15 @@ export function acceptedSince(ray: Ray, from: number): Map<string, string> {
 /** How many of the latest clock ticks in a row ended with nothing done (`idleTicks` in brain/agenda.ts). */
 export function idleFrom(ray: Ray): number {
   return Number((ray.table(`(select {from: ${boundAs(FRAME, 'state')} idle: idle})`).columns.idle as BigInt64Array | undefined)?.[0] ?? 0);
+}
+
+/** How the conversation stands, in the few things asked of it between turns. */
+export interface Stands { idle: number; owner: string; clock: string; report: number }
+
+export function standsFrom(ray: Ray): Stands {
+  const t = ray.table(`(select {from: ${boundAs(FRAME, 'state')} idle: idle owner: owner clock: clock report: report})`);
+  return {
+    idle: Number((t.columns.idle as BigInt64Array | undefined)?.[0] ?? 0), owner: String((t.columns.owner as string[] | undefined)?.[0] ?? ''),
+    clock: String((t.columns.clock as string[] | undefined)?.[0] ?? ''), report: Number((t.columns.report as BigInt64Array | undefined)?.[0] ?? 0),
+  };
 }

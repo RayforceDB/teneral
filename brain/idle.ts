@@ -40,3 +40,31 @@ export function idleTake(state: IdleState, type: string, calls: boolean, clock: 
 }
 
 export const idleOf = (state: IdleState): number => (state.clock && state.worked ? 0 : state.ended + (state.clock && state.answered ? 1 : 0));
+
+/** The mark a report to the owner carries, so that it is known to have been made (`reportAsk` in brain/agenda.ts): `R` and the day. */
+export const REPORT_MARK = /\bR\d{8}\b/;
+
+export const SUBAGENT_KIND = 'body.subagent.v1';
+
+/** What counting the cost of the agent's own time holds between two events: whether the turn being lived began with a tick of the clock, and the subagents started in such turns that have not ended. */
+export interface OwnState { own: boolean; started: string[] }
+export const ownStart = (): OwnState => ({ own: false, started: [] });
+
+/**
+ * Takes one more event in. Returns the tokens it spent in time of the agent's own: a reply in a
+ * turn the clock began, or a subagent started in one, counted when it ends. 0 for anything else.
+ */
+export function ownStep(state: OwnState, e: JournalEvent): number {
+  if (e.type === 'stimulus') { state.own = e.source === 'clock'; return 0; }
+  if (state.own && e.type === 'assistant' && e.usage !== undefined) return (e.usage.input ?? 0) + (e.usage.output ?? 0);
+  if (e.type === 'note' && e.kind === SUBAGENT_KIND && typeof e.data === 'object' && e.data !== null) {
+    const d = e.data as { name?: unknown; state?: unknown; usage?: { input?: unknown; output?: unknown } };
+    if (typeof d.name !== 'string') return 0;
+    if (d.state === 'running' || d.state === 'queued') { if (state.own && !state.started.includes(d.name)) state.started.push(d.name); }
+    else if (d.state === 'ended' && state.started.includes(d.name)) {
+      state.started = state.started.filter((name) => name !== d.name);
+      return (Number(d.usage?.input) || 0) + (Number(d.usage?.output) || 0);
+    }
+  }
+  return 0;
+}

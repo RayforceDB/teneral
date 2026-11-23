@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
-import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type WorkState } from '../brain/known';
+import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type Known, type WorkState } from '../brain/known';
 import type { Tool } from './tools';
 import type { Stimulus } from './sensors';
 import { lookedAt } from '../brain/agenda';
@@ -166,7 +166,11 @@ export const work: Tool = {
  * journaled first, so it is told once. It is the heart that asks, between turns (heart/coordinator.ts).
  */
 export function dueWork(journal: string, gen: string, now = Date.now(), events: JournalEvent[] = readEvents(journal)): Stimulus | null {
-  const held = known(standing(events));
+  return dueWorkOf(journal, gen, now, known(standing(events)));
+}
+
+/** The same from what is known, wherever that is read. */
+export function dueWorkOf(journal: string, gen: string, now: number, held: Known): Stimulus | null {
   const item = agenda(held, new Date(now).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now);
   if (item?.work === undefined) {
     // What was to come after something that is now closed: it is ready, and is made so here, where it is told.
@@ -202,7 +206,11 @@ function followers(held: ReturnType<typeof known>): Intention | undefined {
 
 /** When the next of that comes due, as a time; undefined when no work waits for a time. What `dueWork` would take, and nothing it would pass over. */
 export function workDueAt(events: JournalEvent[], now = Date.now()): number | undefined {
-  const held = known(standing(events));
+  return workDueAtOf(known(standing(events)), now);
+}
+
+/** The same from what is known, wherever that is read. */
+export function workDueAtOf(held: Known, now = Date.now()): number | undefined {
   const times = [
     ...agenda(held, new Date(now).toISOString().slice(0, 10)).flatMap((i) => (i.work?.status === 'queued' ? [i.work.resumeAt] : [])),
     ...held.intentions.flatMap((i) => (!i.waits && i.work?.status === 'waiting' && i.work.checkAt !== undefined ? [i.work.checkAt] : [])),

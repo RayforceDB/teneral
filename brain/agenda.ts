@@ -77,7 +77,7 @@ export function ownWake(source: string, text: string, held: Pick<Known, 'intenti
 }
 
 export { idleOf, idleStart, idleStep, idleTicks, type IdleState } from './idle';
-import { idleTicks } from './idle';
+import { REPORT_MARK, SUBAGENT_KIND, idleTicks, ownStart, ownStep } from './idle';
 
 /**
  * What the agent's initiative has come to, counted from the journal with no model asked. A memory
@@ -130,26 +130,18 @@ export function initiativeText(m: Initiative): string {
 }
 
 /** The notes of a subagent's life in the agent's journal (body/subagents.ts): queued, running, ended, told. */
-export const SUBAGENT_KIND = 'body.subagent.v1';
+export { SUBAGENT_KIND };
 
 /**
  * What the turns woken by a clock tick spent in the day ending at `now`, in tokens read and written:
  * the cost of the agent's time of its own, which its owner may cap (TENERAL_OWN_TOKENS_DAY).
  */
 export function ownSpend(events: JournalEvent[], now: number): number {
-  let own = false;
+  const state = ownStart();
   let spent = 0;
-  // Subagents started in time of its own: what they cost is its own time's cost too, counted when they end.
-  const started = new Set<string>();
   for (const e of events) {
-    if (e.type === 'stimulus') own = e.source === 'clock';
-    else if (own && e.type === 'assistant' && e.usage !== undefined && Date.parse(e.ts) >= now - DAY_MS) spent += (e.usage.input ?? 0) + (e.usage.output ?? 0);
-    else if (e.type === 'note' && e.kind === SUBAGENT_KIND && typeof e.data === 'object' && e.data !== null) {
-      const d = e.data as { name?: unknown; state?: unknown; usage?: { input?: unknown; output?: unknown } };
-      if (typeof d.name !== 'string') continue;
-      if (d.state === 'running' || d.state === 'queued') { if (own) started.add(d.name); }
-      else if (d.state === 'ended' && started.delete(d.name) && Date.parse(e.ts) >= now - DAY_MS) spent += (Number(d.usage?.input) || 0) + (Number(d.usage?.output) || 0);
-    }
+    const tokens = ownStep(state, e);
+    if (tokens > 0 && Date.parse(e.ts) >= now - DAY_MS) spent += tokens;
   }
   return spent;
 }
@@ -307,7 +299,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
 }
 
 /** The mark a report to the owner carries, so that it is known to have been made: `R` and the day. */
-const REPORT_MARK = /\bR\d{8}\b/;
+
 const LISTED = 8;
 
 /**
@@ -317,9 +309,8 @@ const LISTED = 8;
  * by the way it chooses, with the mark, and the mark in what it said or sent is what counts.
  * Empty when it is not time, or there is nothing to say.
  */
-export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS): string {
+export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS, held: Known = known(events)): string {
   if (!(everyMs > 0)) return '';
-  const held = known(events);
   let last = '';
   let worked = 0;
   let pending = 0;
@@ -439,10 +430,13 @@ export function worthATick(held: Known, now: number, report = ''): boolean {
  * intervals. Anything done, or anything arriving, brings the usual interval back.
  */
 export function tickDue(events: JournalEvent[], now: number, intervalMs: number): boolean {
-  const idle = idleTicks(events);
+  return tickDueOf(idleTicks(events), events.findLast((e) => e.type === 'stimulus' && e.source === 'clock')?.ts ?? '', now, intervalMs);
+}
+
+/** The same from the idle ticks in a row and the time of the clock's last tick ('' when it never ticked). */
+export function tickDueOf(idle: number, clock: string, now: number, intervalMs: number): boolean {
   if (idle < PASSED_TICKS) return true;
-  const last = events.findLast((e) => e.type === 'stimulus' && e.source === 'clock');
-  return last === undefined || now - Date.parse(last.ts) >= intervalMs * 2 ** Math.min(Math.floor(idle / PASSED_TICKS), 4) - 1000;
+  return clock === '' || now - Date.parse(clock) >= intervalMs * 2 ** Math.min(Math.floor(idle / PASSED_TICKS), 4) - 1000;
 }
 
 /**

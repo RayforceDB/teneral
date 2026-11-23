@@ -8,7 +8,9 @@ import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from '
 import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { acceptanceNotes } from './acceptance';
-import { acceptedSince, frameProjection } from './frame-table';
+import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
+import { idleTicks, ownStart, ownStep } from './idle';
+import { ownSpentSince, spendProjection } from './spend-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonsProjection } from './lessons-table';
 import { counted } from './wire';
@@ -54,6 +56,10 @@ export interface Past {
   standingFrom(seq: number, end?: number): JournalEvent[];
   /** How many events the journal holds: the number the next one will have. */
   count(): number;
+  /** How the conversation stands in what is asked between turns: idle clock ticks in a row, when the owner last spoke and the clock last ticked ('' when never), and the number of the event a reading for the next report begins at. */
+  stands(): Stands;
+  /** The tokens the agent's own time took from `since` on, in milliseconds (`ownSpend` in brain/agenda.ts). */
+  ownSpent(since: number): number;
   /** What the stem's acceptance of a species commit says to the agent, by the id of the event that records it (brain/acceptance.ts). */
   accepted(): Map<string, string>;
   /** The numbers of the events with these ids, of those that stand. */
@@ -103,7 +109,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -188,6 +194,19 @@ export function journalPast(journal: string): Past {
     },
     count: () => lines.all().length,
     accepted: () => acceptanceNotes(lines().map((line) => line.event)),
+    stands() {
+      const events = lines().map((line) => line.event);
+      return {
+        idle: idleTicks(events), owner: events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source))?.ts ?? '',
+        clock: events.findLast((e) => e.type === 'stimulus' && e.source === 'clock')?.ts ?? '', report: 0,
+      };
+    },
+    ownSpent(since) {
+      const state = ownStart();
+      let spent = 0;
+      for (const { event } of lines.all()) { const tokens = ownStep(state, event); if (tokens > 0 && Date.parse(event.ts) >= since) spent += tokens; }
+      return spent;
+    },
     places(ids) {
       const wanted = new Set(ids);
       const stands = new Set(lines());
@@ -322,6 +341,16 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.sync();
       store.settle();
       return acceptedSince(ray, 0);
+    },
+    stands() {
+      store.sync();
+      store.settle();
+      return standsFrom(ray);
+    },
+    ownSpent(since) {
+      store.sync();
+      store.settle();
+      return ownSpentSince(ray, since);
     },
     places(ids) {
       store.sync();
@@ -538,6 +567,8 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
     count: () => through((past) => past.count()),
     accepted: () => through((past) => past.accepted()),
+    stands: () => through((past) => past.stands()),
+    ownSpent: (since) => through((past) => past.ownSpent(since)),
     places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),
