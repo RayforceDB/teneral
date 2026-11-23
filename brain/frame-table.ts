@@ -1,4 +1,5 @@
 import { acceptanceStart, acceptanceStep, type AcceptanceState } from './acceptance';
+import { idleOf, idleStart, idleStep, type IdleState } from './idle';
 import type { JournalEvent } from './journal';
 import { reply, wireNames } from './wire';
 import type { Column, Ray, Table } from './ray';
@@ -9,7 +10,7 @@ import { boundAs, type Projection } from './store';
 //
 //   names      ord name odd     the name every call went out under, in order from the first
 //   accepted   seq id note      what the stem's acceptance of a species commit says to the agent
-//   state      data             what the reading holds between two events
+//   state      data idle        what the reading holds between two events, and how many clock ticks in a row ended with nothing done
 //
 // A call goes out under its journaled id where that will do, otherwise under one made from its
 // place among all the calls (`wireNames` in brain/memory.ts); and a name that went out once is
@@ -22,7 +23,7 @@ import { boundAs, type Projection } from './store';
 
 export const FRAME = 'frame';
 /** Changed with the naming of calls, with the acceptance step, or with the columns below. */
-export const FRAME_VERSION = 1;
+export const FRAME_VERSION = 2;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });
@@ -38,12 +39,13 @@ interface State {
   name: (id: unknown) => string;
   acceptance: AcceptanceState;
   accepted: { seq: number; id: string; note: string }[];
+  idle: IdleState;
 }
 
 function start(names: string[] = [], odd: boolean[] = []): State {
   const used = new Set(names);
   // The names so far are given as names that went out before; the namer adds its own to those.
-  return { names, odd, used, name: wireNames(names.length, (name) => used.has(name)), acceptance: acceptanceStart(), accepted: [] };
+  return { names, odd, used, name: wireNames(names.length, (name) => used.has(name)), acceptance: acceptanceStart(), accepted: [], idle: idleStart() };
 }
 
 /** The names of the calls and the acceptance notes, kept in tables. The store drives it (brain/store.ts). */
@@ -69,6 +71,7 @@ export function frameProjection(): Projection {
       const pending = state.acceptance.pending;
       if (acceptanceStep(state.acceptance, e)) state.accepted.push({ seq, id: e.id, note: state.acceptance.notes.get(e.id)! });
       if (state.acceptance.pending !== pending) changed = true;
+      if (idleStep(state.idle, e)) changed = true;
       if (changed) made = null;
       return changed;
     },
@@ -76,7 +79,7 @@ export function frameProjection(): Projection {
       made ??= {
         names: { ord: nums(state.names.map((_, i) => i + 1)), name: strs(state.names), odd: bools(state.odd) },
         accepted: { seq: nums(state.accepted.map((a) => a.seq)), id: strs(state.accepted.map((a) => a.id)), note: strs(state.accepted.map((a) => a.note)) },
-        state: { data: strs([JSON.stringify({ pending: state.acceptance.pending ?? null })]) },
+        state: { data: strs([JSON.stringify({ pending: state.acceptance.pending ?? null, idle: state.idle })]), idle: nums([idleOf(state.idle)]) },
       };
       return made;
     },
@@ -92,8 +95,9 @@ export function frameProjection(): Projection {
         .sort((x, y) => x.seq - y.seq);
       for (const one of state.accepted) state.acceptance.notes.set(one.id, one.note);
       const held = (tables.state?.columns.data as string[] | undefined)?.[0];
-      const pending = held === undefined ? null : (JSON.parse(held) as { pending: AcceptanceState['pending'] | null }).pending;
-      if (pending) state.acceptance.pending = pending;
+      const was = held === undefined ? null : JSON.parse(held) as { pending: AcceptanceState['pending'] | null; idle: IdleState };
+      if (was?.pending) state.acceptance.pending = was.pending;
+      if (was?.idle) state.idle = was.idle;
     },
   };
 }
@@ -123,4 +127,9 @@ export function acceptedSince(ray: Ray, from: number): Map<string, string> {
   const ids = t.columns.id as string[] | undefined ?? [];
   const notes = t.columns.note as string[] | undefined ?? [];
   return new Map(ids.map((id, i) => [id, notes[i]!]));
+}
+
+/** How many of the latest clock ticks in a row ended with nothing done (`idleTicks` in brain/agenda.ts). */
+export function idleFrom(ray: Ray): number {
+  return Number((ray.table(`(select {from: ${boundAs(FRAME, 'state')} idle: idle})`).columns.idle as BigInt64Array | undefined)?.[0] ?? 0);
 }

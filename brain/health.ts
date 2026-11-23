@@ -1,9 +1,9 @@
 import { PASSED_TICKS, idleTicks } from './agenda';
-import { episodes } from './episodes';
+import { episodes, type Episode } from './episodes';
 import { QUESTIONS_MIN, lastResult, rate, type Result } from './exam';
 import type { JournalEvent } from './journal';
-import { agenda, known } from './known';
-import { remembered } from './remembered';
+import { agenda, known, type Known } from './known';
+import { remembered, type Remembered } from './remembered';
 
 // How the agent's memory stands, as one word with its reasons. A memory fails quietly: episodes
 // pile up unremembered, a model that will not answer in form leaves stretches with no memory at
@@ -52,13 +52,28 @@ function since(hours: number): string {
 /** How the memory stands in `events`, as of `now`. The same journal and the same moment always give the same answer. */
 export function health(events: JournalEvent[], now: number): Health {
   const all = remembered(events);
-  const cut = episodes(events, all.spans);
+  return healthOf({ told: all, cut: episodes(events, all.spans), known: known(events), exam: lastResult(events), idle: idleTicks(events) }, now);
+}
+
+/** What the health of the memory is read from. A journal held whole gives it in `health`; the tables of the database give the same (brain/frame.ts). */
+export interface HealthParts {
+  told: Remembered;
+  /** The conversation as it stands, cut into episodes. */
+  cut: Episode[];
+  known: Known;
+  exam: ReturnType<typeof lastResult>;
+  /** `idleTicks` of the conversation. */
+  idle: number;
+}
+
+export function healthOf(parts: HealthParts, now: number): Health {
+  const { told: all, cut } = parts;
   const owed = cut.filter((e) => e.closed && (e.why !== 'kept' || (!all.memories.has(e.first) && !all.quarantined.has(e.first))));
   const oldest = owed[0]?.end ?? null;
   const hours = oldest === null ? 0 : Math.max(0, (now - Date.parse(oldest)) / 3_600_000);
   const today = new Date(now).toISOString().slice(0, 10);
-  const overdue = known(events).intentions.filter((i) => i.due !== undefined && i.due < today).length;
-  const exam = lastResult(events);
+  const overdue = parts.known.intentions.filter((i) => i.due !== undefined && i.due < today).length;
+  const exam = parts.exam;
   const formed = all.memories.size + all.quarantined.size;
   const mechanical = all.merges.filter((m) => m.mechanical === true).length;
 
@@ -70,8 +85,8 @@ export function health(events: JournalEvent[], now: number): Health {
   if (mechanical >= MECHANICAL.count && mechanical / all.merges.length > MECHANICAL.share) failing.push(`${mechanical} of ${all.merges.length} wider memories are only lists of titles`);
   if (exam !== null && exam.recall.questions >= QUESTIONS_MIN && rate(exam.recall) < rate(exam.plain)) failing.push('recall finds less than looking for the words as they stand');
   if (exam !== null && exam.written && rate(exam.told) < TOLD_LOW) behind.push(`the memories tell ${Math.round(rate(exam.told) * 100)}% of what the exam asks`);
-  const idle = idleTicks(events);
-  const open = agenda(known(events), today).length;
+  const idle = parts.idle;
+  const open = agenda(parts.known, today).length;
   if (idle >= stuckTicks() && open > 0) behind.push(`the agenda is stuck: ${idle} ticks of time of your own in a row ended with nothing done, with ${open} ${open === 1 ? 'thing' : 'things'} open`);
   if (overdue > 0) behind.push(`${overdue} ${overdue === 1 ? 'thing' : 'things'} meant to be done ${overdue === 1 ? 'is' : 'are'} past the day`);
 
