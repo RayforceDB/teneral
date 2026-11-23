@@ -96,12 +96,16 @@ export interface Initiative {
 }
 
 export function initiative(events: JournalEvent[]): Initiative {
-  const held = known(events);
+  return initiativeOf(known(events), events.filter((e) => e.type === 'generation.rolledback'), idleTicks(events));
+}
+
+/** The same from what is known, the records of generations rolled back, and the idle ticks in a row, wherever they are read. */
+export function initiativeOf(held: Known, rolled: JournalEvent[], idle: number): Initiative {
   const all = [...held.intentions, ...held.closed];
   const count = (of: (i: Intention) => boolean): number => all.filter(of).length;
   const sure = (i: Intention): boolean => i.origin === 'own' && (i.unsure !== true || i.allowed !== undefined);
   const rolledBack = new Map<string, string>();
-  for (const e of events) if (e.type === 'generation.rolledback') rolledBack.set(e.commit, e.ts);
+  for (const e of rolled) if (e.type === 'generation.rolledback') rolledBack.set(e.commit, e.ts);
   // Only an actual done record can be undone; a dropped idea must not become a fresh cancellation on every later rollback.
   const undone = (i: Intention): boolean => i.ended === 'done' && i.endedGen !== undefined && (rolledBack.get(i.endedGen) ?? '') > (i.endedAt ?? '');
   const wasDone = (i: Intention): boolean => sure(i) && i.ended === 'done' && !undone(i);
@@ -113,7 +117,7 @@ export function initiative(events: JournalEvent[]): Initiative {
     },
     asked: { yes: count((i) => i.unsure === true && i.allowed !== undefined), no: count((i) => i.ended === 'refused'), waiting: count((i) => i.unsure === true && i.waits && i.ended === undefined) },
     questions: { answered: count((i) => i.ended === 'answered'), waiting: count((i) => i.origin === 'ask' && i.ended === undefined) },
-    idle: idleTicks(events),
+    idle,
   };
 }
 
@@ -148,10 +152,19 @@ export function ownSpend(events: JournalEvent[], now: number): number {
 
 /** Whether it is time to look ahead: enough memories, or an idle agenda with no own idea to carry it. */
 export function reflectionDue(events: JournalEvent[]): boolean {
+  return reflectionDueOf(events, known(events), (last) => idleTicks(events.filter((e) => e.ts > last)));
+}
+
+/**
+ * The same from the notes of the looks ahead and of the memories (`REFLECTION_KIND`, the kind of a
+ * memory of an episode; other events among them are passed over), what is known, and the idle
+ * ticks in a row since a time, asked for only when it is needed.
+ */
+export function reflectionDueOf(notes: JournalEvent[], held: Known, idleSince: (last: string) => number): boolean {
   let since = 0;
   let last = '';
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const e = notes[i]!;
     if (e.type !== 'note') continue;
     if (e.kind === REFLECTION_KIND) {
       last = e.ts;
@@ -160,11 +173,10 @@ export function reflectionDue(events: JournalEvent[]): boolean {
     if (e.kind === EPISODE_KIND && (e.data as { outcome?: unknown } | null)?.outcome !== 'quiet') since += 1;
   }
   if (since >= REFLECT_EVERY) return true;
-  if (known(events).intentions.some((i) => i.origin === 'own' && !i.waits)) return false;
+  if (held.intentions.some((i) => i.origin === 'own' && !i.waits)) return false;
   // Only idle ticks since the last look can make another one due. That look itself, or a reflection
   // reached through new memories, is a fresh boundary: three new idle ticks are needed, not a loop.
-  const idle = idleTicks(events.filter((e) => e.ts > last));
-  return idle >= PASSED_TICKS;
+  return idleSince(last) >= PASSED_TICKS;
 }
 
 /** What the agent is asked, after everything a turn would show it. */
@@ -252,10 +264,18 @@ export function parseLook(reply: string): Looked | { problem: string } {
  * last ready commitment closes; its reflection record is still the cooldown boundary.
  */
 export async function reflect(d: SleepDeps, events: JournalEvent[], now = false): Promise<Slept> {
-  if (!now && !reflectionDue(events)) return 'nothing';
-  const held = known(events);
+  // With a past to ask, `events` need be only the journal's last event: everything else is asked.
+  const asked = d.asked;
+  const due = asked === undefined ? reflectionDue(events) : reflectionDueOf(asked.notes([REFLECTION_KIND, EPISODE_KIND]), asked.known(), (last) => {
+    if (last === '') return asked.stands().idle;
+    const at = asked.notesAt([REFLECTION_KIND]).at(-1)!.seq;
+    return idleTicks(asked.standingFrom(at + 1).filter((e) => e.ts > last));
+  });
+  if (!now && !due) return 'nothing';
+  const held = asked === undefined ? known(events) : asked.known();
+  const counted = asked === undefined ? initiative(events) : initiativeOf(held, asked.ofType('generation.rolledback'), asked.stands().idle);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events)), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(counted), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;

@@ -48,6 +48,8 @@ export interface Past {
   stimuli(sources: readonly string[]): JournalEvent[];
   /** The calls of the tool `name` made at or after the time `since` (milliseconds), as their intents were journaled, the newest first. */
   callsSince(name: string, since: number): JournalEvent[];
+  /** Every event of this type, in order: for the rare kinds of record. */
+  ofType(type: string): JournalEvent[];
   /** What the owner said after the event numbered `seq` (from the terminal or a source `owner:…`), in order, of the conversation as it stands. */
   ownerSaidSince(seq: number): JournalEvent[];
   /** The lessons as they stand (brain/lessons.ts), and the conversation being lived as the rules alone cut the journal: the first event of it. */
@@ -231,6 +233,7 @@ export function journalPast(journal: string): Past {
       return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
     },
     count: () => lines.all().length,
+    ofType: (type) => lines.all().flatMap((line) => (line.event.type === type ? [line.event] : [])),
     callsSince: (name, since) => lines.all().flatMap((line) => (line.event.type === 'tool.intent' && line.event.name === name && Date.parse(line.event.ts) >= since ? [line.event] : [])).reverse(),
     ownerSaidSince(seq) {
       const stands = new Set(lines());
@@ -409,6 +412,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     count() {
       store.sync();
       return store.count();
+    },
+    ofType(type) {
+      store.sync();
+      return store.ofType(type);
     },
     callsSince(name, since) {
       store.sync();
@@ -687,6 +694,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     count: () => through((past) => past.count()),
     ownerSaidSince: (seq) => through((past) => past.ownerSaidSince(seq)),
     callsSince: (name, since) => through((past) => past.callsSince(name, since)),
+    ofType: (type) => through((past) => past.ofType(type)),
     lessons: () => through((past) => past.lessons()),
     settled: () => through((past) => past.settled()),
     accepted: () => through((past) => past.accepted()),
