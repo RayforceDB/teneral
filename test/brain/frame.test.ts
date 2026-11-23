@@ -8,7 +8,10 @@ import { episodesFrom, memoryProjection } from '../../brain/memory-table';
 import { standing } from '../../brain/owned';
 import { known, knownText } from '../../brain/known';
 import { remembered } from '../../brain/remembered';
+import type { Tool, ToolContext } from '../../body/tools';
 import { frameFrom } from '../../brain/frame';
+import { runTurn } from '../../brain/loop';
+import type { ChatMessage, Provider, Reply } from '../../brain/provider';
 import { idleStart, idleStep, idleOf } from '../../brain/idle';
 import { journalPast, projections, storePast } from '../../brain/past';
 import { openStore } from '../../brain/store';
@@ -307,3 +310,36 @@ real('a question put to the owner in a conversation taken back was put all the s
     expect(request.some((m) => m.content?.includes('May the report go out?'))).toBe(false);
   }
 }, 60_000);
+
+real('a turn with the database at hand sends, round for round, the requests a turn sends that holds the journal', async () => {
+  const seeded = life(40, 30);
+  const script = (): Reply[] => [
+    { text: 'looking', toolCalls: [{ id: 'call_1', name: 'echo', args: { n: 1 } }, { id: 'c3x0', name: 'echo', args: { n: 2 } }] },
+    { text: '', toolCalls: [{ id: 'fresh', name: 'echo', args: { n: 3 } }] },
+    { text: 'done with it', toolCalls: [] },
+  ];
+  const echo: Tool = { spec: { name: 'echo', description: '', parameters: {} }, async run(args) { return `echo:${JSON.stringify(args)}`; } };
+  const turn = async (withPast: boolean): Promise<{ seen: ChatMessage[][]; asked: number[] }> => {
+    const journal = join(mkdtempSync(join(tmpdir(), 'teneral-turn-')), 'journal.jsonl');
+    writeFileSync(journal, seeded.map(line).join(''));
+    const asked: number[] = [];
+    const past = storePast(journal, ray(), openStore(ray(), journal, undefined, projections()), false);
+    const watched = { ...past, standingFrom: (seq: number, end?: number) => { asked.push(end ?? -1); return past.standingFrom(seq, end); } };
+    const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp', ...(withPast ? { past: watched } : {}) };
+    const seen: ChatMessage[][] = [];
+    const replies = script();
+    const provider: Provider = async (messages) => { seen.push(structuredClone(messages)); return replies.shift()!; };
+    expect(await runTurn({ journal, gen: 'g1', provider, tools: [echo], system: () => 'SYS', ctx, budgetChars: 30_000, tailChars: 4_000 })).toBe('done');
+    return { seen, asked };
+  };
+  const held = await turn(false);
+  const served = await turn(true);
+  expect(held.seen).toHaveLength(3);
+  expect(served.seen).toEqual(held.seen);
+  // The database was asked, each time up to the event the round had read to; and nothing was asked of it in the turn without it.
+  expect(held.asked).toEqual([]);
+  expect(served.asked.length).toBeGreaterThanOrEqual(3);
+  expect(served.asked.every((end) => end > seeded.length - 1)).toBe(true);
+  // The requests were made from the last part: they open with memories, not with the first thing ever said.
+  expect(JSON.stringify(served.seen[0])).not.toContain('matter 0 ');
+}, 120_000);

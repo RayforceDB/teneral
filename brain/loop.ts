@@ -2,7 +2,9 @@ import { QUESTION_MAX, QUESTION_MIN, REMINDED_KIND, type Reminder } from './remi
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
-import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
+import { frameFrom } from './frame';
+import type { ChatMessage } from './provider';
+import { DEFAULT_BUDGET, assemble, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
 import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, SAME_REQUEST_REPLY, quietReply } from './quiet';
@@ -160,6 +162,26 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   let continued = false;
   const route = d.imageRoute;
   const journal = turnJournal(d.journal);
+  /**
+   * The request for `events`, which is the journal up to some event. Asked of the database where
+   * the turn has a past (brain/frame.ts): the same request, made from the last part of the
+   * conversation and what the tables hold of the rest. Made from `events` themselves when there is
+   * no past, or when asking it fails: a turn is not lost to the database.
+   */
+  const request = (events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: Parameters<typeof buildMessages>[4]): ChatMessage[] => {
+    const past = d.ctx.past;
+    const last = events.at(-1)?.id;
+    if (past !== undefined && last !== undefined) {
+      try {
+        // Up to the last of `events`, whatever was journaled since: the turn's own mark of what was shown, or something that arrived just now.
+        const at = past.places([last]).get(last);
+        if (at !== undefined) return assemble(frameFrom(past, budgetChars - system.toWellFormed().length, view, sight !== undefined, at + 1), system, budgetChars, sight, view);
+      } catch (err) {
+        console.error(`[memory] the request was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return buildMessages(events, system, budgetChars, sight, view);
+  };
   // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
   const quietTick = mayStayQuiet(journal.read().findLast(e => e.type === 'stimulus')?.source);
@@ -184,7 +206,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       if (question.length >= QUESTION_MIN && !answered) {
         let reminder: Reminder | null = null;
         try {
-          const inFront = buildMessages(events, d.system(), budget - specsSize, undefined, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
+          const inFront = request(events, d.system(), budget - specsSize, undefined, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
           reminder = d.remind(question, inFront.map((m) => m.content ?? '').join('\n'), events);
         } catch (err) {
           // Remembering is a help, not a condition: the turn goes on without it.
@@ -206,7 +228,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     let reply: Reply;
     let streamed = false;
     for (let attempt = 0; ; attempt++) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
+      const messages = request(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
       if (attempt === 0) {
         const request = JSON.stringify(messages);
         sameRequests = round > 0 && request === lastRequest ? sameRequests + 1 : 0;
