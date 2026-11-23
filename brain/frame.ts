@@ -11,11 +11,11 @@ import { conversationBefore, lessonsBefore, lessonsFrom } from './lessons-table'
 import type { Placed } from './memory-table';
 import { LATER_NOTES, LINK_NOTES, laterNoteOf, outdatedStretches } from './links';
 import { MEMORY_MARK, knowingOf, swapped, type Head, type Sizes } from './logbook';
-import { OVERLAP_EPISODES, assemble, buildMessages, frameOf, narrow, type Frame, type Sight, type View } from './memory';
+import { OVERLAP_EPISODES, assemble, buildMessages, frameOf, narrow, needsTurn, owes, type Frame, type Sight, type View } from './memory';
 import type { ChatMessage } from './provider';
-import { PIN_KIND, UNPIN_KIND, WITHDRAW_KIND, pinned } from './owned';
+import { BACK_KIND, PIN_KIND, UNPIN_KIND, WITHDRAW_KIND, pinned } from './owned';
 import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered } from './remembered';
-import type { JournalEvent } from './journal';
+import { readEvents, readEventsFrom, type JournalEvent } from './journal';
 import type { Past } from './past';
 import type { Ray } from './ray';
 import { reply } from './wire';
@@ -105,9 +105,10 @@ function lessonsText(past: Past, ray: Ray, events: JournalEvent[], whole: boolea
  * there is a past: the same request, made from the last part of the conversation and what the
  * tables hold of the rest, read up to the last of `events` whatever was journaled since (a turn's
  * own mark of what was shown, or something that arrived just now). Made from `events` themselves
- * when there is no past, or when asking it fails: nothing is lost to the database.
+ * when there is no past, or when asking it fails: nothing is lost to the database. A reader that
+ * holds only the last part of the journal gives `whole`, which reads the rest for that case.
  */
-export function requestFrom(past: Past | undefined, events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View = {}): ChatMessage[] {
+export function requestFrom(past: Past | undefined, events: JournalEvent[], system: string, budgetChars: number, sight: Sight | undefined, view: View = {}, whole?: () => JournalEvent[]): ChatMessage[] {
   const last = events.at(-1)?.id;
   if (past !== undefined && last !== undefined) {
     try {
@@ -117,7 +118,7 @@ export function requestFrom(past: Past | undefined, events: JournalEvent[], syst
       console.error(`[memory] the request was made from the journal, not the database: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return buildMessages(events, system, budgetChars, sight, view);
+  return buildMessages(whole === undefined ? events : whole(), system, budgetChars, sight, view);
 }
 
 /**
@@ -217,4 +218,23 @@ export function frameAsOf(past: Past, episode: Placed, room: number, chosen: Siz
   }
   const head: Head = { last, knowing: knowingOf(known, last, lessons, health), told, kept, whole, pinned: held, outdated: outdatedStretches(notes, told) };
   return { events, first, before: counts, usedBefore: (id) => used.has(id), accepted: first === 0 ? acceptanceNotes(events) : acceptedSince(ray, begin!.fromSeq), head };
+}
+
+/**
+ * Whether a turn is owed (`needsTurn` in brain/memory.ts), asked without reading the journal
+ * through: nothing before the latest thing said to the agent bears on it, so the past is asked
+ * where that lies and the journal is read from there. The journal is read whole when there is no
+ * past, when nothing was ever said, or when a conversation was taken back since.
+ */
+export function turnOwed(past: Past | undefined, journal: string): boolean {
+  if (past?.by === 'store') {
+    try {
+      const from = past.asked();
+      const tail = from === null ? [] : readEventsFrom(journal, from);
+      if (tail[0]?.type === 'stimulus' && !tail.some((e) => e.type === 'note' && e.kind === BACK_KIND)) return owes(tail, past.accepted());
+    } catch (err) {
+      console.error(`[memory] whether a turn is owed was read from the journal, not asked of the database: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return needsTurn(readEvents(journal));
 }

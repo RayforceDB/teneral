@@ -19,10 +19,9 @@ function shownAt(e: JournalEvent): Shown | null {
  * journaled before the reply; order alone would otherwise lose it if the process dies
  * before the extra round. Requests and replies are paired by journal order.
  */
-export function replyIsCurrent(events: JournalEvent[], reply: JournalEvent): boolean {
+export function replyIsCurrent(events: JournalEvent[], reply: JournalEvent, accepted: Map<string, string> = acceptanceNotes(events)): boolean {
   const at = events.findIndex(e => e.id === reply.id);
   if (at < 0 || reply.type !== 'assistant') return false;
-  const accepted = acceptanceNotes(events);
   const owed = (e: JournalEvent): boolean => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id);
   let latest: JournalEvent | undefined;
   for (const e of events.slice(0, at)) if (owed(e)) latest = e;

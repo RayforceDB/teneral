@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
+import { turnOwed } from '../brain/frame';
 import { DEFAULT_BUDGET, needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
 import { runTurn, mayStayQuiet } from '../brain/loop';
@@ -30,7 +31,7 @@ import { clockText } from './sensors';
 import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
-import { chooseReminder, lately } from '../brain/reminded';
+import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
@@ -317,7 +318,7 @@ function emit(s: Stimulus): void {
  */
 function interrupt(): void {
   if (current !== null) return current.abort();
-  if (!needsTurn(journalNow())) return;
+  if (!turnOwed(past, journal)) return;
   appendEvent(journal, gen, { type: 'turn.interrupted' });
   console.error('[interrupted]');
   wake?.();
@@ -473,7 +474,8 @@ async function turn(): Promise<{ error: unknown } | null> {
     const outcome = await runTurn({
       journal, gen, provider, tools: allTools, ctx, budgetChars, tailChars, logbookChars, sight,
       // Older memories the thing just said brings back: the search `recall` makes, asked once before the turn's first request. One a later memory made outdated is left out.
-      remind: (question, inFront, events) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12 }), inFront, lately(events), past); },
+      // The latest reminders are asked of the past: the turn hands over only the end of the journal it holds.
+      remind: (question, inFront) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12 }), inFront, lately(past.notes([REMINDED_KIND])), past); },
       imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
@@ -686,7 +688,7 @@ const stops = sensors.map((start) => start(emit));
 }
 // The journal grew: by a stimulus, which wakes by itself in `emit`, by the stem, or by a record
 // nobody needs to answer. A request of the agent's own goes on unless a turn is now owed.
-stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || needsTurn(journalNow())) wake?.(); }));
+stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || turnOwed(past, journal)) wake?.(); }));
 
 // Failed turns in a row, and how many of the latest kind. What each kind leads to is in brain/retry.ts.
 let failures = 0;
@@ -695,7 +697,7 @@ for (;;) {
   if (handoff !== null) process.exit(75);
   settleWords();
   // Also true right after a restart: an unfinished turn or a stem note is picked up here.
-  while (!quitting && needsTurn(journalNow())) {
+  while (!quitting && turnOwed(past, journal)) {
     if (retryAt !== null && Date.now() < retryAt) {
       // A failed turn is still owed but its next try is not due. Sleep past it without waking on
       // every stimulus: a clock tick or an inbox message must not hammer a provider already at

@@ -7,7 +7,8 @@ import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { LINE_MAX, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
-import { frameProjection } from './frame-table';
+import { acceptanceNotes } from './acceptance';
+import { acceptedSince, frameProjection } from './frame-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonsProjection } from './lessons-table';
 import { counted } from './wire';
@@ -49,6 +50,8 @@ export interface Past {
   standingFrom(seq: number, end?: number): JournalEvent[];
   /** How many events the journal holds: the number the next one will have. */
   count(): number;
+  /** What the stem's acceptance of a species commit says to the agent, by the id of the event that records it (brain/acceptance.ts). */
+  accepted(): Map<string, string>;
   /** The numbers of the events with these ids, of those that stand. */
   places(ids: string[]): Map<string, number>;
   /** What is remembered: the memories, the stretches no memory could be formed of, and the wider memories (brain/remembered.ts). */
@@ -180,6 +183,7 @@ export function journalPast(journal: string): Past {
       return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
     },
     count: () => lines.all().length,
+    accepted: () => acceptanceNotes(lines().map((line) => line.event)),
     places(ids) {
       const wanted = new Set(ids);
       const stands = new Set(lines());
@@ -306,6 +310,11 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     count() {
       store.sync();
       return store.count();
+    },
+    accepted() {
+      store.sync();
+      store.settle();
+      return acceptedSince(ray, 0);
     },
     places(ids) {
       store.sync();
@@ -502,6 +511,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     known: () => through((past) => past.known()),
     standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
     count: () => through((past) => past.count()),
+    accepted: () => through((past) => past.accepted()),
     places: (ids) => through((past) => past.places(ids)),
     remembered: () => through((past) => past.remembered()),
     episodes: () => through((past) => past.episodes()),
