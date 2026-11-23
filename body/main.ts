@@ -10,7 +10,7 @@ import { install as speciesInstall, retireStale, retiredText } from '../species/
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { SUBAGENT_KIND, Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
-import { GLANCE_KIND, OVERHEARD_KIND, SETTLED_KIND, decide, glance, overheard, setDown, unsettled } from '../heart/glance';
+import { GLANCE_KIND, GLANCE_SAID, OVERHEARD_KIND, SETTLED_KIND, decide, glance, lastSaid, overheard, setDown, unsettled } from '../heart/glance';
 import { dueWorkOf, heldByInterrupt, importLegacyWork, workDueAtOf } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -33,6 +33,7 @@ import { followUps, lookedAt, offered, reportAsk, settle, tickDueOf, worthATick 
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
 import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
+import { EPISODE_KIND, MERGE_KIND } from '../brain/remembered';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep, waitingOf } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
@@ -289,7 +290,20 @@ function heardOn(service: string): (m: ChatMessage, how: How) => void {
 }
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
-const glanceDeps = () => ({ journal, gen, provider: glanceProvider, who: soulHead, events: journalNow, emit });
+// A glance reads the overheard talk and what was decided of it, what the agent last said, and its agenda: each asked of the past.
+const glanceDeps = () => ({
+  journal, gen, provider: glanceProvider, who: soulHead, emit, events: () => noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND),
+  asks: { said: saidLately, agenda: (now: number) => agendaByDay(now) },
+});
+/** What the agent last said in words (`lastSaid` in heart/glance.ts): looked for from the journal's end, further back while too few are found. */
+function saidLately(): string[] {
+  const upTo = past.count();
+  for (let back = 200; ; back *= 4) {
+    const from = Math.max(0, upTo - back);
+    const said = lastSaid(past.standingFrom(from, upTo));
+    if (said.length >= GLANCE_SAID || from === 0) return said;
+  }
+}
 /** The glance being made beside a running turn, if one is. */
 let glancing: Promise<unknown> | null = null;
 function glanceBeside(): Promise<unknown> {
@@ -624,9 +638,11 @@ function sinceReport(): JournalEvent[] {
   return reported.events;
 }
 /** What a tick asks when it is time to tell the owner what the agent did on its own; '' when it is not. */
-const report = (now: number): string => reportAsk(sinceReport(), now, reportHours * 3_600_000, past.known());
+const report = (now: number, everyMs: number | undefined = reportHours * 3_600_000): string => reportAsk(sinceReport(), now, everyMs, past.known());
 /** The agenda as a tick offers it (`agendaFor` in heart/coordinator.ts), from what the past holds. */
 const agendaNow = (now: number): string => offered(past.known(), now, past.stands().idle, report(now));
+/** The same as a pulse asked for by hand and a glance have always read it (`agendaPulse`, `glanceText`): with a report asked for once a day, whatever the owner set for the clock's own ticks. */
+const agendaByDay = (now: number): string => offered(past.known(), now, past.stands().idle, reportAsk(sinceReport(), now, undefined, past.known()));
 /** When the next tick of the clock is due; undefined with no clock. */
 function nextTickAt(): number | undefined {
   const last = past.stands().clock;
@@ -660,7 +676,7 @@ const JOB_LOOK_MS = 2000;
 const heart = new Heart({
   events: () => journalNow(),
   // What the heart reads for itself, asked of the past.
-  asks: { owed: () => turnOwed(past, journal), owner: () => past.stands().owner, known: () => past.known(), pulse: (now) => ({ source: 'clock', text: `${clockText(new Date(now))} ${agendaNow(now)}` }) },
+  asks: { owed: () => turnOwed(past, journal), owner: () => past.stands().owner, known: () => past.known(), pulse: (now) => ({ source: 'clock', text: `${clockText(new Date(now))} ${agendaByDay(now)}` }) },
   born: () => clockMayTick(sinceSaid(), soulDir),
   emit,
   overheard: () => { if (!GLANCE) return false; const talk = noted(OVERHEARD_KIND, GLANCE_KIND, SETTLED_KIND); return overheard(talk).length > 0 || unsettled(talk).length > 0; },
@@ -753,20 +769,19 @@ for (;;) {
     const before = ownerArrived;
     // The stimulus that woke this turn is already in the journal. Start after the last settled
     // reply/interruption, not at the current end, and include any late work answered by the turn.
-    const beforeTurn = journalNow();
-    const turnFrom = beforeTurn.findLastIndex(e => e.type === 'assistant' || e.type === 'turn.interrupted') + 1;
+    // As a place in the journal's file: what the turn did is read from there when it is over.
+    const turnFrom = past.settled();
     working = true;
     const failed = await turn();
     working = false;
     journalFormed();
     settleWords();
-    heart.completed(journalNow(), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
+    heart.completed(readEventsFrom(journal, turnFrom), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', 0);
     if (handoff !== null) {
-      const events = journalNow();
-      const last = events.findLast(e => e.type === 'stimulus');
+      const last = past.latest('stimulus');
       // A terminal line read during the mutation turn is durable and must get its reply now.
       // Re-running mutate would be rejected as a repeated request, so keep the original handoff.
-      if (last?.source !== 'terminal' || !needsTurn(events)) process.exit(75);
+      if (last?.type !== 'stimulus' || last.source !== 'terminal' || !turnOwed(past, journal)) process.exit(75);
     }
     if (failed === null) {
       retryAt = null;
@@ -828,12 +843,12 @@ for (;;) {
   if (quitting) break;
   if (beat !== 'wait') continue;
   // Once for each time the journal has grown: a wake only to look whether a job has ended, or a time has come, has nothing new to tidy.
-  if (journalNow().length !== tidiedAt) {
+  if (past.count() !== tidiedAt) {
     // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
     // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
     try {
-      const events = standing(journalNow());
-      if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
+      // Whether it is due is read in the notes of the memories and of the last exam; the exam itself reads the conversation, asked of the past for that once.
+      if (due(noted(RESULT_KIND, EPISODE_KIND, MERGE_KIND))) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, past.standingFrom(0)) });
     } catch (err) {
       console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -851,7 +866,7 @@ for (;;) {
     }
     // A prompt only where someone can type at it; a wake reuses the existing input place.
     if (process.stdin.isTTY) terminalPrompt.ready();
-    tidiedAt = journalNow().length;
+    tidiedAt = past.count();
   }
   // Until something arrives, until rest begins and there may be something of its own to do, or until what the agent waits for may have come.
   await idle(heart.waitFor());

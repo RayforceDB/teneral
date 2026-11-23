@@ -54,6 +54,8 @@ export interface Past {
   known(): Known;
   /** The conversation as it stands from the event numbered `seq` on (the place of its line, when the journal is read through) and before the one numbered `end`. */
   standingFrom(seq: number, end?: number): JournalEvent[];
+  /** The byte of the journal just after the newest reply or interruption: where what no turn has settled yet begins. 0 when there is none. */
+  settled(): number;
   /** How many events the journal holds: the number the next one will have. */
   count(): number;
   /** How the conversation stands in what is asked between turns: idle clock ticks in a row, when the owner last spoke and the clock last ticked ('' when never), and the number of the event a reading for the next report begins at. */
@@ -193,6 +195,7 @@ export function journalPast(journal: string): Past {
       return lines.all().flatMap((line, i) => (i >= seq && (end === undefined || i < end) && stands.has(line) ? [line.event] : []));
     },
     count: () => lines.all().length,
+    settled: () => lines.all().findLast((line) => line.event.type === 'assistant' || line.event.type === 'turn.interrupted')?.next ?? 0,
     accepted: () => acceptanceNotes(lines().map((line) => line.event)),
     stands() {
       const events = lines().map((line) => line.event);
@@ -336,6 +339,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     count() {
       store.sync();
       return store.count();
+    },
+    settled() {
+      store.sync();
+      return store.settled();
     },
     accepted() {
       store.sync();
@@ -566,6 +573,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     known: () => through((past) => past.known()),
     standingFrom: (seq, end) => through((past) => past.standingFrom(seq, end)),
     count: () => through((past) => past.count()),
+    settled: () => through((past) => past.settled()),
     accepted: () => through((past) => past.accepted()),
     stands: () => through((past) => past.stands()),
     ownSpent: (since) => through((past) => past.ownSpent(since)),

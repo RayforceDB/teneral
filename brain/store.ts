@@ -181,6 +181,8 @@ export interface Store {
   noted(kinds: readonly string[]): JournalEvent[];
   /** What was said to the agent from these sources, in the journal's order. A source is whatever a sensor called itself. */
   stimuli(sources: readonly string[]): JournalEvent[];
+  /** The byte of the journal just after the newest reply or interruption: where what no turn has settled yet begins. 0 when there is none. */
+  settled(): number;
   /** What was said from these sources and the notes of these kinds, together, in the journal's order. */
   picked(sources: readonly string[], kinds: readonly string[]): JournalEvent[];
   /** The same, each with its number. */
@@ -564,6 +566,11 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
     },
     noted,
     notedAt,
+    settled() {
+      if (!mounted) return 0;
+      const next = ray.table(`(select {from: ${BOUND} where: (or (== type 'assistant) (== type 'turn.interrupted)) desc: off take: 1 next: next})`).columns.next as BigInt64Array | undefined;
+      return next === undefined || next.length === 0 ? 0 : Number(next[0]);
+    },
     picked(sources, kinds) {
       if (!mounted || sources.length + kinds.length === 0) return [];
       // A source and a kind share the column, each under its own type: asked for together, and told apart here.
