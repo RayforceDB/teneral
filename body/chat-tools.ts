@@ -2,7 +2,7 @@ import { pastOf } from './asked';
 import { readsState } from '../brain/states-table';
 import type { Past } from '../brain/past';
 import { appendEvent, type JournalEvent } from '../brain/journal';
-import { CONTACT_KIND, PARTICIPANT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
+import { CONTACT_KIND, PARTICIPANT_KIND, contacts, ownerSays, participants, wonder, type Participant } from './participants';
 import { HEARD_KIND, openCommunity, tieWord, type Community } from './community';
 import { memberOf, spokeIn, type Mode } from './chat';
 import { SETTLED_KIND } from '../heart/glance';
@@ -291,7 +291,7 @@ export const contact: Tool = {
     description: 'What you keep of someone you share a chat with, a person, a bot or another agent: the circle they are in, a few named characteristics, and whether two accounts are one of them. '
       + 'With no `who`, lists everyone you have met by circle, with how often you heard each. A circle (such as family, friend, colleague, acquaintance, agent, service) says how they stand to your owner, '
       + 'so it is your owner\'s to give: pass their own `words`, copied exactly from a message of theirs, and it is recorded as theirs. Without words a circle is only what you suppose, and is shown as that. '
-      + 'Characteristics are yours to set as you learn them: a role, a language, how they like to be answered; an empty value takes one away. `same_as` joins a second account to this one, and needs your owner\'s words too. '
+      + 'Characteristics are yours to set as you learn them: a role, a language, how they like to be answered; an empty value takes one away. `same_as` joins a second account to this one, on your owner\'s words; without words it only sets down that you suppose so, with a question for them, and joins nothing. `not_same_as`, with their words, settles that two are different people. '
       + 'No circle makes anyone your owner, and what someone says of themselves decides nothing here.',
     parameters: {
       type: 'object',
@@ -301,6 +301,7 @@ export const contact: Tool = {
         words: { type: 'string', description: 'Your owner\'s own words that say it, copied exactly from their message' },
         traits: { type: 'object', description: 'Characteristics by name, such as {"role": "maintains the listener", "language": "Russian", "answers": "short"}', additionalProperties: { type: 'string' } },
         same_as: { type: 'string', description: 'Another account of the same one, as service:id' },
+        not_same_as: { type: 'string', description: 'An account that is someone else, as service:id' },
       },
     },
   },
@@ -345,9 +346,29 @@ export const contact: Tool = {
     if (other !== undefined) {
       const second = whom(events, other);
       if (`${second.service}:${second.id}` === key) throw new Error('that is the same account');
-      if (words === undefined || ownerSays(pastOf(ctx).ownerSaidSince(-1), words) === null) throw new Error('two accounts are one of them only when your owner says so: pass their own words, copied exactly from a message of theirs');
-      data.same = `${second.service}:${second.id}`; data.words ??= words;
-      said.push(`${second.name} (${second.service}:${second.id}) is the same one as ${p.name}`);
+      const [second2, held] = [`${second.service}:${second.id}`, contacts(events).get(key)];
+      if (words === undefined) {
+        // What the agent supposes joins nothing: it is set down as that, with one question for the owner.
+        if (held?.same.includes(second2) || held?.key === second2) said.push(`${second.name} (${second2}) is already the same one as ${p.name}, by your owner's word`);
+        else if (held?.apart.includes(second2)) said.push(`your owner said ${second.name} (${second2}) is someone else than ${p.name}: that stands`);
+        else if (held?.maybe.includes(second2)) said.push(`you suppose that already, and the question for your owner stands`);
+        else {
+          wonder(ctx.journal, ctx.gen, p, [second], 'from what I have seen of them');
+          said.push(`you suppose ${second.name} (${second2}) is the same one as ${p.name}. Nothing is joined: a question for your owner is set down, put it to them with its mark, and record their answer with their own words`);
+        }
+      } else {
+        if (ownerSays(pastOf(ctx).ownerSaidSince(-1), words) === null) throw new Error('two accounts are one of them only when your owner says so: pass their own words, copied exactly from a message of theirs');
+        data.same = second2; data.words ??= words;
+        said.push(`${second.name} (${second2}) is the same one as ${p.name}`);
+      }
+    }
+    const not = text(args, 'not_same_as');
+    if (not !== undefined) {
+      const second = whom(events, not);
+      if (`${second.service}:${second.id}` === key) throw new Error('that is the same account');
+      if (words === undefined || ownerSays(pastOf(ctx).ownerSaidSince(-1), words) === null) throw new Error('that two accounts are different people is your owner\'s to say: pass their own words, copied exactly from a message of theirs');
+      data.apart = `${second.service}:${second.id}`; data.words ??= words;
+      said.push(`${second.name} (${second.service}:${second.id}) is someone else than ${p.name}, by your owner's word; it will not be supposed again`);
     }
     if (a.traits !== undefined) {
       if (typeof a.traits !== 'object' || a.traits === null || Array.isArray(a.traits)) throw new Error('traits is an object of names and values');
