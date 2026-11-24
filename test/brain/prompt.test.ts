@@ -321,5 +321,6 @@ test('what is in every request whatever is said stays within its room: the promp
   const { TOOLS } = await import('../../body/tools');
   expect(prompt.length).toBeLessThanOrEqual(72_000);
   // 26,500 since `about` and `know` say that a person is who a service says they are, not a name: it has to be said where the name is given.
-  expect(JSON.stringify(TOOLS.map((tool) => tool.spec)).length).toBeLessThanOrEqual(26_500);
+  // 27,500 with `schedule`: something to do again and again is set with a tool, and a tool has to be in the list to be called.
+  expect(JSON.stringify(TOOLS.map((tool) => tool.spec)).length).toBeLessThanOrEqual(27_500);
 });

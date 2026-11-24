@@ -86,7 +86,11 @@ const manage: Tool = {
       packages: [...state.packages.values()].map((s) => ({ id: s.manifest.id, version: s.manifest.version, hash: s.hash, enabled: state.enabled.get(s.manifest.id) === s.hash, revoked: state.disabled.has(s.hash) })),
       verifications: state.verifications, outcomes: state.outcomes,
       // What became of each: how often it was offered at the start of a turn, opened, and with what outcome.
-      use: skillUse(ctx),
+      use: skillUse(ctx).map((u) => {
+        // Nothing is ever taken away for not being used: it is said, so that the agent can mend, merge or disable what it no longer needs.
+        const idle = u.last === undefined ? null : Math.floor((Date.now() - Date.parse(u.last)) / 86_400_000);
+        return { ...u, ...(idle === null ? { used: 'never offered, opened or given an outcome' } : idle >= STALE_DAYS ? { used: `not for ${idle} days: is it still worth keeping as it is?` } : {}) };
+      }),
     }, null, 2);
     if (op === 'scaffold') {
       // A way of working that held, set down so that it can be held to its own cases: the files to fill in, in a new directory.
@@ -245,6 +249,18 @@ export function keepVerified(ctx: ToolContext): number {
   return verified;
 }
 
+/** The skills that are enabled, by name and what each is for: what a forming memory is shown, so that it can name a fix to one (brain/sleep.ts). */
+export function keptSkills(ctx: ToolContext): { id: string; summary: string }[] {
+  const state = current(ctx);
+  return [...state.enabled.values()].flatMap((hash) => {
+    const skill = state.packages.get(hash);
+    return skill === undefined || state.disabled.has(hash) ? [] : [{ id: skill.manifest.id, summary: skill.manifest.summary.slice(0, 200) }];
+  });
+}
+
+/** A skill not offered, opened or given an outcome for this many days is said to be so where skills are listed. */
+export const STALE_DAYS = 30;
+
 /** The skill to offer for what was just said (`offerOf` in brain/skills.ts), with the last offers asked of the past so that one is not offered turn after turn. */
 export function offerFor(ctx: ToolContext, said: string): Offer | null {
   const lately = new Set(pastOf(ctx).notes([OFFERED_KIND]).slice(-OFFERS_REMEMBERED).map((e) => String((e as { data?: { hash?: unknown } }).data?.hash ?? '')));
@@ -261,21 +277,26 @@ readsState(SKILL_NOTE, 'skilluse', (e) => {
 });
 
 /** What became of each skill: how often it was offered, how often opened, and the outcomes recorded of it. Counted by the database; the openings are the calls of `skill_show`. */
-export interface SkillUse { id: string; version: string; hash: string; offered: number; opened: number; outcomes: Record<string, number> }
+export interface SkillUse { id: string; version: string; hash: string; offered: number; opened: number; outcomes: Record<string, number>; /** When it was last offered, opened or given an outcome. */ last?: string }
 export function skillUse(ctx: ToolContext): SkillUse[] {
   const past = pastOf(ctx);
   const counts = past.stateCounts('skilluse');
   const opened = new Map<string, number>();
+  // When each was last offered, opened or given an outcome: what "not used for a month" is counted from.
+  const last = new Map<string, string>();
+  const seen = (hash: string, at: string): void => { if (at > (last.get(hash) ?? '')) last.set(hash, at); };
   for (const call of past.callsSince('skill_show', 0)) {
     const hash = call.type === 'tool.intent' ? (call.args as { hash?: unknown } | null)?.hash : undefined;
-    if (typeof hash === 'string') opened.set(hash, (opened.get(hash) ?? 0) + 1);
+    if (typeof hash === 'string') { opened.set(hash, (opened.get(hash) ?? 0) + 1); seen(hash, call.ts); }
   }
+  for (const row of past.states('skilluse')) seen(row.key, row.event.ts);
   return [...current(ctx).packages.values()].map((skill) => {
     const mine = counts.filter((c) => c.key === skill.hash);
     return {
       id: skill.manifest.id, version: skill.manifest.version, hash: skill.hash,
       offered: mine.find((c) => c.state === 'offered')?.n ?? 0, opened: opened.get(skill.hash) ?? 0,
       outcomes: Object.fromEntries(mine.filter((c) => c.state !== 'offered').map((c) => [c.state, c.n])),
+      ...(last.has(skill.hash) ? { last: last.get(skill.hash)! } : {}),
     };
   });
 }

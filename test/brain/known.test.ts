@@ -145,7 +145,7 @@ test('the two lists after a memory are read line by line, and a line that is not
       { source: 'owner', text: 'The owner wants answers in Russian', replaces: ['F1a2b3c4', 'Fdeadbeef'] },
     ],
     intentions: [{ text: 'Send the weekly report', due: '2026-11-20' }, { text: 'Ask about the staging quota' }],
-    done: [], questions: [], outdated: [], confirmed: [], about: [],
+    done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [],
   });
 });
 

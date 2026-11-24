@@ -325,7 +325,8 @@ test('an agent sets down a skill of its own: scaffolds it, fills it in, register
   expect(await tool('skill_show', { hash })).toContain('Decide by the table');
   await tool('skill_outcome', { hash, run: 'release 1.4.0', outcome: 'success', detail: 'tagged from a clean main with green checks' });
   await tool('skill_outcome', { hash, run: 'release 1.4.1', outcome: 'no-op', detail: 'checks were red: stopped' });
-  expect(skillUse(ctx)).toEqual([{ id: 'tag-a-release', version: '1.0.0', hash, offered: 1, opened: 1, outcomes: { success: 1, 'no-op': 1 } }]);
+  // And when it was last used: what "not used for a month" is counted from.
+  expect(skillUse(ctx)).toEqual([{ id: 'tag-a-release', version: '1.0.0', hash, offered: 1, opened: 1, outcomes: { success: 1, 'no-op': 1 }, last: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) }]);
   expect(JSON.parse(await tool('skill', { action: 'list' })).use).toEqual(skillUse(ctx));
 
   // A new generation: the verification of the old one does not count, so nothing is offered, until the enabled skills are verified again at the start.
