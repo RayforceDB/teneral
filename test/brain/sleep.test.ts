@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { known as knownIn } from '../../brain/known';
+import { PROCEDURE_CALLS, PROCEDURE_KIND } from '../../brain/sleep';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import { OUTDATED_KIND, outdatedStretches } from '../../brain/links';
 import { journalPast } from '../../brain/past';
@@ -206,7 +207,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [],
+    facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });
@@ -308,4 +309,47 @@ test('when the judge cannot be asked, everything is kept as new: a memory is not
   const s = setup([told, noted, f1, first, said('deploy to staging', LONG), replied('Done.'), said('thanks', LONG)], [answer(`${MEMORY}\n\nFacts:\n- [seen] The staging deploy goes to the host alpha`), new Error('the provider is down')]);
   expect(await sleep(s.deps)).toBe('remembered');
   expect(knownIn(readEvents(s.journal)).facts).toHaveLength(2);
+});
+
+test('a stretch in which much was done is asked for the way of doing it: a procedure it names is set before the agent as a skill to write, once, and a fix to one it keeps as a fix', async () => {
+  const work = (n: number): JournalEvent[] => Array.from({ length: n }, (_, i) => [
+    ev({ type: 'assistant', text: '', toolCalls: [{ id: `p${i}`, name: 'bash', args: { command: `step ${i}` } }] }),
+    ev({ type: 'tool.intent', callId: `p${i}`, name: 'bash', args: { command: `step ${i}` } }),
+    ev({ type: 'tool.result', callId: `p${i}`, ok: true, output: 'ok' }),
+  ]).flat();
+  const asked = said('release the parser, the way we do it', LONG);
+  const stretch = [asked, ...work(PROCEDURE_CALLS), replied('Released: tagged, built, published, and the notes are out.')];
+  const formed = `${MEMORY}\n\nProcedures:\n- new release-the-parser: Tag first, then build from the tag, then publish, and only then write the notes; check the registry shows the tag before the notes go out.\n- fix lost-response-recovery: After a publish that timed out, look at the registry before the receipt, since the receipt lags.\n- new x: too short\n- new one-more: A third one that is over the most a stretch may name and so is left out of the list.`;
+  const s = setup([...stretch, said('thanks', LONG)], [answer(formed)]);
+  const deps = { ...s.deps, skills: () => [{ id: 'lost-response-recovery', summary: 'Reconcile an external operation after a timeout.' }] };
+  expect(await sleep(deps)).toBe('remembered');
+  // It was asked, and shown the skills it keeps.
+  const question = String(s.seen[0]!.at(-1)!.content);
+  expect(question).toContain('Procedures:');
+  expect(question).toContain('lost-response-recovery: Reconcile an external operation after a timeout.');
+  const notes = readEvents(s.journal).filter((e) => e.type === 'note') as (JournalEvent & { kind: string; data: Record<string, unknown> })[];
+  expect(notes.filter((e) => e.kind === PROCEDURE_KIND).map((e) => `${e.data.op} ${e.data.id}`)).toEqual(['new release-the-parser', 'fix lost-response-recovery']);
+  const todo = knownIn(readEvents(s.journal)).intentions.map((i) => i.text);
+  expect(todo).toHaveLength(2);
+  expect(todo[0]).toContain('Write the skill release-the-parser: Tag first, then build from the tag');
+  expect(todo[0]).toContain(`begins at event ${asked.id}`);
+  expect(todo[0]).toContain('action scaffold and id release-the-parser');
+  expect(todo[1]).toContain('Mend the skill lost-response-recovery:');
+  // The memory's own note holds nothing of the list.
+  expect(JSON.stringify(notes.find((e) => e.kind === EPISODE_KIND))).not.toContain('procedures');
+});
+
+test('a stretch of talk is not asked for a procedure, nor is one whose body knows of no skills; what it names unasked is still read, and a thing already to do is not set twice', async () => {
+  const few = setup([said('what is the staging host?', LONG), replied('It is alpha.'), said('thanks', LONG)], [answer(MEMORY)]);
+  expect(await sleep({ ...few.deps, skills: () => [] })).toBe('remembered');
+  expect(String(few.seen[0]!.at(-1)!.content)).not.toContain('Procedures:');
+  expect(question({ id: 'e', from: 0, to: 1, first: 'e', last: 'e', start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T00:01:00.000Z', chars: 10, why: 'gap', closed: true } as never, [], 600, [], [])).toContain('You keep no skills yet.');
+  // Named twice over two stretches: one thing to do.
+  const once = `${MEMORY}\n\nProcedures:\n- new release-the-parser: Tag first, then build from the tag, then publish, and only then write the notes.`;
+  const lived = [said('release it', LONG), replied('Released.')];
+  lived.push(said('release it again', LONG), replied('Released again.'), said('thanks', LONG));
+  const two = setup(lived, [answer(once), answer(once)]);
+  expect(await sleep(two.deps)).toBe('remembered');
+  expect(await sleep(two.deps)).toBe('remembered');
+  expect(knownIn(readEvents(two.journal)).intentions.filter((i) => i.text.startsWith('Write the skill release-the-parser'))).toHaveLength(1);
 });

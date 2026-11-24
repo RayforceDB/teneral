@@ -4,7 +4,7 @@ import { DEFAULT_BUDGET, assemble, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
-import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
+import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Known, type Source } from './known';
 import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, keyOf, named, type EntityKind } from './entities-table';
 import { suspectIn } from './suspect';
 import { IDENTITY_KIND, judge, nearest as nearestHeld, type Held } from './identity';
@@ -88,6 +88,8 @@ export interface SleepDeps {
   append?: (body: EventBody) => void;
   /** The agent's past, to find the earlier memories nearest to a new one (see `nearest`). Without it none is shown, and none is said to be outdated. */
   past?: Pick<Past, 'find'>;
+  /** The skills the agent keeps, by name and what each is for: shown to a forming memory so that it can name a way of doing something, or a fix to one. Without it none is asked for. */
+  skills?: () => KeptSkill[];
   /** The past whole, where the body has one: the requests that look over the agenda are asked of it (`requestFrom` in brain/frame.ts). */
   asked?: Past;
 }
@@ -148,7 +150,7 @@ function opening(events: JournalEvent[]): string {
 }
 
 /** What the agent is asked, after the journal up to the end of the episode. */
-export function question(episode: Episode, events: JournalEvent[], chars: number, earlier: Earlier[] = []): string {
+export function question(episode: Episode, events: JournalEvent[], chars: number, earlier: Earlier[] = [], skills: KeptSkill[] | null = null): string {
   const begins = opening(events);
   return [
     `${MEMORY_MARK} It is time to form a memory. It is of the stretch of the conversation above from ${when(episode.start)} to ${when(episode.end)}: `
@@ -187,6 +189,16 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'One or two questions that you or your owner might ask some later month and that this stretch answers. Put each in other words than the stretch used, '
     + 'as someone would who remembers what it was about and not how it was said. After => copy exactly the first six words or so of the one message in this stretch that holds the answer. '
     + 'They are kept to test, later, whether you can still find what you knew.',
+    // Only of a stretch in which much was done: a way of doing something is found by doing, and a stretch of talk has none.
+    ...(skills === null ? [] : [
+      'Procedures:\n- new <short-name>: <the way of doing something that this stretch worked out>\n- fix <skill>: <what in it this stretch showed to be wrong or missing>\n'
+      + 'A memory says what happened and a fact what is so. This list is for the third thing: how to do something. Name a procedure only when this stretch found, by trying, '
+      + 'a way of doing something that you will have to do again and would otherwise have to find again: the steps that worked, in the order that worked, and what to check. '
+      + 'Not what failed because of where you ran (a missing program, a network that was down), not what you did once and will not do again, and not what any careful worker already knows. '
+      + 'When your owner corrected how you do something, that is a procedure, or a fix to one. '
+      + (skills.length === 0 ? 'You keep no skills yet. ' : `Skills you keep, by name:\n${skills.map((skill) => `${skill.id}: ${skill.summary}`).join('\n')}\nWhen one of them is about the same thing, fix it; do not name a new one beside it. `)
+      + 'Most stretches give none. What you name here is set before you as a thing to do: you write the skill later, with your tools, and it is kept only when it holds to its own cases.',
+    ]),
     ...(earlier.length === 0 ? [] : [
       'Outdated:\n- M1a2b3c4 <what it says that no longer holds> => <what holds instead>\n'
       + 'A memory says what was so when it was formed, and you will find it again long after. These earlier memories of yours may be about the same things as this stretch:\n'
@@ -255,6 +267,8 @@ export interface Formed {
   confirmed: string[];
   /** Whom and what this stretch was about: people, projects, repositories, each by name. */
   about: { kind: EntityKind; name: string; who?: string }[];
+  /** Ways of doing something this stretch worked out, or showed a kept skill to be wrong in: each to become a skill, or a fix to one. */
+  procedures: { op: 'new' | 'fix'; id: string; what: string }[];
 }
 
 const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about|confirms)\s+[^)]*\)\s*)*)(.*)$/i;
@@ -267,15 +281,23 @@ const QUESTIONS_MAX = 2;
 /** The most of either that one episode may set down: a list longer than this is not a list of what matters. */
 const LIST_MAX = 12;
 
-type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'about';
+type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'about' | 'procedures';
+const PROCEDURE_LINE = /^-\s*(new|fix)\s+`?([a-z][a-z0-9-]{1,39})`?\s*[:\u2014-]\s*(.+)$/i;
+/** The most procedures one stretch may name, and the fewest tool calls a stretch must have for the list to be asked for. */
+const PROCEDURES_MAX = 2;
+export const PROCEDURE_CALLS = 30;
+/** A skill as the forming request is shown it. */
+export interface KeptSkill { id: string; summary: string }
+/** The note that a stretch named a procedure: `{ op, id, what, episode }`. */
+export const PROCEDURE_KIND = 'skill.proposed.v1';
 const ABOUT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*(.+)$/i;
-const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated', 'about:': 'about' };
+const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated', 'about:': 'about', 'procedures:': 'procedures' };
 
 /** The lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
-function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about'> & { body: string[] } {
+function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures'> & { body: string[] } {
   const heading = (line: string): List | null => HEADINGS[plain(line).toLowerCase()] ?? null;
   const first = lines.findIndex((line) => heading(line) !== null);
-  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [] };
+  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [] };
   if (first === -1) return { body: lines, ...found };
   let list: List | null = null;
   for (const line of lines.slice(first)) {
@@ -307,6 +329,9 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
       const [why, ...rest] = (m?.[2] ?? '').split('=>');
       const now = rest.join('=>').trim();
       if (m && why!.trim().length >= 8) found.outdated.push({ mark: m[1]!, why: why!.trim(), ...(now.length >= 8 ? { now } : {}) });
+    } else if (list === 'procedures' && found.procedures.length < PROCEDURES_MAX) {
+      const m = PROCEDURE_LINE.exec(item);
+      if (m && m[3]!.trim().length >= 20) found.procedures.push({ op: m[1]!.toLowerCase() as 'new' | 'fix', id: m[2]!.toLowerCase(), what: m[3]!.trim().slice(0, 600) });
     } else if (list === 'about' && found.about.length < LIST_MAX) {
       const m = ABOUT_LINE.exec(item);
       const kind = ENTITY_KINDS.find((one) => one === m?.[1]?.toLowerCase());
@@ -386,7 +411,11 @@ interface Read {
   remembered(): { all: Remembered; kept: Episode[]; pinned: Set<number> };
   /** What the look ahead is handed: the journal, or its last event alone where the rest is asked. */
   last(): JournalEvent[];
+  /** The procedures stretches have named so far, as `new release-it`: one is not set before the agent twice. */
+  proposed(): Set<string>;
 }
+
+const proposedIn = (events: JournalEvent[]): Set<string> => new Set(events.flatMap((e) => (e.type === 'note' && e.kind === PROCEDURE_KIND ? [`${String((e.data as { op?: unknown }).op)} ${String((e.data as { id?: unknown }).id)}`] : [])));
 
 function fromJournal(events: JournalEvent[]): Read {
   return {
@@ -401,6 +430,7 @@ function fromJournal(events: JournalEvent[]): Read {
       return { all, kept, pinned: pinnedAmong(events, kept) };
     },
     last: () => events,
+    proposed: () => proposedIn(events),
   };
 }
 
@@ -430,6 +460,7 @@ function fromPast(past: Past): Read {
       return { all, kept, pinned: held };
     },
     last: () => past.standingFrom(Math.max(0, past.count() - 1)),
+    proposed: () => proposedIn(past.notes([PROCEDURE_KIND])),
   };
 }
 
@@ -474,7 +505,9 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   const chars = targetChars(episode.chars);
   let budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
   const near = nearest(d.past, read.notesAsOf(episode), episode, lived);
-  const ask = question(episode, lived, chars, near);
+  // Asked for a way of doing something only where much was done.
+  const keptSkills = lived.filter((e) => e.type === 'tool.intent').length >= PROCEDURE_CALLS ? (d.skills?.() ?? null) : null;
+  const ask = question(episode, lived, chars, near, keptSkills);
   let messages: ChatMessage[] = asOfRequest(d, () => read.asOf(episode), episode, budget, ask);
   let usage: Usage | undefined;
   let problem = '';
@@ -497,7 +530,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, outdated, confirmed, about, ...kept } = memory;
+      const { facts, intentions, done, questions, outdated, confirmed, about, procedures, ...kept } = memory;
       // Whether what this stretch gave is something already held is decided apart, by a request that never sees the stretch
       // (brain/identity.ts), before anything is written: should the agent be woken meanwhile, the memory is formed another time.
       const held = read.knownAsOf(episode);
@@ -563,6 +596,26 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       }
       if (judged.asked > 0) {
         put(d, { type: 'note', kind: IDENTITY_KIND, data: { episode: episode.first, asked: judged.asked, same: judged.verdicts.filter((v) => v.is === 'same').length, replaced: judged.verdicts.filter((v) => v.is === 'replaces').length, ...(judged.usage ? { usage: judged.usage } : {}) } });
+      }
+      // A way of doing something that the stretch worked out is not written here: a skill has cases it must hold to, and
+      // that takes tools. It is set before the agent as a thing of its own to do, once, with where to look.
+      const before = read.proposed();
+      for (const one of procedures) {
+        const known = keptSkills?.some((skill) => skill.id === one.id) ?? false;
+        const op = one.op === 'fix' && !known ? 'new' : one.op === 'new' && known ? 'fix' : one.op;
+        const head = op === 'new' ? `Write the skill ${one.id}` : `Mend the skill ${one.id}`;
+        if (before.has(`${op} ${one.id}`)) continue;
+        before.add(`${op} ${one.id}`);
+        put(d, { type: 'note', kind: PROCEDURE_KIND, data: { op, id: one.id, what: one.what, episode: episode.first } });
+        put(d, {
+          type: 'note', kind: INTENTION_KIND,
+          data: {
+            text: `${head}: ${one.what} The stretch that showed it begins at event ${episode.first}: \`open\` it. `
+              + (op === 'new' ? `\`skill\` with action scaffold and id ${one.id} writes the files to fill in; ` : `\`skill\` with action list shows the one you keep; change its files and give it a new version; `)
+              + 'then register, verify and enable it. It is kept only when it holds to its own cases, and if on looking again it is not worth a skill, say so and call this done.',
+            origin: 'own',
+          } satisfies IntentionData,
+        });
       }
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);

@@ -12,6 +12,7 @@ import { git } from '../immune/gates';
 import { SUBAGENT_KIND, Subagents, endedSubagent, limitsFrom, subagentTool } from './subagents';
 import { GLANCE_SAID, decide, glance, ignoredTalk, lastSaid, setDown, waitingTalk } from '../heart/glance';
 import { dueWorkOf, heldByInterrupt, importLegacyWork, workDueAtOf } from './work';
+import { dueSchedule, scheduleDueAt } from './schedule';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -44,7 +45,7 @@ import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCu
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
-import { SKILL_TOOLS, keepVerified, offerFor, openSkills, seedBuiltIn, skillUse } from './skill-tools';
+import { SKILL_TOOLS, keepVerified, keptSkills, offerFor, openSkills, seedBuiltIn, skillUse } from './skill-tools';
 import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { COMPARED_KIND, CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, compareOnce, enter, meet, supposeAll, whoLines } from './participants';
@@ -589,6 +590,7 @@ async function rest(): Promise<boolean> {
     if (Date.now() < restNotBefore) return false;
     const stop = new AbortController();
     const done = sleep({
+      skills: () => keptSkills(ctx),
       journal, gen, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars,
       // While a turn runs, the pulse file says what the turn is doing, not this.
       provider: (messages, specs, options) => provider(messages, specs, { ...options, mayPulse: () => !working }),
@@ -721,15 +723,17 @@ const heart = new Heart({
     if (quitting) return null;
     const now = Date.now();
     // Each asks for what it reads: an interruption lies after the latest thing said, a job and a subagent are notes of their own, and work is what is known.
-    const own = heldByInterrupt(sinceSaid()) ? null : endedJob(journal, gen, past.states('job', { state: 'running', gen }).map((row) => row.event)) ?? endedSubagent(journal, gen, past.states('subagent', { state: 'ended' }).map((row) => row.event)) ?? dueWorkOf(journal, gen, now, past.known());
+    const own = heldByInterrupt(sinceSaid()) ? null : endedJob(journal, gen, past.states('job', { state: 'running', gen }).map((row) => row.event)) ?? endedSubagent(journal, gen, past.states('subagent', { state: 'ended' }).map((row) => row.event)) ?? dueWorkOf(journal, gen, now, past.known()) ?? dueSchedule(journal, gen, now, past);
     // And the species, heard from now and then: an offer it has moved past is retired, and the agent told.
     return own ?? staleOffers(now);
   },
   nextLook: () => {
     const now = Date.now(), held = heldByInterrupt(sinceSaid());
     const due = held ? undefined : workDueAtOf(past.known());
+    // And what it set itself to do again and again: the next time one comes round.
+    const round = held ? undefined : scheduleDueAt(now, past);
     const job = !held && past.states('job', { state: 'running', gen }).length > 0;
-    return Math.min(offersLookAt - now, ...(due === undefined ? [] : [due - now]), ...(job ? [JOB_LOOK_MS] : []));
+    return Math.min(offersLookAt - now, ...(due === undefined ? [] : [due - now]), ...(round === undefined ? [] : [Math.max(0, round - now)]), ...(job ? [JOB_LOOK_MS] : []));
   },
   // The clock: time of the agent's own, offered at rest when a tick is due and there is something to offer.
   tick: () => {

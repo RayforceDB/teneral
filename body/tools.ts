@@ -817,4 +817,5 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, about, intend, done, allowed, know, forget, outdated, lesson];
+import { schedule } from './schedule';
+export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, about, intend, schedule, done, allowed, know, forget, outdated, lesson];
