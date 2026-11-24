@@ -76,8 +76,6 @@ const TROUBLES_LISTED = 8;
 /** What a menu item that opens a trouble carries in place of a command. */
 const TROUBLE = 'trouble:';
 const PENDING_SHOWN = 12;
-/** How many lines of a held-back turn of the agent's own are shown while it goes on. */
-const OWN_SHOWN = 4;
 
 const HELP = [
   'Enter sends what you typed to the agent, as its owner. Alt+Enter, or Ctrl-J, starts a new line. Up and Down walk through what you sent before. Ctrl-U, Ctrl-K and Ctrl-W delete to the start of the line, to its end, and the word before the cursor.',
@@ -1373,10 +1371,9 @@ export class TalkScreen {
     const max = this.inline.width;
     const laid: Line[] = [];
     let before: Entry | undefined;
-    // A turn nobody asked for is held back whole until it ends (keeper/tui/model.ts). Only its last
-    // few lines are worth the room meanwhile: the live region must never grow at the footer's expense.
-    const held = pending.filter((e) => e.open === true).length;
-    for (const e of pending.slice(-(held > 0 ? Math.min(PENDING_SHOWN, OWN_SHOWN + pending.length - held) : PENDING_SHOWN))) {
+    // A turn nobody asked for is held back whole until it ends (keeper/tui/model.ts).
+    // And nothing of it is shown while it goes on: what the agent does of its own is not the owner's conversation. The footer says what it is doing.
+    for (const e of pending.filter((one) => one.open !== true).slice(-PENDING_SHOWN)) {
       laid.push(...Array.from({ length: gap(before, e) }, (): Line => []), ...entryRows(e, max, this.look));
       before = e;
     }
