@@ -5,6 +5,7 @@ import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type 
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
 import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
+import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, type EntityKind } from './entities-table';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
@@ -162,7 +163,7 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     'Outcome is how the main thing asked for in this stretch stood when the stretch ended: done when it was finished, failed when it was tried and did not work, '
     + 'dropped when it was given up or set aside, open only when work on it was left unfinished and you meant to go on with it. '
     + 'Your life going on is no reason to say open: most stretches end with something done.',
-    'After the memory you may add up to three lists, each only when there is something for it.',
+    'After the memory you may add these lists, each only when there is something for it.',
     'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own>\n'
     + 'A fact is worth a line only if knowing it would change what you do some later week: who your owner is and what they want, how they want things done, '
     + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
@@ -175,6 +176,9 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
     + 'An intention left open stays in front of you for good, so close every one this stretch settles.',
+    'About:\n- [person] <name>\n- [project] <name>\n- [repo] <owner/name>\n'
+    + 'The people, projects and repositories this stretch was really about, each by the name you would look it up by later, written the same way every time. '
+    + 'They tie this stretch to the others about the same ones: `about` shows them together. Not everyone and everything mentioned in passing.',
     'Questions:\n- <a question> => <the first words of the message above that answers it>\n'
     + 'One or two questions that you or your owner might ask some later month and that this stretch answers. Put each in other words than the stretch used, '
     + 'as someone would who remembers what it was about and not how it was said. After => copy exactly the first six words or so of the one message in this stretch that holds the answer. '
@@ -244,6 +248,8 @@ export interface Formed {
   outdated: { mark: string; why: string }[];
   /** Facts already held that this stretch showed to hold still: the mark of each. */
   confirmed: string[];
+  /** Whom and what this stretch was about: people, projects, repositories, each by name. */
+  about: { kind: EntityKind; name: string }[];
 }
 
 const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about|confirms)\s+[^)]*\)\s*)*)(.*)$/i;
@@ -256,14 +262,15 @@ const QUESTIONS_MAX = 2;
 /** The most of either that one episode may set down: a list longer than this is not a list of what matters. */
 const LIST_MAX = 12;
 
-type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated';
-const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated' };
+type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'about';
+const ABOUT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*(.+)$/i;
+const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated', 'about:': 'about' };
 
 /** The lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
-function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed'> & { body: string[] } {
+function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about'> & { body: string[] } {
   const heading = (line: string): List | null => HEADINGS[plain(line).toLowerCase()] ?? null;
   const first = lines.findIndex((line) => heading(line) !== null);
-  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [] };
+  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [] };
   if (first === -1) return { body: lines, ...found };
   let list: List | null = null;
   for (const line of lines.slice(first)) {
@@ -292,6 +299,10 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
     } else if (list === 'outdated' && found.outdated.length < EARLIER_MAX) {
       const m = OUTDATED_LINE.exec(item);
       if (m && m[2]!.trim().length >= 8) found.outdated.push({ mark: m[1]!, why: m[2]!.trim() });
+    } else if (list === 'about' && found.about.length < LIST_MAX) {
+      const m = ABOUT_LINE.exec(item);
+      const kind = ENTITY_KINDS.find((one) => one === m?.[1]?.toLowerCase());
+      if (m && kind !== undefined && m[2]!.trim().length >= 2) found.about.push({ kind, name: m[2]!.trim().slice(0, NAME_CHARS) });
     }
   }
   return { body: lines.slice(0, first), ...found };
@@ -477,7 +488,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, outdated, confirmed, ...kept } = memory;
+      const { facts, intentions, done, questions, outdated, confirmed, about, ...kept } = memory;
       put(d, {
         type: 'note', kind: EPISODE_KIND,
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
@@ -510,6 +521,8 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         const old = near.find((one) => one.mark === said.mark);
         if (old !== undefined) put(d, { type: 'note', kind: OUTDATED_KIND, data: { memory: old.from, by: episode.first, why: said.why.slice(0, WHY_CHARS) } satisfies OutdatedData });
       }
+      // Whom and what the stretch was about: a node each in the graph of the agent's life, tied to this stretch (brain/entities-table.ts).
+      for (const one of about) put(d, { type: 'note', kind: ENTITY_KIND, data: { kind: one.kind, name: one.name, episode: episode.first } });
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);
         if (answer !== null) put(d, { type: 'note', kind: EXAM_KIND, data: { question: asked.question, events: [answer.id], episode: episode.first } });
