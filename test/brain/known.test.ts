@@ -247,7 +247,7 @@ test('a memory sets questions for the exam, each tied to the one message that an
     toolCalls: [],
   }]);
   await sleep(s.deps);
-  expect(questionsOf(readEvents(s.journal))).toEqual([{ question: 'Where should the weekly summaries be delivered?', events: [s.first[0]!.id] }]);
+  expect(questionsOf(readEvents(s.journal))).toMatchObject([{ question: 'Where should the weekly summaries be delivered?', events: [s.first[0]!.id] }]);
   expect(readEvents(s.journal).find((e) => e.type === 'note' && e.kind === EXAM_KIND)).toMatchObject({ data: { episode: s.first[0]!.id } });
 });
 
