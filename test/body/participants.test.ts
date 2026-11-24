@@ -177,7 +177,9 @@ test('characteristics are the agent\'s to keep and to take away, and two account
   await expect(contact.run({ who: 'Morsel', traits: { 'bad name!': 'x' } }, ctx)).rejects.toThrow('is no name for a characteristic');
 
   await contact.run({ who: 'zulip:88', traits: { language: 'English' } }, ctx);
-  await expect(contact.run({ who: 'parley:7', same_as: 'zulip:88' }, ctx)).rejects.toThrow('only when your owner says so');
+  // With no words it is only supposed, and joins nothing (tested below).
+  expect(await contact.run({ who: 'parley:7', same_as: 'zulip:88' }, ctx)).toContain('Nothing is joined');
+  expect(contacts(readEvents(journal)).get('zulip:88')!.key).toBe('zulip:88');
   await expect(contact.run({ who: 'parley:7', same_as: 'zulip:88', words: 'they are the same person, honest' }, ctx)).rejects.toThrow('only when your owner says so');
   expect(await contact.run({ who: 'parley:7', same_as: 'zulip:88', words: 'Anna L. on Zulip is the same Ann' }, ctx)).toBe('Kept: Anna L. (zulip:88) is the same one as Ann Lee.');
   const joined = contacts(readEvents(journal));
@@ -271,4 +273,49 @@ test('the graph of whom a life is about reads the same note that joins two accou
   const { CONTACT_NOTE } = await import('../../brain/entities-table');
   const { CONTACT_KIND } = await import('../../body/participants');
   expect(CONTACT_NOTE).toBe(CONTACT_KIND);
+});
+
+test('the agent itself supposes that two accounts are one person, asks its owner once, and joins nothing until they say', async () => {
+  const f = fresh();
+  const intentions = () => known(readEvents(f.journal)).intentions.map((i) => i.text);
+  // Five people called Anton in one service: nothing is supposed of them, a service gives each person one account.
+  meet(f.journal, 'g', readEvents(f.journal), [7, 12, 31, 44, 58].map((id) => ({ service: 'zulip', id: String(id), name: 'Anton', bot: false })));
+  expect(intentions()).toEqual([]);
+  // Someone of that name on another service may be any of them: one question, naming each; a bot of that name is nobody's other account.
+  meet(f.journal, 'g', readEvents(f.journal), [{ service: 'github', id: 'anton', name: 'anton', bot: false }, { service: 'parley', id: '9', name: 'Anton', bot: true }]);
+  expect(intentions()).toHaveLength(1);
+  expect(intentions()[0]).toContain('Is anton (github:anton) the same person as Anton (zulip:7), or Anton (zulip:12)');
+  expect(intentions()[0]).toContain('Until you say, I keep them apart.');
+  let held = contacts(readEvents(f.journal));
+  expect(held.get('github:anton')).toMatchObject({ same: [], maybe: ['zulip:7', 'zulip:12', 'zulip:31', 'zulip:44', 'zulip:58'] });
+  expect(held.get('zulip:12')!.maybe).toEqual(['github:anton']);
+  // Shown as supposed where they speak, and said to give nothing of one to the other.
+  expect(whoLines(readEvents(f.journal), [{ service: 'github', id: 'anton', name: 'anton' }])).toContain('may be the same one as Anton (zulip:7) or Anton (zulip:12)');
+  // Met again, nothing is asked twice.
+  meet(f.journal, 'g', readEvents(f.journal), [{ service: 'github', id: 'anton', name: 'anton', bot: false }]);
+  expect(intentions()).toHaveLength(1);
+  // The owner says which, and which not.
+  appendEvent(f.journal, 'g', { type: 'stimulus', source: 'terminal', text: 'anton on github is Anton 7 from zulip. He is not Anton 12.' });
+  await expect(contact.run({ who: 'zulip:12', not_same_as: 'github:anton' }, f.ctx)).rejects.toThrow('your owner\'s to say');
+  expect(await contact.run({ who: 'zulip:12', not_same_as: 'github:anton', words: 'He is not Anton 12' }, f.ctx)).toContain('is someone else than Anton, by your owner\'s word');
+  expect(await contact.run({ who: 'zulip:7', same_as: 'github:anton', words: 'anton on github is Anton 7 from zulip' }, f.ctx)).toContain('is the same one as Anton');
+  held = contacts(readEvents(f.journal));
+  expect(held.get('github:anton')!.key).toBe('zulip:7');
+  expect(held.get('zulip:7')).toMatchObject({ same: ['github:anton'] });
+  expect(held.get('zulip:7')!.maybe).not.toContain('github:anton');
+  expect(held.get('zulip:12')).toMatchObject({ maybe: [], apart: ['zulip:7'] });
+});
+
+test('from what it has seen, the agent may suppose two accounts of different names are one: `same_as` with no words asks and joins nothing', async () => {
+  const { journal, ctx } = met();
+  const said = await contact.run({ who: 'parley:7', same_as: 'zulip:88' }, ctx);
+  expect(said).toContain('you suppose Anna L. (zulip:88) is the same one as Ann Lee. Nothing is joined');
+  expect(contacts(readEvents(journal)).get('parley:7')).toMatchObject({ same: [], maybe: ['zulip:88'] });
+  expect(known(readEvents(journal)).intentions.map((i) => i.text).filter((text) => text.includes('Is Ann Lee (parley:7) the same person as Anna L. (zulip:88)?'))).toHaveLength(1);
+  // Said again, it is not asked again.
+  expect(await contact.run({ who: 'parley:7', same_as: 'zulip:88' }, ctx)).toContain('you suppose that already');
+  expect(known(readEvents(journal)).intentions.filter((i) => i.text.includes('the same person as'))).toHaveLength(1);
+  // The owner's words join them, and the supposition is gone.
+  await contact.run({ who: 'parley:7', same_as: 'zulip:88', words: 'Anna L. on Zulip is the same Ann' }, ctx);
+  expect(contacts(readEvents(journal)).get('zulip:88')).toMatchObject({ key: 'parley:7', same: ['zulip:88'], maybe: [] });
 });

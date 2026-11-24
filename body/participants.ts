@@ -78,7 +78,34 @@ export function meet(journal: string, gen: string, events: JournalEvent[], seen:
     held.set(keyOf(p), now);
     if (old === undefined) fresh.push(now);
   }
+  for (const p of fresh) suppose(journal, gen, events, p, [...held.values()]);
   return fresh;
+}
+
+/**
+ * Someone new who bears the name of someone met on another service may be that one. The agent
+ * joins nothing by itself: an account is someone's other one only on the owner's word. What it
+ * does is suppose, say so, and set one question down for its owner, naming every account it could
+ * be. Not within one service: there a service gives each person one account, and five people in
+ * a channel may be called Anton.
+ */
+function suppose(journal: string, gen: string, events: JournalEvent[], p: Participant, everyone: Participant[]): void {
+  if (p.bot === true || flat(p.name).length < 3) return;
+  const mine = contacts(events).get(keyOf(p));
+  const like = everyone.filter((other) => other.service !== p.service && other.bot !== true && flat(other.name) === flat(p.name)
+    && !(mine?.same.includes(keyOf(other)) || mine?.key === keyOf(other) || mine?.maybe.includes(keyOf(other)) || mine?.apart.includes(keyOf(other))));
+  if (like.length === 0) return;
+  wonder(journal, gen, p, like, `they bear the same name, ${p.name}`);
+}
+
+/** Sets down that `p` may be the same one as each of `like`, and the one question for the owner about it. */
+export function wonder(journal: string, gen: string, p: Participant, like: Participant[], why: string): void {
+  for (const other of like) appendEvent(journal, gen, { type: 'note', kind: CONTACT_KIND, data: { key: keyOf(p), maybe: keyOf(other), why } });
+  const those = like.map((other) => `${other.name} (${keyOf(other)})`).join(like.length > 1 ? ', or ' : '');
+  appendEvent(journal, gen, {
+    type: 'note', kind: INTENTION_KIND,
+    data: { text: `Is ${p.name} (${keyOf(p)}) the same person as ${those}? I think they may be: ${why}. Until you say, I keep them apart.`, origin: 'ask' } satisfies IntentionData,
+  });
 }
 
 // Contacts. A participant is an account; a contact is whoever is behind it, with what places them
@@ -106,6 +133,10 @@ export interface Contact {
   key: string;
   /** Other accounts the owner said are the same one. */
   same: string[];
+  /** Accounts the agent supposes may be the same one, until the owner says: it joins nothing. */
+  maybe: string[];
+  /** Accounts the owner said are someone else: never supposed again. */
+  apart: string[];
   /** The circle the owner placed them in, with the words it was said in. */
   circle?: string;
   words?: string;
@@ -127,7 +158,7 @@ export function contacts(events: JournalEvent[]): Map<string, Contact> {
   const at = (key: string): Contact => {
     const root = alias.get(key) ?? key;
     let c = all.get(root);
-    if (c === undefined) all.set(root, c = { key: root, same: [], traits: {} });
+    if (c === undefined) all.set(root, c = { key: root, same: [], maybe: [], apart: [], traits: {} });
     return c;
   };
   for (const e of events) {
@@ -143,6 +174,19 @@ export function contacts(events: JournalEvent[]): Map<string, Contact> {
         else if (typeof value === 'string' && TRAIT_NAME.test(name) && (name in c.traits || Object.keys(c.traits).length < TRAITS_MAX)) c.traits[name] = value.slice(0, TRAIT_CHARS);
       }
     }
+    const root = (key: string): string => alias.get(key) ?? key;
+    // What the agent supposes of two accounts, and what the owner said against it. Kept under both, so that either answers.
+    if (typeof d.maybe === 'string' && root(d.maybe) !== c.key && !c.apart.includes(root(d.maybe)) && !c.maybe.includes(root(d.maybe))) {
+      c.maybe.push(root(d.maybe));
+      const other = at(d.maybe);
+      if (!other.maybe.includes(c.key)) other.maybe.push(c.key);
+    }
+    if (typeof d.apart === 'string' && root(d.apart) !== c.key) {
+      const other = at(d.apart);
+      c.maybe = c.maybe.filter((key) => key !== other.key); other.maybe = other.maybe.filter((key) => key !== c.key);
+      if (!c.apart.includes(other.key)) c.apart.push(other.key);
+      if (!other.apart.includes(c.key)) other.apart.push(c.key);
+    }
     if (typeof d.same === 'string' && d.same !== c.key && !c.same.includes(d.same)) {
       // The other account's own record, if it had one, is folded into this one.
       const other = all.get(d.same);
@@ -151,10 +195,17 @@ export function contacts(events: JournalEvent[]): Map<string, Contact> {
         c.circle ??= other.circle; c.words ??= other.words;
         if (c.circle === undefined) c.supposed ??= other.supposed;
         for (const key of other.same) { alias.set(key, c.key); c.same.push(key); }
+        c.maybe.push(...other.maybe.filter((key) => key !== c.key && !c.maybe.includes(key)));
+        c.apart.push(...other.apart.filter((key) => !c.apart.includes(key)));
         all.delete(d.same);
       }
       alias.set(d.same, c.key);
       c.same.push(d.same);
+      // Settled: no longer a supposition, here or in anyone who supposed it of the account now joined.
+      for (const any of all.values()) {
+        any.maybe = [...new Set(any.maybe.map((key) => (key === d.same ? c.key : key)))].filter((key) => key !== any.key && !any.apart.includes(key));
+        any.apart = [...new Set(any.apart.map((key) => (key === d.same ? c.key : key)))];
+      }
     }
   }
   // By every account that answers as it.
@@ -217,12 +268,13 @@ export function whoLines(events: JournalEvent[], speakers: Participant[], fresh:
     const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`
       + (stand === null ? '' : `; tie ${stand.tie} of 100 (${tieWord(stand.tie)}), importance ${stand.importance} of 100`);
     const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
-    const what = [traits, ...of.map(({ fact: f, unsure }) => `${f.mark} [${f.source}]${unsure ? ` [about someone called ${f.about}; others bear that name, so this may not be them]` : ''} ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
+    const maybe = (c?.maybe ?? []).map((key) => `${everyone.find((other) => keyOf(other) === key)?.name ?? ''} (${key})`.trim());
+    const what = [maybe.length === 0 ? '' : `may be the same one as ${maybe.join(' or ')}, as you suppose: your owner has not said, so nothing of one is the other's yet`, traits, ...of.map(({ fact: f, unsure }) => `${f.mark} [${f.source}]${unsure ? ` [about someone called ${f.about}; others bear that name, so this may not be them]` : ''} ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
     return `- ${p.name} (${keyOf(p)}, ${kind}${circle}${count}): ${what !== '' ? what : first ? 'you have not met them before' : 'you have set nothing down about them yet'}`;
   });
   return 'Who is speaking, and what you know of each:\n' + rows.join('\n')
     + '\nWhen one of them says who they are, what they work on or answer for, or how they want to be dealt with, set it down: a lasting characteristic with `contact`, anything else with `know`, naming them with who they are, as above: Name (service:id). It is here the next time they speak. '
-    + 'A circle is your owner\'s to give; how far you go with someone follows the circle they are in, and with someone in none you are helpful and say nothing of your owner\'s affairs.';
+    + 'When you come to think one of them is the same person as an account you know elsewhere, do not treat them as one: `contact` with `same_as` and no words sets down what you suppose and the question for your owner. A circle is your owner\'s to give; how far you go with someone follows the circle they are in, and with someone in none you are helpful and say nothing of your owner\'s affairs.';
 }
 
 /** How many members of a place are named when the agent first hears from it; the rest are counted. */
