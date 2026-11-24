@@ -390,12 +390,19 @@ export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS,
   const ended = [...held.intentions, ...held.closed].filter((i) => i.ended !== undefined && (i.endedAt ?? '') > since && ownIdea.has(i.id)).slice(-LISTED).map((i) => `- ${i.ended}${rolledBack.has(i.endedGen ?? '') ? ' (that generation was rolled back)' : ''}: ${brief(i.text)}`);
   const added = held.intentions.filter((i) => i.at > since && i.origin === 'own' && !i.waits && !ownIdea.has(i.id)).slice(-LISTED).map((i) => `- ${i.mark} ${brief(i.text)}`);
   const waiting = held.intentions.filter((i) => i.waits && i.to === undefined).slice(-LISTED).map((i) => `- ${i.mark} ${brief(i.text)}`);
-  if (ended.length + added.length === 0 && worked === 0) return '';
+  // What was put to the owner and has had no answer for a day is told again with the day's report, all of it in one message,
+  // whether or not anything else is to be told: after its few reminders a question would otherwise wait in silence for good.
+  const unanswered = held.intentions.filter((i) => i.waits && i.to === undefined && i.put && now - Date.parse(i.putAt ?? '') >= DAY_MS).length;
+  if (ended.length + added.length === 0 && worked === 0 && unanswered === 0) return '';
   const day = new Date(now).toISOString().slice(0, 10).replaceAll('-', '');
   return [
-    `It is time to tell your owner what you have been doing on your own${last === '' ? '' : ` since ${last.slice(0, 16).replace('T', ' ')} UTC`}. `
-    + `Send them one short message now, by the way you judge they will see it, with the mark R${day} in it: without the mark it does not count as sent. `
-    + 'Say what you did unasked and what came of it, what waits for their word, and what you mean to do next; a few lines, no more. What the journal shows of it:',
+    ...(ended.length + added.length === 0 && worked === 0
+      ? [`${unanswered === 1 ? 'A question of yours has' : `${unanswered} questions of yours have`} waited for your owner's word for a day or more. `
+        + `Put what waits to them again now, all of it together in one short message, by the way you judge they will see it, with the mark R${day} in it: without the mark it does not count as sent. `
+        + 'One line for each, with its mark, put so that it can be answered in a word; say which work of yours stands still for want of the answer. What waits:']
+      : [`It is time to tell your owner what you have been doing on your own${last === '' ? '' : ` since ${last.slice(0, 16).replace('T', ' ')} UTC`}. `
+        + `Send them one short message now, by the way you judge they will see it, with the mark R${day} in it: without the mark it does not count as sent. `
+        + 'Say what you did unasked and what came of it, what waits for their word, and what you mean to do next; a few lines, no more. What the journal shows of it:']),
     ...(ended.length > 0 ? ['Closed:', ...ended] : []),
     ...(added.length > 0 ? ['New ideas of your own:', ...added] : []),
     ...(waiting.length > 0 ? ['Waiting for their word:', ...waiting] : []),
@@ -405,15 +412,17 @@ export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS,
 }
 
 /** How long after it was recorded a commitment that waits for something to arrive is looked at all the same: it may have been missed. */
-const MISSED_MS = 3 * DAY_MS;
+/** Work that waits for something to arrive, with no time set to look again, is looked over once it has stood so this long: nothing waits for ever in silence. */
+const MISSED_MS = DAY_MS;
 /** The first look at something that waits comes this long after it was offered, and each later one twice as long after, up to a day. */
 const LOOK_FIRST_MS = 30 * 60_000;
 
 /**
  * What waits and is worth looking at now. A commitment that names a time to look again is offered
  * when that time has come, and at no other moment: something that waits is not a reason to go and
- * look at it on every wake. One that waits for something to arrive is offered only when it has
- * stood untouched for days.
+ * look at it on every wake. One that waits for something to arrive, with no time set, is offered
+ * to be looked over once it has stood untouched for a day; having been offered it has a time
+ * (`lookedAt`), and comes round again after a wait that doubles.
  */
 export function followUps(held: Known, now: number): Intention[] {
   return held.intentions.filter((i) => {
@@ -429,8 +438,16 @@ export function lookedAt(work: WorkState, now: number): WorkState {
   return { ...kept, attempts: work.attempts + 1, checkAt: now + Math.min(DAY_MS, LOOK_FIRST_MS * 2 ** Math.min(work.attempts, 6)) };
 }
 
-function look(waiting: Intention[], line: (text: string) => string): string {
-  return `The time you set to look again at what waits has come:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nIt waits for: ${i.work?.next ?? ''}`).join('\n')}\n`
+function look(all: Intention[], line: (text: string) => string): string {
+  const rows = (of: Intention[]): string => of.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nIt waits for: ${i.work?.next ?? ''}`).join('\n');
+  // What has no time set was never promised a look: it is looked over, not checked.
+  const untimed = all.filter((i) => i.work?.checkAt === undefined);
+  const waiting = all.filter((i) => i.work?.checkAt !== undefined);
+  const over = untimed.length === 0 ? '' : `These wait for something to arrive and have no time set to look again, and have stood so for a day or more:\n${rows(untimed)}\n`
+    + 'Look each over once. Does what it waits for still exist, and can it still come? If it waits on a question you put to your owner, it is the question that waits: say so as its next step, and the question is put to them again by itself. '
+    + 'If it is settled or no longer worth doing, close it with `done`. Otherwise record with `work` when to look again; left as it is, it comes round later by itself.\n';
+  if (waiting.length === 0) return `${over}If nothing has changed and nothing is to be recorded, answer exactly ${QUIET_REPLY}.`;
+  return `${over}The time you set to look again at what waits has come:\n${rows(waiting)}\n`
     + 'Look once, at the thing itself. If it has come, go on with the work. If not, record with `work` when to look again, or leave it and it is offered later by itself; '
     + `do not look twice in one turn, and do not repeat an external action without checking its receipt. If nothing has changed, answer exactly ${QUIET_REPLY}.`;
 }
