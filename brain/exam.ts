@@ -3,7 +3,7 @@ import type { JournalEvent } from './journal';
 import type { Remembered } from './remembered';
 import { journalPast, openPast, type Past } from './past';
 import { libraryAt } from './ray';
-import { documentOf, words } from './recall';
+import { KEY_KIND, documentOf, heldOut, words } from './recall';
 import { scan } from './store';
 
 // The exam is how a memory is measured. A question comes with the events that answer it, and the
@@ -19,7 +19,7 @@ import { scan } from './store';
 // of kind `memory.exam.v1` with the same data in the journal itself. With none of either, the
 // agent's own life is turned into questions: see `cloze`.
 
-export const EXAM_KIND = 'memory.exam.v1';
+export const EXAM_KIND = KEY_KIND;
 /** What an exam came to, journaled so that the next one, and a mutation of the memory, have something to be held against. */
 export const RESULT_KIND = 'memory.exam.result.v1';
 /** With fewer questions than this an exam says too little to hold anything against. */
@@ -31,6 +31,8 @@ export interface Question {
   question: string;
   /** Ids of the events any of which answers it. */
   events: string[];
+  /** Held out of the index (`heldOut` in brain/recall.ts): finding its answer owes nothing to the question having been written. */
+  held?: boolean;
 }
 
 export interface Score {
@@ -84,14 +86,14 @@ export function bySubstring(events: JournalEvent[]): Finder {
 /** The questions a journal holds as notes, and those of a file of JSON lines. Lines and notes that are not questions are passed over. */
 export function questionsOf(events: JournalEvent[], file?: string): Question[] {
   const out: Question[] = [];
-  const take = (value: unknown): void => {
+  const take = (value: unknown, held = false): void => {
     if (typeof value !== 'object' || value === null) return;
     const q = value as { question?: unknown; events?: unknown };
     if (typeof q.question === 'string' && q.question.trim() !== '' && Array.isArray(q.events) && q.events.length > 0 && q.events.every((id) => typeof id === 'string')) {
-      out.push({ question: q.question, events: q.events as string[] });
+      out.push({ question: q.question, events: q.events as string[], ...(held ? { held } : {}) });
     }
   };
-  for (const e of events) if (e.type === 'note' && e.kind === EXAM_KIND) take(e.data);
+  for (const e of events) if (e.type === 'note' && e.kind === EXAM_KIND) take(e.data, heldOut(e.id));
   if (file !== undefined && existsSync(file)) {
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       try {
@@ -187,6 +189,11 @@ export interface Result {
   written: boolean;
   /** Of the agent's own questions: how many the request itself leads to (`listed`). Absent in results from before it was measured, and where no request was given. */
   listed?: Score;
+  /**
+   * `recall` over the questions held out of the index alone. The other questions are keys: the index was told their
+   * answers, so finding them says the keys work; this says what the memory finds unaided. Absent in results from before it was measured.
+   */
+  held?: Score;
 }
 
 /** Sits the whole exam on `events` with `past`: the questions the journal holds, or ones made from it when it holds too few. */
@@ -197,6 +204,7 @@ export function sit(past: Past, events: JournalEvent[], request?: { text: string
   return {
     recall: examine(byMemory(past), questions), plain: examine(bySubstring(events), questions), told: told(past, events, own), written,
     ...(request === undefined ? {} : { listed: listed(events, past.remembered(), own, request) }),
+    held: examine(byMemory(past), own.filter((q) => q.held === true)),
   };
 }
 
@@ -207,7 +215,9 @@ export function lastResult(events: JournalEvent[]): (Result & { at: string }) | 
     if (e.type !== 'note' || e.kind !== RESULT_KIND || typeof e.data !== 'object' || e.data === null) continue;
     const d = e.data as Partial<Result>;
     const whole = (s: unknown): s is Score => typeof s === 'object' && s !== null && typeof (s as Score).questions === 'number' && typeof (s as Score).passed === 'number';
-    if (whole(d.recall) && whole(d.plain) && whole(d.told)) return { recall: d.recall, plain: d.plain, told: d.told, written: d.written === true, at: e.ts };
+    if (whole(d.recall) && whole(d.plain) && whole(d.told)) {
+      return { recall: d.recall, plain: d.plain, told: d.told, written: d.written === true, ...(whole(d.listed) ? { listed: d.listed } : {}), ...(whole(d.held) ? { held: d.held } : {}), at: e.ts };
+    }
   }
   return null;
 }

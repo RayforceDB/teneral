@@ -32,6 +32,10 @@ import { WITHDRAW_KIND, fromOwner } from './owned';
 
 export const FACT_KIND = 'memory.fact.v1';
 export const INTENTION_KIND = 'memory.intention.v1';
+/** A fact seen to hold still: `{ fact, episode }`, the fact's id and the stretch that showed it. Written with a memory (brain/sleep.ts). */
+export const CONFIRMED_KIND = 'memory.fact.confirmed.v1';
+/** A fact not set down, replaced or confirmed for this many days is shown with a word of caution: the world it was true of has had time to change. */
+export const UNCONFIRMED_DAYS = 60;
 export const DONE_KIND = 'memory.intention.done.v1';
 /** The owner's, or the agent's own, word that a fact or an intention is to be left out from now on. The note it names stays in the journal. */
 export const FORGET_KIND = 'memory.forget.v1';
@@ -57,6 +61,8 @@ export interface FactData {
   about?: string;
 }
 export interface Fact extends FactData {
+  /** When the agent last saw that it still holds (`CONFIRMED_KIND`); absent for one never looked at again since it was set down. */
+  confirmed?: string;
   id: string;
   /** What the agent calls it: short enough to type, and to say which fact a new one replaces. */
   mark: string;
@@ -180,7 +186,7 @@ export interface KnownState {
 export const knownStart = (): KnownState => ({ facts: new Map(), intentions: new Map(), gone: new Set() });
 
 /** The kinds of notes `knownStep` reads; beside them it reads every reply, for the marks of what waits. */
-export const KNOWN_NOTES: readonly string[] = [FACT_KIND, INTENTION_KIND, DONE_KIND, FORGET_KIND, ALLOWED_KIND, WORK_KIND, WITHDRAW_KIND];
+export const KNOWN_NOTES: readonly string[] = [FACT_KIND, INTENTION_KIND, DONE_KIND, FORGET_KIND, ALLOWED_KIND, WORK_KIND, WITHDRAW_KIND, CONFIRMED_KIND];
 
 /** Takes one more event into `state`. Returns whether anything in it may have changed. Notes are the body's to write, so none is taken on trust. */
 export const knownStep = (state: KnownState, e: JournalEvent): boolean => step(state, e);
@@ -212,6 +218,12 @@ function step(state: KnownState, e: JournalEvent): boolean {
   }
   if (e.type !== 'note' || typeof e.data !== 'object' || e.data === null) return false;
   const d = e.data as Record<string, unknown>;
+  if (e.kind === CONFIRMED_KIND) {
+    const fact = typeof d.fact === 'string' ? facts.get(d.fact) : undefined;
+    if (fact === undefined || gone.has(fact.id)) return false;
+    fact.confirmed = e.ts;
+    return true;
+  }
   if (e.kind === FACT_KIND) {
     if (!text(d.text) || !SOURCES.includes(d.source as Source) || !text(d.episode)) return false;
     const replaces = Array.isArray(d.replaces) ? d.replaces.filter((id): id is string => typeof id === 'string') : [];
@@ -334,7 +346,9 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
     }
   }
   if (held.facts.length > 0) {
-    const rows = held.facts.map((f) => `${f.mark} [${f.source}]${f.about === undefined ? '' : ` (about ${f.about})`} ${f.text}`);
+    // A fact long neither set down nor seen to hold again is still shown, and said to be old: it is the agent's to check, not to forget.
+    const old = (f: Fact): string => { const last = (f.confirmed ?? f.at).slice(0, 10); return Date.parse(today) - Date.parse(last) >= UNCONFIRMED_DAYS * 86_400_000 ? ` [last seen to hold ${last}: check before you rely on it]` : ''; };
+    const rows = held.facts.map((f) => `${f.mark} [${f.source}]${f.about === undefined ? '' : ` (about ${f.about})`}${old(f)} ${f.text}`);
     // The newest that fit; an agent's life should not push out what it learned last.
     let from = rows.length;
     let size = 0;

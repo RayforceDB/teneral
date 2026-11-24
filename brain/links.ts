@@ -1,5 +1,5 @@
 import type { JournalEvent } from './journal';
-import { DONE_KIND, FACT_KIND, INTENTION_KIND } from './known';
+import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND } from './known';
 import { WITHDRAW_KIND, withdrawn } from './owned';
 import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered, type Remembered } from './remembered';
 
@@ -148,7 +148,7 @@ export function outdatedStretches(events: JournalEvent[], told: Remembered = rem
 }
 
 /** The kinds of notes that may be written after an episode and still belong to what was known at its end. */
-export const LATER_NOTES: readonly string[] = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, FACT_KIND, INTENTION_KIND, DONE_KIND];
+export const LATER_NOTES: readonly string[] = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, FACT_KIND, INTENTION_KIND, DONE_KIND, CONFIRMED_KIND];
 
 /** Whether `e`, written after an episode, is about what came before it: `before` says whether the event with an id lies before the episode. */
 export function laterNoteOf(e: JournalEvent, before: (named: unknown) => boolean): boolean {
@@ -156,5 +156,5 @@ export function laterNoteOf(e: JournalEvent, before: (named: unknown) => boolean
   const about = e.data as { from?: unknown; episode?: unknown };
   if (e.kind === EPISODE_KIND || e.kind === QUARANTINE_KIND || e.kind === MERGE_KIND) return before(about.from);
   // A fact or an intention set down with a memory names its episode; one the agent made itself, in some later turn, is no part of what it knew then.
-  return (e.kind === FACT_KIND || e.kind === INTENTION_KIND || e.kind === DONE_KIND) && before(about.episode);
+  return (e.kind === FACT_KIND || e.kind === INTENTION_KIND || e.kind === DONE_KIND || e.kind === CONFIRMED_KIND) && before(about.episode);
 }

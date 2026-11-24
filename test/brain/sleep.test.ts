@@ -205,7 +205,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [], done: [], questions: [], outdated: [],
+    facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });
@@ -248,4 +248,24 @@ test('with no past to look in, or no earlier memory near, nothing about outdatin
   await sleep({ ...s.deps, past: journalPast(s.journal) });
   expect(s.seen[0]!.at(-1)!.content).not.toContain('Outdated:');
   expect(parseMemory(`${MEMORY}\n\nOutdated:\n- Mabcd1234 something that no longer holds`, 400)).toMatchObject({ outdated: [{ mark: 'Mabcd1234', why: 'something that no longer holds' }] });
+});
+
+test('a forming memory may say that a fact it was shown still holds: that is journaled, and nothing is made of a mark that names no fact', async () => {
+  const told = said('the staging host is alpha, remember it', LONG);
+  const noted = replied('Noted.');
+  const fact = ev({ type: 'note', kind: 'memory.fact.v1', data: { text: 'The staging host is alpha', source: 'owner', episode: told.id } });
+  const first = ev({ type: 'note', kind: EPISODE_KIND, data: { from: told.id, to: noted.id, start: told.ts, end: noted.ts, title: 'The staging host', text: 'I was told the staging host.', outcome: 'done' } });
+  const again = said('deploy to staging please', LONG);
+  const did = replied('Deployed to alpha, as before.');
+  const now = said('thanks', LONG);
+  const mark = `F${fact.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+  const s = setup([told, noted, fact, first, again, did, now], [answer(`${MEMORY}\n\nFacts:\n- [seen] (confirms ${mark})\n- [seen] (confirms Fnothing0)\n- [seen] The deploy takes four minutes on alpha`)]);
+  expect(await sleep(s.deps)).toBe('remembered');
+  const notes = readEvents(s.journal).filter((e) => e.type === 'note');
+  expect(notes.filter((e) => e.type === 'note' && e.kind === 'memory.fact.confirmed.v1').map((e) => (e as { data: unknown }).data)).toEqual([{ fact: fact.id, episode: fact.id }]);
+  // (The stretch being remembered begins with the notes written before it: they go with what follows them.)
+  // The line that confirms is no fact of its own; the one beside it is.
+  expect(notes.filter((e) => e.type === 'note' && e.kind === 'memory.fact.v1')).toHaveLength(2);
+  // And the memory's own note holds nothing of the list.
+  expect(JSON.stringify(notes.find((e) => e.type === 'note' && e.kind === EPISODE_KIND && (e.data as { from?: unknown }).from === fact.id))).not.toContain('confirmed');
 });

@@ -8,6 +8,7 @@ import {
 } from '../../immune/gates';
 import { readResponsesStream } from '../../brain/provider';
 import { PROVIDERS } from '../../brain/providers';
+import { heldOut } from '../../brain/recall';
 import { commitAll, makeLineage, makeRepo, writeFiles } from '../helpers';
 
 const NO_CHECKS: never[] = [];
@@ -738,6 +739,36 @@ test('where the running generation can be asked, both sit the same exam: what it
   const result = await runGates(dir, seed, commitAll(dir, 'a worse recall'), NO_CHECKS, { journal: running.journal });
   expect(result).toMatchObject({ ok: false, gate: 'memory' });
   expect(result.output).toContain('of 30 questions the candidate finds the answer to 10 (33%), and the generation running finds the answer to 20 of the same questions (67%), asked now of the same journal');
+});
+
+test('a candidate is held apart to the questions the index was never told the answer to: finding those worse is refused though the whole score hides it', async () => {
+  const dir0 = join(tmpdir(), `teneral-exam-${randomUUID()}`);
+  mkdirSync(dir0, { recursive: true });
+  const journal = join(dir0, 'journal.jsonl');
+  const ids = Array.from({ length: 120 }, (_, i) => `h${i}`);
+  const apart = ids.filter((id) => heldOut(id));
+  expect(apart.length).toBeGreaterThanOrEqual(20);
+  const line = (id: string, body: object): string => `${JSON.stringify({ v: 1, id, ts: '2026-11-14T10:00:00.000Z', gen: 'g', ...body })}\n`;
+  const all = { questions: 120, passed: 120, nearness: 1 };
+  writeFileSync(journal, [
+    ...ids.map((id) => line(id, { type: 'note', kind: 'memory.exam.v1', data: { question: `question ${id}`, events: [`answer-${id}`] } })),
+    line('result', { type: 'note', kind: 'memory.exam.result.v1', data: { recall: all, plain: all, told: all, written: true, held: { questions: apart.length, passed: apart.length, nearness: 1 } } }),
+  ].join(''));
+  // The candidate misses two questions, both of them held out: two of 120 is within what the whole score allows.
+  const examiner = (missed: string[]): string => `const [journal, asked, answers] = process.argv.slice(3);
+const questions = (await Bun.file(asked).text()).split('\\n').filter((l) => l !== '').map((l) => JSON.parse(l).question);
+const missed = ${JSON.stringify(missed)};
+await Bun.write(answers, JSON.stringify(questions.map((q) => (missed.includes(q.split(' ')[1]) ? ['somewhere-else'] : ['answer-' + q.split(' ')[1]]))));
+`;
+  const { dir, seed } = makeRepo({ 'brain/exam.ts': examiner(apart.slice(0, 2)), 'brain/recall.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'brain/recall.ts': 'export const a = 2;\n' });
+  const result = await runGates(dir, seed, commitAll(dir, 'keys only'), NO_CHECKS, { journal });
+  expect(result).toMatchObject({ ok: false, gate: 'memory' });
+  expect(result.output).toContain(`of the ${apart.length} questions held out of the index the candidate finds the answer to ${apart.length - 2}`);
+  // The same two missed among the questions that are keys is within the slack, and passes.
+  const keys = ids.filter((id) => !heldOut(id));
+  writeFiles(dir, { 'brain/exam.ts': examiner(keys.slice(0, 2)), 'brain/recall.ts': 'export const a = 3;\n' });
+  expect(await runGates(dir, seed, commitAll(dir, 'two keys missed'), NO_CHECKS, { journal })).toEqual({ ok: true, gate: 'all', output: '' });
 });
 
 test('one that remembers as well passes, and so does one a question short of it', async () => {

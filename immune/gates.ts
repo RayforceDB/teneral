@@ -575,7 +575,10 @@ export interface GateOptions {
 }
 
 /** The files a memory is made of. A candidate that differs in any of them from the generation running is examined. */
-export const MEMORY_FILES = ['episodes', 'exam', 'known', 'logbook', 'memory', 'owned', 'past', 'ray', 'recall', 'remembered', 'sleep', 'store'].map((name) => `brain/${name}.ts`);
+export const MEMORY_FILES = [
+  'episodes', 'exam', 'frame', 'frame-table', 'known', 'known-table', 'lessons', 'lessons-table', 'links', 'logbook', 'memory', 'memory-table', 'owned', 'past',
+  'ray', 'rayserver', 'recall', 'remembered', 'semantic', 'semantic-map', 'shown', 'sleep', 'store', 'ties-table', 'wire',
+].map((name) => `brain/${name}.ts`);
 /** How much lower than the generation running a candidate may score, as a share of the questions, and never less than one question. */
 export const EXAM_SLACK = 0.02;
 
@@ -622,6 +625,7 @@ async function memoryExam(
   const score = examine((question) => answerOf.get(question) ?? [], questions);
   // The generation running, asked the same now, where its checkout is at hand and is that generation.
   let now: ReturnType<typeof examine> | null = null;
+  let running: Map<string, string[]> | null = null;
   const live = join(root, '.teneral', 'live');
   if (existsSync(join(live, 'brain', 'exam.ts')) && git(live, 'rev-parse', 'HEAD').trim() === from) {
     const theirs = join(tmp, 'exam-answers-running.json');
@@ -634,15 +638,30 @@ async function memoryExam(
       const told: unknown = JSON.parse(readFileSync(theirs, 'utf8'));
       const list = Array.isArray(told) ? told : null;
       if (list !== null) {
-        const running = new Map(questions.map((q, i) => [q.question, Array.isArray(list[i]) ? (list[i] as unknown[]).filter((id): id is string => typeof id === 'string') : []]));
-        now = examine((question) => running.get(question) ?? [], questions);
+        running = new Map(questions.map((q, i) => [q.question, Array.isArray(list[i]) ? (list[i] as unknown[]).filter((id): id is string => typeof id === 'string') : []]));
+        now = examine((question) => running!.get(question) ?? [], questions);
       }
     } catch { /* it could not be asked: held against what it last scored, below */ }
   }
   const measure = now ?? held.recall;
+  const percent = (share: number): string => `${Math.round(share * 100)}%`;
+  // The questions held out of the index are the ones nothing was told the answer to (`heldOut` in brain/recall.ts): the
+  // others are found by being keys, whatever else a candidate does to the memory, so they would hide a memory that finds
+  // worse unaided. Where there are enough of them the candidate is held to them as well, apart.
+  const apart = questions.filter((q) => q.held === true);
+  if (apart.length >= QUESTIONS_MIN) {
+    const unaided = examine((question) => answerOf.get(question) ?? [], apart);
+    const theirs = running !== null ? examine((question) => running!.get(question) ?? [], apart) : held.held ?? null;
+    if (theirs !== null && rate(unaided) + Math.max(EXAM_SLACK, 1 / unaided.questions) < rate(theirs)) {
+      return {
+        interrupted: false,
+        problem: `this mutation changes the memory and finds worse what it was not told the answer to: of the ${unaided.questions} questions held out of the index the candidate finds the answer to ${unaided.passed} (${percent(rate(unaided))}), `
+          + `and the generation running ${running !== null ? `finds ${theirs.passed} (${percent(rate(theirs))}), asked now of the same journal` : `found ${percent(rate(theirs))} when it last sat the exam`}. bun brain/exam.ts shows which.`,
+      };
+    }
+  }
   // Never less than one question's worth: with few questions, one more or less is chance.
   if (rate(score) + Math.max(EXAM_SLACK, 1 / score.questions) >= rate(measure)) return pass;
-  const percent = (share: number): string => `${Math.round(share * 100)}%`;
   return {
     interrupted: false,
     problem: `this mutation changes the memory and remembers worse: of ${score.questions} questions the candidate finds the answer to ${score.passed} (${percent(rate(score))}), `
