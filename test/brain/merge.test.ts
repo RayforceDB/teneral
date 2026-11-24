@@ -132,7 +132,7 @@ test('a request then shows the wider memory in place of the six, and the later o
   await sleep(asleep(journal, [said(WIDE)], 1500).deps);
   const shown = buildMessages(readEvents(journal), 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content!.split('\n')[0]);
   expect(shown.filter((line) => !line!.startsWith('[memory]'))).toEqual(['S', 'The first six things', 'Thing 6', 'Thing 7', 'and now?']);
-  expect(shown[1]).toBe(`[memory] ${when(stretches[0]![0]!.ts)} to ${when(stretches[5]![1]!.ts)}. What do you remember of it?`);
+  expect(shown[1]).toBe(`[memory] ${when(stretches[0]![0]!.ts)} to ${when(stretches[5]![1]!.ts)}, from event ${stretches[0]![0]!.id}. What do you remember of it?`);
 });
 
 test('the memories that were made into one are still found', async () => {

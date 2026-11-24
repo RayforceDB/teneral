@@ -18,8 +18,9 @@ import { tmpdir } from 'node:os';
 import { appendEvent, readEvents, readEventsFrom, type JournalEvent } from '../brain/journal';
 import { PAIRED_SOURCE } from '../brain/owners';
 import { contextWindow } from '../brain/providers';
-import { turnOwed } from '../brain/frame';
-import { DEFAULT_BUDGET, needsTurn } from '../brain/memory';
+import { frameFrom, turnOwed } from '../brain/frame';
+import { swapped } from '../brain/logbook';
+import { DEFAULT_BUDGET, assemble, needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
 import { runTurn, mayStayQuiet } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
@@ -854,7 +855,16 @@ for (;;) {
     // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
     try {
       // Whether it is due is read in the notes of the memories and of the last exam; the exam itself reads the conversation, asked of the past for that once.
-      if (due(noted(RESULT_KIND, EPISODE_KIND, MERGE_KIND))) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: { ...sit(past, past.standingFrom(0)), skills: skillUse(ctx) } });
+      if (due(noted(RESULT_KIND, EPISODE_KIND, MERGE_KIND))) {
+        // The request as a turn would be sent it now: the exam also asks whether it leads to what the questions ask (`listed` in brain/exam.ts).
+        const system = composeSystem(prompt, soulDir, journal);
+        const view = { tailChars, ...(logbookChars === undefined ? {} : { logbookChars }) };
+        const room = budgetChoice.budgetChars - JSON.stringify(TOOLS.map((t) => t.spec)).length - system.toWellFormed().length;
+        const frame = frameFrom(past, room, view);
+        const told = swapped(frame.head, room, view);
+        const text = assemble(frame, system, room + system.toWellFormed().length, undefined, view).map((m) => m.content ?? '').join('\n');
+        appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: { ...sit(past, past.standingFrom(0), { text, tailFrom: told === 0 ? 0 : frame.head.kept[told - 1]!.to }), skills: skillUse(ctx) } });
+      }
     } catch (err) {
       console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
     }
