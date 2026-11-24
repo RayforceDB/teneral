@@ -399,6 +399,20 @@ export class Transcript {
             }
             return;
           }
+          // It did something of its own and has words at the end. The owner's conversation is not where its steps belong:
+          // what woke it, what it thought and each tool it called are folded into one line, and only what it says is shown.
+          // All of it is in the journal, and /history and Ctrl-R still show it.
+          if (from !== -1 && !text.startsWith(NOT_FROM_MODEL)) {
+            const gone = this.entries.splice(from);
+            const did = gone.filter((e) => e.kind === 'tool').length;
+            const first = gone.find((e) => e.kind === 'quiet');
+            this.push({ kind: 'quiet', label: `${label}${did > 0 ? `, ${did} ${did === 1 ? 'step' : 'steps'} of its own` : ''}`, text: first?.kind === 'quiet' ? first.text : '' });
+            if (text !== '' && !quietReply(text)) {
+              const shown = text.length > REPLY_CHARS ? `${text.slice(0, REPLY_CHARS)}\n\n[... ${text.length - REPLY_CHARS} more characters are in the journal]` : text;
+              this.push({ kind: 'reply', text: shown, first: !before.spoke });
+            }
+            return;
+          }
         }
         if (reasoning !== '' && !text.startsWith(NOT_FROM_MODEL)) {
           this.push({ kind: 'reasoning', text: reasoning.length > REASONING_CHARS ? `${reasoning.slice(0, REASONING_CHARS)} [...]` : reasoning });

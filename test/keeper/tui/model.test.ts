@@ -291,9 +291,11 @@ test('a turn nobody asked for is held back while it goes on, and folded into one
   const quiet = built([...looking, reply('[teneral: no reply]')]);
   expect(quiet.t.entries).toMatchObject([{ kind: 'quiet', label: 'clock, nothing to say after 1 step', text: '' }]);
   expect(quiet.t.entries.some(unfinished)).toBe(false);
-  // The same turn that ends with words is shown whole.
+  // The same turn that ends with words: its steps are one line, and what it says is shown. Its thoughts and tool calls are not the owner's conversation.
   const spoke = built([...looking, reply('The build is green.')]);
-  expect(kinds(spoke.t)).toEqual(['quiet', 'tool', 'reply']);
+  expect(kinds(spoke.t)).toEqual(['quiet', 'reply']);
+  expect(spoke.t.entries[0]).toMatchObject({ kind: 'quiet', label: 'clock, 1 step of its own' });
+  expect(spoke.t.entries[1]).toMatchObject({ kind: 'reply', text: 'The build is green.' });
   expect(spoke.t.entries.some(unfinished)).toBe(false);
   // A notification it had nothing to say to is still named, once.
   const heard = built([ev({ type: 'stimulus', source: 'agent:zulip', text: 'Zulip stream 9\nUntrusted.\n' + JSON.stringify({ sender: 'Ann', topic: 'general', content: 'lunch?' }) }), reply('[teneral: no reply]')]);

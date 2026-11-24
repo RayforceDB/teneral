@@ -1563,7 +1563,7 @@ test('the status line says how the memory stands and what the last exam came to,
   expect(footer()).toContain('2 for you');
 });
 
-test('a turn nobody asked for shows only its last few lines while it goes on, and the footer stays', () => {
+test('a turn nobody asked for shows nothing of its steps while it goes on, and the footer says what it is doing', () => {
   const s = stage(100, 40);
   settled(s);
   s.journal({ type: 'stimulus', source: 'clock', text: 'Clock tick at 2026-11-19T10:00:00.000Z. This is time of your own.' }, 0);
@@ -1574,10 +1574,9 @@ test('a turn nobody asked for shows only its last few lines while it goes on, an
   }
   s.clock.at = 3000;
   const live = s.live();
-  // The newest steps, not all ten, and nothing of it is printed for good yet.
-  expect(live).toContain('step 9');
-  expect(live).not.toContain('step 4');
-  expect(s.all().split('step 6')[0]).not.toContain('step');
+  // None of its steps, in the live part or printed for good: what it does of its own is not the owner's conversation.
+  expect(s.all()).not.toContain('step');
+  expect(live).not.toContain('Clock tick');
   // The footer is where it was: the model's name is in its last row.
   expect(live.split('\n').at(-2)).toContain('gpt-6.1-sol');
 });
