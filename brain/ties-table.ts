@@ -15,7 +15,7 @@ import type { Projection } from './store';
 // and nothing else. The database builds its graph from the table and walks it (brain/past.ts).
 
 export const TIES = 'ties';
-export const TIES_VERSION = 2;
+export const TIES_VERSION = 3;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });

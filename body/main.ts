@@ -33,6 +33,7 @@ import { clockText } from './sensors';
 import { followUps, lookedAt, offered, reportAsk, settle, tickDueOf, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
+import { TROUBLE_KIND, teller } from '../brain/trouble';
 import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
 import { EPISODE_KIND, MERGE_KIND } from '../brain/remembered';
 import { libraryAt } from '../brain/ray';
@@ -43,7 +44,7 @@ import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCu
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
-import { SKILL_TOOLS, keepVerified, offerFor, openSkills, seedRecoverySkill, skillUse } from './skill-tools';
+import { SKILL_TOOLS, keepVerified, offerFor, openSkills, seedBuiltIn, skillUse } from './skill-tools';
 import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { COMPARED_KIND, CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, compareOnce, enter, meet, supposeAll, whoLines } from './participants';
@@ -65,7 +66,9 @@ const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
-const past = await openServedPast(journal, organs === '' ? null : organs, (line) => console.error(line));
+// What the body says of its own working: said as ever, and what says that something failed is set down too, so that the owner sees it (brain/trouble.ts).
+const say = teller((data) => { appendEvent(journal, gen, { type: 'note', kind: TROUBLE_KIND, data }); });
+const past = await openServedPast(journal, organs === '' ? null : organs, say);
 // What the body reads of the journal, asked of the past: the notes of some kinds, what the owner typed, and the end of the
 // journal from the latest thing said to the agent on. None of it is the journal held whole.
 const noted = (...kinds: string[]): JournalEvent[] => past.notes(kinds);
@@ -90,7 +93,7 @@ let provider: Provider;
 try {
   provider = connect(process.env);
 } catch (err) {
-  console.error(err instanceof Error ? err.message : String(err));
+  say(err instanceof Error ? err.message : String(err));
   process.exit(1);
 }
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
@@ -149,7 +152,7 @@ const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber 
 // The owner's accounts in every chat service: what the settings name, what they typed, and what they paired (body/pairing.ts).
 // What is known is also written beside the owner's directory, for `/owner` in their terminal to show.
 const owners = new Owners({
-  events: [...ownerTyped(), ...noted(SPENT_KIND)], emit: (s) => emit(s), note: (data) => { appendEvent(journal, gen, { type: 'note', kind: SPENT_KIND, data }); }, status: join(ownerDir, '..', 'owners.json'), log: (line) => console.error(line),
+  events: [...ownerTyped(), ...noted(SPENT_KIND)], emit: (s) => emit(s), note: (data) => { appendEvent(journal, gen, { type: 'note', kind: SPENT_KIND, data }); }, status: join(ownerDir, '..', 'owners.json'), log: say,
   settled: {
     ...(zulipOwnerId === undefined ? {} : { zulip: [String(zulipOwnerId)] }),
     ...(rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID) === undefined ? {} : { rayboard: [rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID)!] }),
@@ -183,28 +186,28 @@ const subagents = new Subagents({
 const allTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, community, toolNames: allTools.map(t => t.spec.name) };
 ctx.skills = openSkills(ctx);
-try { seedRecoverySkill(ctx); } catch (err) { console.error(`[skills] recovery skill was not seeded: ${err instanceof Error ? err.message : String(err)}`); }
+try { seedBuiltIn(ctx); } catch (err) { say(`[skills] the built-in skills were not seeded: ${err instanceof Error ? err.message : String(err)}`); }
 // A verification holds for one generation: the enabled skills are verified again for this one, so that they go on being found and offered.
 // Of everyone already met: who bears the name of someone on another service and so may be the same one. Asked of the owner, once; nothing is joined (body/participants.ts).
 try {
   const met = noted(PARTICIPANT_KIND, CONTACT_KIND, COMPARED_KIND);
   const asked = supposeAll(journal, gen, met);
-  if (asked > 0) console.error(`[contacts] ${asked} ${asked === 1 ? 'question' : 'questions'} set down for the owner about accounts that may be one person`);
+  if (asked > 0) say(`[contacts] ${asked} ${asked === 1 ? 'question' : 'questions'} set down for the owner about accounts that may be one person`);
   // And what a name cannot tell is the agent's own to go over, once.
-  if (compareOnce(journal, gen, met)) console.error('[contacts] the agent was set to go over everyone it has met for accounts that are one person');
-} catch (err) { console.error(`[contacts] look-alikes among those met were not gone over: ${err instanceof Error ? err.message : String(err)}`); }
-try { const again = keepVerified(ctx); if (again > 0) console.error(`[skills] verified ${again} enabled ${again === 1 ? 'skill' : 'skills'} for this generation`); } catch (err) { console.error(`[skills] the enabled skills could not be verified again: ${err instanceof Error ? err.message : String(err)}`); }
+  if (compareOnce(journal, gen, met)) say('[contacts] the agent was set to go over everyone it has met for accounts that are one person');
+} catch (err) { say(`[contacts] look-alikes among those met were not gone over: ${err instanceof Error ? err.message : String(err)}`); }
+try { const again = keepVerified(ctx); if (again > 0) say(`[skills] verified ${again} enabled ${again === 1 ? 'skill' : 'skills'} for this generation`); } catch (err) { say(`[skills] the enabled skills could not be verified again: ${err instanceof Error ? err.message : String(err)}`); }
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
-if (stoppedJobs.length > 0) console.error(`[jobs] stopped previous-generation groups: ${stoppedJobs.join(', ')}`);
+if (stoppedJobs.length > 0) say(`[jobs] stopped previous-generation groups: ${stoppedJobs.join(', ')}`);
 process.on('exit', () => stopCurrentJobs(journal, gen));
 // One-time import only: after this the journal is the live agenda, and the JSON file is never rewritten.
 try {
   const imported = importLegacyWork(journal, gen, process.env.TENERAL_LEGACY_WORK_FILE ?? join(workspace, '.teneral', 'work.json'));
-  if (imported > 0) console.error(`[work] imported ${imported} active commitments into the journal agenda`);
+  if (imported > 0) say(`[work] imported ${imported} active commitments into the journal agenda`);
 } catch (err) {
-  console.error(`[work] legacy agenda not imported: ${err instanceof Error ? err.message : String(err)}`);
+  say(`[work] legacy agenda not imported: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 let quitting = false;
@@ -250,8 +253,8 @@ function hearIn(service: string, channel: string): void {
   if (askedToHear.has(key)) return;
   askedToHear.add(key);
   void ensureHeard(ctx, service, channel, { muted: past.stateOf('attention', [`${service}\n${channel}`]) === 'muted' })
-    .then((asked) => { if (asked) console.error(`[chat] ${service} was not sending the talk of ${channel}; asked it to`); })
-    .catch((err) => console.error(`[chat] ${service} could not be asked for the talk of ${channel}: ${err instanceof Error ? err.message : String(err)}`));
+    .then((asked) => { if (asked) say(`[chat] ${service} was not sending the talk of ${channel}; asked it to`); })
+    .catch((err) => say(`[chat] ${service} could not be asked for the talk of ${channel}: ${err instanceof Error ? err.message : String(err)}`));
 }
 function listening(service: string, channel: { id: string; name: string }): Mode {
   const key = `${service}:${channel.id}`;
@@ -260,7 +263,7 @@ function listening(service: string, channel: { id: string; name: string }): Mode
   const now = modeFrom(past, service, channel);
   // The first message from a channel in this life of the body: it is one the agent takes part in, so it is to hear it.
   if (kept === undefined) hearIn(service, channel.name);
-  if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
+  if (now.why === 'quiet' && kept?.mode !== 'mentions') say(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
   listened.set(key, { at: Date.now(), mode: now.mode });
   return now.mode;
 }
@@ -319,7 +322,7 @@ function saidLately(): string[] {
 /** The glance being made beside a running turn, if one is. */
 let glancing: Promise<unknown> | null = null;
 function glanceBeside(): Promise<unknown> {
-  glancing ??= decide(glanceDeps()).then((decided) => { if (decided !== null) console.error(`[glance] overheard talk, beside the turn: ${decided}`); }).finally(() => { glancing = null; });
+  glancing ??= decide(glanceDeps()).then((decided) => { if (decided !== null) say(`[glance] overheard talk, beside the turn: ${decided}`); }).finally(() => { glancing = null; });
   return glancing;
 }
 
@@ -363,7 +366,7 @@ function interrupt(): void {
   if (current !== null) return current.abort();
   if (!turnOwed(past, journal)) return;
   appendEvent(journal, gen, { type: 'turn.interrupted' });
-  console.error('[interrupted]');
+  say('[interrupted]');
   wake?.();
 }
 
@@ -377,7 +380,7 @@ const words: Word[] = [];
  */
 function ownerWord(text: string): void {
   const word = parseWord(text);
-  if (word === null) return console.error('[owner] a word about memory that could not be read was dropped');
+  if (word === null) return say('[owner] a word about memory that could not be read was dropped');
   words.push(word);
   if (word.do === 'back') current?.abort();
   wake?.();
@@ -386,7 +389,7 @@ function ownerWord(text: string): void {
 /** The owner asked in their terminal for one of their chat accounts to be paired (body/pairing.ts). The code is kept here and never journaled. */
 function ownerPairing(text: string): void {
   const pairing = readPairing(text);
-  if (pairing === null) return console.error('[owner] a pairing that could not be read was dropped');
+  if (pairing === null) return say('[owner] a pairing that could not be read was dropped');
   owners.offer(pairing);
 }
 /** The owner's accounts of one service, as a chat adapter asks about them. */
@@ -401,7 +404,7 @@ function settleWords(): void {
     // Only the events the word names are looked up: whether they are there, and what they are.
     const names = word.do === 'withdraw' ? word.ids : [word.do === 'back' ? word.to : word.event];
     const note = noteOf(word, names.flatMap((id) => { const found = past.around(id, 0, 0); return found === null ? [] : [found.events[found.at]!]; }));
-    if (note === null) console.error(`[owner] nothing in the journal for the word "${word.do}"; it was dropped`);
+    if (note === null) say(`[owner] nothing in the journal for the word "${word.do}"; it was dropped`);
     else appendEvent(journal, gen, note);
   }
 }
@@ -513,7 +516,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   const genericTyping = typingFor(workspace);
   const ownerBefore = ownerArrived;
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
-  console.error('[thinking]');
+  say('[thinking]');
   current = new AbortController();
   try {
     const outcome = await runTurn({
@@ -529,14 +532,14 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       // Once the owner has said something in the middle of such a turn, what follows is said to them and is printed like any reply.
       onDelta: (t) => { if (!quietTick || ownerArrived !== ownerBefore) console.log(t); },
-      onTool: (name) => console.error(`[tool] ${name}`),
+      onTool: (name) => say(`[tool] ${name}`),
       // The chat adapter shows composition only for the exact stimulus that warrants it.
       onTyping: genericTyping,
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;
     // Not a failure: nothing is counted and nothing is tried again. The loop below finds no turn owed and waits.
-    if (outcome === 'interrupted') console.error('[interrupted]');
+    if (outcome === 'interrupted') say('[interrupted]');
     return null;
   } catch (error) {
     return { error };
@@ -596,12 +599,12 @@ async function rest(): Promise<boolean> {
       asked: past,
     }).then((slept) => {
       const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
-      if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
+      if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') say(`[memory] ${said[slept]}`);
       return slept !== 'nothing';
     }, (err) => {
       if (stop.signal.aborted) return true;
       // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
-      console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
+      say(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
       restNotBefore = Date.now() + REST_RETRY_MS;
       return false;
     }).finally(() => {
@@ -630,8 +633,8 @@ process.on('exit', () => subagents.stopAll());
 // Those that were running when the body last stopped go on, when they are this generation's and their copies are still there.
 {
   const { resumed, closed } = subagents.recover();
-  if (resumed.length > 0) console.error(`[subagent] going on after the restart: ${resumed.join(', ')}`);
-  if (closed.length > 0) console.error(`[subagent] closed as cut off: ${closed.join(', ')}`);
+  if (resumed.length > 0) say(`[subagent] going on after the restart: ${resumed.join(', ')}`);
+  if (closed.length > 0) say(`[subagent] closed as cut off: ${closed.join(', ')}`);
 }
 /** When this body started: the clock counts from here until it has given a tick of its own. */
 const startedAt = Date.now();
@@ -699,7 +702,7 @@ const heart = new Heart({
     // One that was begun beside the turn that has just ended is let finish: the same talk is not decided twice.
     if (glancing !== null) await glancing;
     const decided = await glance(glanceDeps());
-    if (decided !== null) console.error(`[glance] overheard talk: ${decided}`);
+    if (decided !== null) say(`[glance] overheard talk: ${decided}`);
   },
   settle: async () => {
     const woken = new AbortController();
@@ -708,7 +711,7 @@ const heart = new Heart({
     try {
       const events = sinceSaid();
       const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, logbookChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal, asked: past }, events);
-      if (settled === 'reflected') console.error('[agenda] settled what the turn left');
+      if (settled === 'reflected') say('[agenda] settled what the turn left');
       return settled;
     } finally { wake = null; resting = false; }
   },
@@ -740,7 +743,7 @@ const heart = new Heart({
   backlog: () => past.counts().waiting,
   restMs,
   onError: error => {
-    console.error(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);
+    say(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);
     restNotBefore = Date.now() + REST_RETRY_MS;
   },
 });
@@ -775,7 +778,7 @@ for (;;) {
       // every stimulus: a clock tick or an inbox message must not hammer a provider already at
       // its limit (see retryAt). The owner's own line clears it in emit.
       const wait = retryAt - Date.now();
-      console.error(`[retry] waiting ${describeDelay(wait)} for the provider's limit before the next try, or until the owner writes`);
+      say(`[retry] waiting ${describeDelay(wait)} for the provider's limit before the next try, or until the owner writes`);
       await idle(wait);
       // Any stimulus can end the sleep. Recheck the deadline before calling the provider: only
       // the owner's own message clears retryAt, and the scheduled time may not have arrived.
@@ -811,11 +814,11 @@ for (;;) {
     failures += 1;
     streak = { kind, count: kind === streak.kind ? streak.count + 1 : 1 };
     // The stack when it is this code's own fault: it is what the next generation needs to mend it.
-    console.error(`[turn failed] ${error instanceof Error ? (kind === 'own' ? error.stack ?? error.message : error.message) : String(error)}`);
+    say(`[turn failed] ${error instanceof Error ? (kind === 'own' ? error.stack ?? error.message : error.message) : String(error)}`);
     const next = verdict(kind, streak.count);
     if (next === 'exit') {
       // Not the provider: waiting mends nothing. As a crash the stem counts it, and rolls this generation back if it goes on.
-      console.error(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the stem can act`);
+      say(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the stem can act`);
       process.exit(1);
     }
     if (next === 'record' && error instanceof ProviderError) {
@@ -844,11 +847,11 @@ for (;;) {
     if (ownerWrote) {
       // The owner wrote while the turn ran; that message gets its try now, once. Other traffic
       // remains journaled but leaves the provider's backoff in force.
-      console.error(`[retry] ${failures} in a row; the owner wrote meanwhile, trying again now`);
+      say(`[retry] ${failures} in a row; the owner wrote meanwhile, trying again now`);
       continue;
     }
     retryAt = Date.now() + delay;
-    console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or when the owner writes`);
+    say(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or when the owner writes`);
     await idle(delay);
   }
   if (quitting) break;
@@ -874,7 +877,7 @@ for (;;) {
         appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: { ...sit(past, past.standingFrom(0), { text, tailFrom: told === 0 ? 0 : frame.head.kept[told - 1]!.to }), skills: skillUse(ctx) } });
       }
     } catch (err) {
-      console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
+      say(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
     }
     // And what the store gained is written out, so that the next start finds it on disk. Not after every turn:
     // writing rewrites the whole day, a second of work on a long one, while what is not written is only laid
@@ -886,7 +889,7 @@ for (;;) {
         storeWrittenAt = Date.now();
       }
     } catch (err) {
-      console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
+      say(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
     }
     // A prompt only where someone can type at it; a wake reuses the existing input place.
     if (process.stdin.isTTY) terminalPrompt.ready();
@@ -899,6 +902,6 @@ for (;;) {
 stopBackground();
 journalFormed();
 // What was laid out since the store was last written: a body that ends in good order leaves nothing for the next to lay out again.
-try { past.sync(); past.persist(); } catch (err) { console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`); }
+try { past.sync(); past.persist(); } catch (err) { say(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`); }
 for (const stop of stops) stop();
 process.exit(0);

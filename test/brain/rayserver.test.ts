@@ -141,7 +141,7 @@ past.close();
 await Bun.sleep(100);
 out.ended = !existsSync('/proc/' + pid2);
 out.pidFile = existsSync(${JSON.stringify(pidFile(journal))});
-out.logs = logs.map((line) => line.replace(/\\(\\d+\\), on port \\d+/, '(N), on port P'));
+out.logs = logs.map((line) => line.replace(/\\(\\d+\\), on port \\d+/, '(N), on port P').replace(/, \\d+ s after it started/, ', N s after it started'));
 console.log(JSON.stringify(out));
 `) as [Record<string, unknown>];
   expect(lines[0]).toEqual({
@@ -154,6 +154,7 @@ console.log(JSON.stringify(out));
     pidFile: false,
     logs: [
       '[memory] the database runs in a process of its own (N), on port P',
+      "[memory] the database's process failed: it ended by itself, killed by SIGKILL, N s after it started",
       '[memory] the database is gone, the journal is read through from here on: rayforce: io: connection closed',
       '[memory] the database runs in a process of its own (N), on port P',
       '[memory] the database runs again, and is asked from here on',

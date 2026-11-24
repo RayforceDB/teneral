@@ -94,10 +94,18 @@ export async function startRayServer(program: string, journal: string, o: { core
   });
   // A body that has nothing left to do ends although its server still runs, and takes the server with it.
   child.unref();
-  process.once('exit', () => { try { child.kill('SIGKILL'); } catch { /* gone */ } });
+  const began = Date.now();
+  process.once('exit', () => { stopped = true; try { child.kill('SIGKILL'); } catch { /* gone */ } });
   let ended = false;
-  void child.exited.then(() => { ended = true; });
+  let stopped = false;
+  void child.exited.then(() => {
+    ended = true;
+    // Ended by nobody here: said with how it ended, since that is all there is to learn why from. A signal is the system's
+    // or another process's doing (KILL is also what the tie to the parent sends); an exit code is the server's own.
+    if (!stopped) o.log?.(`[memory] the database's process failed: it ended by itself, ${child.signalCode != null ? `killed by ${child.signalCode}` : `with exit code ${child.exitCode}`}, ${Math.round((Date.now() - began) / 1000)} s after it started`);
+  });
   const stop = (): void => {
+    stopped = true;
     if (!ended) { try { child.kill('SIGKILL'); } catch { /* gone */ } }
     rmSync(pidFile(journal), { force: true });
   };

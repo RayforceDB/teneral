@@ -32,6 +32,7 @@ import { Inline, Lifeline, terminal, type Term } from './screen';
 import { complete, entered, offer, type Typed } from './slash';
 import { clean, type Line, type Span } from './text';
 import { SPIN_MS, glyphs, type Glyphs } from './theme';
+import { TROUBLE_KIND, troubles, type Trouble } from '../../brain/trouble';
 import { beatOf, beatWords, cacheUse, contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type BarAction, type Look, type Offered } from './view';
 
 // The talk client: `./one talk` at a terminal. The owner's lines go out through the owner channel
@@ -69,6 +70,11 @@ interface MenuItem { name: string; about: string; run: string | null }
 /** A commit as the stem and the agent name it to the owner (./one approve 202b3cf6c50e): the same letters here, so that one is found by the other. */
 const SHORT = 12;
 interface Action extends BarAction { items: () => MenuItem[] }
+/** How far back troubles are shown, and how many a menu lists. */
+const TROUBLE_DAY_MS = 24 * 3_600_000;
+const TROUBLES_LISTED = 8;
+/** What a menu item that opens a trouble carries in place of a command. */
+const TROUBLE = 'trouble:';
 const PENDING_SHOWN = 12;
 /** How many lines of a held-back turn of the agent's own are shown while it goes on. */
 const OWN_SHOWN = 4;
@@ -500,6 +506,8 @@ export class TalkScreen {
     try {
       this.standing = stand(this.standing, e);
     } catch { /* an event of a shape nobody foresaw changes nothing */ }
+    // Something failed in the agent's own working just now: the footer says so at once, not at its next reading of the journal.
+    if (live && e.type === 'note' && e.kind === TROUBLE_KIND) { this.memory.read = 0; this.dirty = true; }
     // A step ended: what was kept goes out now, and the agent reads it with its next one.
     if (live && ['assistant', 'tool.result', 'turn.interrupted', 'generation.ready'].includes(e.type)) this.sendQueued();
   }
@@ -512,6 +520,9 @@ export class TalkScreen {
 
   /** How the agent's memory stands, for the status line, and when that was last worked out: the whole journal is read for it, so not often. */
   private memory: { read: number; badge: string; waits: string } = { read: 0, badge: '', waits: '' };
+  /** What failed in the agent's own working in the last day (brain/trouble.ts), read with the memory's badge; and the newest of it the owner has looked at. */
+  private troubled: Trouble[] = [];
+  private troubleSeen = '';
 
   /** The memory's segments of the status line: how it stands, and how much the agent holds that waits for the owner's word. */
   private memoryBadges(now: number): [string, string] {
@@ -519,7 +530,10 @@ export class TalkScreen {
     let badge = '';
     let waits = '';
     try {
-      const events = standing(readEvents(this.o.paths.journal));
+      const all = readEvents(this.o.paths.journal);
+      // First, and of everything the journal holds, not only the conversation that stands: a trouble is a record, and is shown whatever else cannot be worked out.
+      this.troubled = troubles(all, now - TROUBLE_DAY_MS);
+      const events = standing(all);
       badge = healthBadge(health(events, now)) || 'memory well · exam pending';
       const count = known(events).intentions.filter((i) => i.waits && i.to === undefined).length;
       waits = count === 0 ? '' : `${count} for you`;
@@ -780,6 +794,19 @@ export class TalkScreen {
           { name: 'help', about: 'the keys and commands', run: '/help' },
         ],
       },
+      // Only when something failed in the agent's own working in the last day: each trouble, to be read in full.
+      ...((): Action[] => {
+        const all = this.troubled;
+        if (all.length === 0) return [];
+        const fresh = all.filter((t) => t.last > this.troubleSeen).length;
+        return [{
+          label: 'trouble', icon: 'trouble', tone: 'amber', hot: fresh > 0, note: fresh > 0 ? `${fresh} new` : `${all.length} in a day`,
+          items: (): MenuItem[] => [
+            ...all.slice(0, TROUBLES_LISTED).map((t, i) => ({ name: `${t.where}${t.times > 1 ? ` ×${t.times}` : ''}`, about: `${t.last.slice(11, 16)} UTC  ${t.text.split('\n')[0]!.slice(0, 160)}`, run: `${TROUBLE} ${i + 1}` })),
+            { name: 'all of them', about: `the ${all.length} in the last day, each in full`, run: TROUBLE },
+          ],
+        }];
+      })(),
       // Only while something runs: what the agent started and left, a command in the background or a subagent, so that "the tests are running" can be seen here.
       ...((): Action[] => {
         const subagents = this.standing.subagents;
@@ -797,11 +824,28 @@ export class TalkScreen {
     ];
   }
 
+  /** Pages what failed in the agent's own working in the last day: all of it, or the one numbered. */
+  private trouble(arg: string): void {
+    const all = this.troubled;
+    if (all.length === 0) return this.say('Nothing failed in the agent\'s own working in the last day.');
+    const one = /^\d+$/.test(arg.trim()) ? all[Number(arg.trim()) - 1] : undefined;
+    if (arg.trim() !== '' && one === undefined) return this.say(`There are ${all.length} of them.`);
+    // Looked at: what the action says is new is what came after this.
+    this.troubleSeen = all[0]!.last;
+    const told = (t: Trouble): string[] => [
+      `${t.where}: ${t.times === 1 ? `once, ${t.last.slice(0, 16).replace('T', ' ')} UTC` : `${t.times} times, from ${t.first.slice(0, 16).replace('T', ' ')} to ${t.last.slice(0, 16).replace('T', ' ')} UTC`}`,
+      ...t.text.split('\n').map((line) => `    ${line}`),
+    ];
+    return this.page(one !== undefined ? `trouble: ${one.where}` : `what failed in the last day (${all.length})`, (one !== undefined ? [one] : all).flatMap((t, i) => [...(i > 0 ? [''] : []), ...told(t)]));
+  }
+
   /** Runs a menu's item as the command line it stands for. */
   private choose(item: MenuItem): void {
     this.menu = null;
     this.bar = null;
     if (item.run === null) return;
+    // What failed is opened from its action alone: it is not a command to type, and stands in no list of them.
+    if (item.run.startsWith(TROUBLE)) return this.trouble(item.run.slice(TROUBLE.length).trim());
     const line = entered(item.run);
     if (line.kind === 'command') this.command(line.command.name, line.arg);
   }
@@ -1343,6 +1387,8 @@ export class TalkScreen {
     // While the list of commands is open, Esc closes that and interrupts nothing, so the line does not say it would.
     const offered = this.offered();
     let list: Offered | null = null;
+    // Read first what the journal says of the memory and of what failed: an action below is made from it.
+    this.memoryBadges(now);
     const actions = this.actions();
     // The last action is there only while a job runs; when it goes, so does a choice of it.
     if (this.bar !== null && this.bar >= actions.length) { this.bar = null; this.menu = null; }

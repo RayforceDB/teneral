@@ -137,6 +137,39 @@ function arrivedSince(events: JournalEvent[], shown: number, past?: Past): boole
  * arrived ends the turn as 'done', and a mutation already requested stays requested.
  */
 /**
+ * The arguments of a call, with what a model wrote in the wrong shape put right where it can only
+ * mean one thing: text that is JSON where the tool takes an object, a list, a number or a yes or
+ * no, and a number or a yes or no where it takes text. Models do this now and then, and refusing
+ * the call costs a round to be told what was plainly meant. Nothing else is touched: a value that
+ * fits is left as it is, and one that cannot be read as what is asked for is left for the tool to refuse.
+ * The journal keeps the call as it was made.
+ */
+export function mended(parameters: unknown, args: unknown): unknown {
+  const properties = (parameters as { properties?: Record<string, { type?: unknown }> } | null | undefined)?.properties;
+  if (typeof args !== 'object' || args === null || Array.isArray(args) || typeof properties !== 'object' || properties === null) return args;
+  const fits = (type: unknown, value: unknown): boolean =>
+    type === 'object' ? typeof value === 'object' && value !== null && !Array.isArray(value)
+      : type === 'array' ? Array.isArray(value)
+      : type === 'number' ? typeof value === 'number' && Number.isFinite(value)
+      : type === 'integer' ? Number.isInteger(value)
+      : type === 'boolean' ? typeof value === 'boolean' : false;
+  let out: Record<string, unknown> | null = null;
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    const type = properties[key]?.type;
+    let now = value;
+    if (type === 'string' && (typeof value === 'number' || typeof value === 'boolean')) now = String(value);
+    else if (typeof value === 'string' && typeof type === 'string' && type !== 'string') {
+      try {
+        const read: unknown = JSON.parse(value);
+        if (fits(type, read)) now = read;
+      } catch { /* not JSON: the tool says what it wanted */ }
+    }
+    if (now !== value) (out ??= { ...(args as Record<string, unknown>) })[key] = now;
+  }
+  return out ?? args;
+}
+
+/**
  * A tool call that cannot do anything: a shell asked to run nothing, `true`, `:` or `exit 0`. A model
  * that has decided to stop but keeps emitting such calls never ends its turn (it did, for hours, on a
  * clock tick, each call costing a full request). Such a call is not run; its result says how a turn ends.
@@ -353,7 +386,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         const tool = d.tools.find((t) => t.spec.name === call.name);
         if (!tool) throw new Error(`unknown tool: ${call.name}`);
         // The tools are the agent's to rewrite; whatever one returns, the journal holds text.
-        const running = tool.run(call.args, d.ctx, d.signal);
+        const running = tool.run(mended(tool.spec.parameters, call.args), d.ctx, d.signal);
         const result = wait ? await Promise.race([running, wait.gone]) : await running;
         if (result === LEFT) {
           // A tool that ignores the signal must not hold an interrupted turn. What it later returns or throws is nobody's.
@@ -363,7 +396,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         if (d.signal?.aborted && result !== LEFT && tool.idempotent) {
           // Only a tool that explicitly promises this may be repeated. The owner still stops the turn;
           // the retry just completes a read whose first attempt was cut short, with no signal attached.
-          output = String(await tool.run(call.args, d.ctx));
+          output = String(await tool.run(mended(tool.spec.parameters, call.args), d.ctx));
         }
       } catch (err) {
         ok = false;

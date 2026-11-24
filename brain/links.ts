@@ -24,7 +24,19 @@ import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered, type Remembered 
 /** One earlier memory is outdated: `memory` and `by` name two remembered stretches by the ids of their first events, `why` says what no longer holds. */
 export const OUTDATED_KIND = 'memory.outdated.v1';
 /** `by`: the stretch whose memory outdates it, when that was said in forming a memory; absent when the agent said so itself, with its tool, and then the note is what outdates. */
-export interface OutdatedData { memory: string; by?: string; why: string }
+export interface OutdatedData {
+  memory: string; by?: string;
+  /** What the memory says that no longer holds. */
+  why: string;
+  /** What holds instead, said as a true statement of its own: a memory found again later must give what is so, not only that it was wrong. */
+  now?: string;
+}
+/** What is shown of an outdating: what no longer holds, and what holds instead where that was said. */
+export const whyOf = (d: { why?: unknown; now?: unknown }): string => {
+  const why = typeof d.why === 'string' ? d.why.trim().slice(0, WHY_CHARS) : '';
+  const now = typeof d.now === 'string' ? d.now.trim().slice(0, WHY_CHARS) : '';
+  return now === '' ? why : `${why === '' ? '' : `${why.replace(/[.\s]+$/, '')}. `}What holds instead: ${now}`;
+};
 
 /** The kinds of notes the ties are made from: what has to be read to make them. */
 export const LINK_NOTES = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, FACT_KIND, OUTDATED_KIND, WITHDRAW_KIND] as const;
@@ -58,13 +70,13 @@ export function links(events: JournalEvent[], told: Remembered = remembered(even
       const old = typeof d.memory === 'string' ? told.memories.get(d.memory) : undefined;
       if (old !== undefined && d.by === undefined) {
         // Said by the agent itself, at any time (the tool `outdated`): the note is the later end, and holds from when it was written.
-        add({ from: e.id, to: old.id, kind: 'outdates', why: typeof d.why === 'string' ? d.why.trim().slice(0, WHY_CHARS) : '', since: e.ts });
+        add({ from: e.id, to: old.id, kind: 'outdates', why: whyOf(d), since: e.ts });
         continue;
       }
       const by = typeof d.by === 'string' ? told.memories.get(d.by) : undefined;
       // Only what came later can outdate: a tie the other way would say that the past was changed by what it did not know.
       if (old === undefined || by === undefined || !(by.start > old.start)) continue;
-      add({ from: by.id, to: old.id, kind: 'outdates', why: typeof d.why === 'string' ? d.why.trim().slice(0, WHY_CHARS) : '' });
+      add({ from: by.id, to: old.id, kind: 'outdates', why: whyOf(d) });
     } else if (e.kind === FACT_KIND && facts.has(e.id) && Array.isArray(d.replaces)) {
       for (const replaced of d.replaces) if (typeof replaced === 'string' && facts.has(replaced)) add({ from: e.id, to: replaced, kind: 'replaces' });
     }

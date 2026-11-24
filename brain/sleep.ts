@@ -5,7 +5,8 @@ import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type 
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
 import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
-import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, named, type EntityKind } from './entities-table';
+import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, keyOf, named, type EntityKind } from './entities-table';
+import { IDENTITY_KIND, judge, nearest as nearestHeld, type Held } from './identity';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
@@ -186,11 +187,12 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'as someone would who remembers what it was about and not how it was said. After => copy exactly the first six words or so of the one message in this stretch that holds the answer. '
     + 'They are kept to test, later, whether you can still find what you knew.',
     ...(earlier.length === 0 ? [] : [
-      'Outdated:\n- M1a2b3c4 <what it says that no longer holds>\n'
+      'Outdated:\n- M1a2b3c4 <what it says that no longer holds> => <what holds instead>\n'
       + 'A memory says what was so when it was formed, and you will find it again long after. These earlier memories of yours may be about the same things as this stretch:\n'
       + earlier.map((m) => `${m.mark} (${when(m.start)}) ${m.title}: ${m.text.replace(/\s+/g, ' ').slice(0, EARLIER_CHARS)}`).join('\n')
       + '\nName one of them here only when this stretch shows that something it says no longer holds: what it left open is now done, what it planned was changed, '
-      + 'a state, a place or a number it gives is now another. Say in a few words what no longer holds and what holds instead. '
+      + 'a state, a place or a number it gives is now another. Say in a few words what no longer holds, and after => what holds instead, as a true statement that can be understood on its own: '
+      + 'whoever finds the old memory must be given what is so, not only that it was wrong. '
       + 'A memory that is only about the same thing is not outdated, and most stretches outdate none.',
     ]),
   ].join('\n\n');
@@ -247,7 +249,7 @@ export interface Formed {
   /** Questions this stretch answers, each with the beginning of the message that answers it. */
   questions: { question: string; begins: string }[];
   /** Earlier memories this stretch made outdated: the mark each was shown with, and what no longer holds. */
-  outdated: { mark: string; why: string }[];
+  outdated: { mark: string; why: string; now?: string }[];
   /** Facts already held that this stretch showed to hold still: the mark of each. */
   confirmed: string[];
   /** Whom and what this stretch was about: people, projects, repositories, each by name. */
@@ -301,7 +303,9 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
       if (m && m[1]!.trim().length >= 8 && m[2]!.trim().length >= 4) found.questions.push({ question: m[1]!.trim(), begins: m[2]!.trim().replace(/^["'«“]+|["'»”…. ]+$/g, '') });
     } else if (list === 'outdated' && found.outdated.length < EARLIER_MAX) {
       const m = OUTDATED_LINE.exec(item);
-      if (m && m[2]!.trim().length >= 8) found.outdated.push({ mark: m[1]!, why: m[2]!.trim() });
+      const [why, ...rest] = (m?.[2] ?? '').split('=>');
+      const now = rest.join('=>').trim();
+      if (m && why!.trim().length >= 8) found.outdated.push({ mark: m[1]!, why: why!.trim(), ...(now.length >= 8 ? { now } : {}) });
     } else if (list === 'about' && found.about.length < LIST_MAX) {
       const m = ABOUT_LINE.exec(item);
       const kind = ENTITY_KINDS.find((one) => one === m?.[1]?.toLowerCase());
@@ -493,21 +497,43 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
       const { facts, intentions, done, questions, outdated, confirmed, about, ...kept } = memory;
+      // Whether what this stretch gave is something already held is decided apart, by a request that never sees the stretch
+      // (brain/identity.ts), before anything is written: should the agent be woken meanwhile, the memory is formed another time.
+      const held = read.knownAsOf(episode);
+      const heldFacts: Held[] = held.facts.map((f) => ({ mark: f.mark, text: f.text }));
+      const things = (d.asked?.entities() ?? []).filter((one) => one.kind !== 'person').map((one, i) => ({ mark: `E${i + 1}`, text: `[${one.kind}] ${one.name}`, kind: one.kind, name: one.name }));
+      const items = [
+        // A fact that names the one it replaces has said what it is.
+        ...facts.map((fact) => ({ text: fact.text, near: fact.replaces.length > 0 ? [] : nearestHeld(fact.text, heldFacts) })),
+        // A person is a contact, by the owner's word: only what is named by a name alone is weighed here, and only against its own kind.
+        ...about.map((one) => {
+          const same = things.filter((thing) => thing.kind === one.kind);
+          const known = one.kind === 'person' || same.some((thing) => keyOf(thing.name) === keyOf(one.name));
+          return { text: `[${one.kind}] ${one.name}`, near: known ? [] : nearestHeld(one.name, same.map((thing) => ({ mark: thing.mark, text: thing.name }))).map((n) => ({ mark: n.mark, text: `[${one.kind}] ${n.text}` })) };
+        }),
+      ];
+      const judged = await judge(d.provider, 'things an agent holds: facts about its world, and the names of projects and repositories it works with', items, d.signal);
+      if (d.signal?.aborted) return 'woken';
+      const [ofFacts, ofAbout] = [judged.verdicts.slice(0, facts.length), judged.verdicts.slice(facts.length)];
       put(d, {
         type: 'note', kind: EPISODE_KIND,
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
       });
       // A fact may name the one it replaces only by a mark it was shown: a mark that names nothing, or an intention, replaces nothing.
-      const held = read.knownAsOf(episode);
-      for (const fact of facts) {
-        const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
+      const again = new Set<string>();
+      for (const [i, fact] of facts.entries()) {
+        const verdict = ofFacts[i]!;
+        const other = verdict.is === 'new' ? undefined : held.facts.find((f) => f.mark === verdict.mark);
+        // Said again in other words: it is not set down twice. The one held was seen to hold, by this stretch.
+        if (verdict.is === 'same' && other !== undefined) { again.add(other.mark); continue; }
+        const replaces = [...fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id), ...(verdict.is === 'replaces' && other !== undefined ? [other.id] : [])];
         put(d, {
           type: 'note', kind: FACT_KIND,
           data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }) } satisfies FactData,
         });
       }
       // A fact this stretch showed to hold still is known to hold as of now: only one held then, named by the mark it was shown with.
-      for (const mark of new Set(confirmed)) {
+      for (const mark of new Set([...confirmed, ...again])) {
         const fact = byMark(held, mark);
         if (fact !== null && held.facts.some((f) => f.id === fact.id)) put(d, { type: 'note', kind: CONFIRMED_KIND, data: { fact: fact.id, episode: episode.first } });
       }
@@ -523,10 +549,18 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       // Only a memory that was shown, named by the mark it was shown with, can be said to be outdated.
       for (const said of outdated) {
         const old = near.find((one) => one.mark === said.mark);
-        if (old !== undefined) put(d, { type: 'note', kind: OUTDATED_KIND, data: { memory: old.from, by: episode.first, why: said.why.slice(0, WHY_CHARS) } satisfies OutdatedData });
+        if (old !== undefined) put(d, { type: 'note', kind: OUTDATED_KIND, data: { memory: old.from, by: episode.first, why: said.why.slice(0, WHY_CHARS), ...(said.now === undefined ? {} : { now: said.now.slice(0, WHY_CHARS) }) } satisfies OutdatedData });
       }
       // Whom and what the stretch was about: a node each in the graph of the agent's life, tied to this stretch (brain/entities-table.ts).
-      for (const one of about) put(d, { type: 'note', kind: ENTITY_KIND, data: { kind: one.kind, name: one.name, ...(one.who === undefined ? {} : { who: one.who }), episode: episode.first } });
+      for (const [i, named] of about.entries()) {
+        // A project or repository called by a slightly different name is the node it already is: it is set down by the name it has.
+        const verdict = ofAbout[i]!;
+        const one = verdict.is === 'same' ? { ...named, name: things.find((thing) => thing.mark === verdict.mark)?.name ?? named.name } : named;
+        put(d, { type: 'note', kind: ENTITY_KIND, data: { kind: one.kind, name: one.name, ...(one.who === undefined ? {} : { who: one.who }), episode: episode.first } });
+      }
+      if (judged.asked > 0) {
+        put(d, { type: 'note', kind: IDENTITY_KIND, data: { episode: episode.first, asked: judged.asked, same: judged.verdicts.filter((v) => v.is === 'same').length, replaced: judged.verdicts.filter((v) => v.is === 'replaces').length, ...(judged.usage ? { usage: judged.usage } : {}) } });
+      }
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);
         if (answer !== null) put(d, { type: 'note', kind: EXAM_KIND, data: { question: asked.question, events: [answer.id], episode: episode.first } });

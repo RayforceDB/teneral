@@ -17,7 +17,8 @@ import { interrupt, tell } from '../../keeper/owner';
 
 const ROOT = join(import.meta.dir, '..', '..');
 // A fresh journal seeds the built-in skill (register, verify, enable) before ready.
-const READY = ['note', 'note', 'note', 'generation.ready'];
+// Each of the two skills the body comes with is registered, verified and enabled at its first start.
+const READY = ['note', 'note', 'note', 'note', 'note', 'note', 'generation.ready'];
 
 interface Asked { messages: { role: string; content: unknown }[]; aborted: boolean }
 type Answer = (n: number, asked: Asked) => Response | Promise<Response>;
@@ -478,7 +479,8 @@ test('interrupted while it waits to try a failed turn again: the turn is given u
   expect(needsTurn(l.events())).toBe(true);
   interrupt(l.owner);
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
-  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'turn.interrupted']);
+  // The failed turn is also set down as a trouble of the body's own working (brain/trouble.ts).
+  expect(l.types()).toEqual([...READY, 'stimulus', 'note', 'note', 'note', 'turn.interrupted']);
   expect(needsTurn(l.events())).toBe(false);
   await Bun.sleep(500);
   expect(l.asked).toHaveLength(1);

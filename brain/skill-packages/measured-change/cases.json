@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "cases": [
+    { "id": "a-number-with-nothing-beside-it", "compared": "nothing", "path": "checked", "told": "held-out", "elsewhere": "no-worse", "moved": "better", "expected": "not-measured" },
+    { "id": "yesterdays-score-on-another-journal", "compared": "other-data", "path": "checked", "told": "held-out", "elsewhere": "no-worse", "moved": "better", "expected": "not-comparable" },
+    { "id": "the-database-was-never-asked", "compared": "same-copy", "path": "assumed", "told": "held-out", "elsewhere": "no-worse", "moved": "better", "expected": "check-what-ran" },
+    { "id": "keys-finding-their-own-questions", "compared": "same-copy", "path": "checked", "told": "told-the-answer", "elsewhere": "no-worse", "moved": "better", "expected": "measures-the-mechanism" },
+    { "id": "held-out-fell", "compared": "same-copy", "path": "checked", "told": "held-out", "elsewhere": "no-worse", "moved": "worse", "expected": "do-not-keep" },
+    { "id": "gain-here-loss-there", "compared": "same-copy", "path": "checked", "told": "held-out", "elsewhere": "worse", "moved": "better", "expected": "do-not-keep" },
+    { "id": "only-the-target-was-looked-at", "compared": "same-copy", "path": "checked", "told": "held-out", "elsewhere": "not-looked", "moved": "better", "expected": "look-for-harm" },
+    { "id": "nothing-moved", "compared": "same-copy", "path": "checked", "told": "held-out", "elsewhere": "no-worse", "moved": "same", "expected": "say-it-changes-nothing" },
+    { "id": "better-and-harmless", "compared": "same-copy", "path": "checked", "told": "held-out", "elsewhere": "no-worse", "moved": "better", "expected": "claim-with-the-figures" }
+  ]
+}

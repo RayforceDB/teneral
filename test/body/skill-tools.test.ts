@@ -119,3 +119,24 @@ test('path containment and outcome inputs are enforced', async () => {
   const hash = await register(ctx);
   await expect(tool('skill_outcome').run({ hash, run: 'x', outcome: 'miracle', detail: 'not evidence' }, ctx)).rejects.toThrow();
 });
+
+test('how to measure a change comes with the body: it verifies, is enabled, and is offered when the agent speaks of measuring its memory', async () => {
+  const { seedBuiltIn, BUILT_IN, offerFor } = await import('../../body/skill-tools');
+  const ctx = context();
+  seedBuiltIn(ctx);
+  const ops = readEvents(ctx.journal).map((e) => (e.type === 'note' ? `${(e.data as { id?: string }).id}:${(e.data as { op?: string }).op}${(e.data as { status?: string }).status ? `=${(e.data as { status?: string }).status}` : ''}` : ''));
+  for (const id of BUILT_IN) expect(ops.filter((op) => op.startsWith(`${id}:`))).toEqual([`${id}:register`, `${id}:verify=pass`, `${id}:enable`]);
+  // Seeded once: a second start writes nothing.
+  seedBuiltIn(ctx);
+  expect(readEvents(ctx.journal)).toHaveLength(ops.length);
+  const state = skillState(readEvents(ctx.journal), ctx.journal);
+  for (const said of ['I want to measure whether my change of recall helps: the exam score before and after', 'the gate says the candidate remembers worse than the running generation']) {
+    const chosen = selectSkill(state, said, ctx.toolNames!, ctx.gen);
+    expect(chosen.status).toBe('selected');
+    expect(chosen.skill?.manifest.id).toBe('measured-change');
+  }
+  expect(offerFor(ctx, 'does this mutation of the memory improve recall? I will benchmark it on the journal')?.id).toBe('measured-change');
+  // And it does not crowd out the other one.
+  const lost = selectSkill(state, 'the push may have completed: request timeout, connection reset, uncertain receipt', ctx.toolNames!, ctx.gen);
+  expect(lost.skill?.manifest.id).toBe('lost-response-recovery');
+});

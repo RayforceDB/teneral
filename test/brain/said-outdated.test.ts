@@ -35,24 +35,27 @@ test('the agent can say at any time that a memory no longer holds: it is kept, a
   const { stretches, notes, events } = life();
   const ctx = context(events);
   // By the event its stretch begins at, as a found memory names it.
-  expect(await outdated.run({ memory: stretches[1]![0]!.id, why: 'the staging host is beta since the move' }, ctx)).toBe('Marked as outdated: "Thing 1". It is kept, and shown as outdated from now on.');
-  await expect(outdated.run({ memory: 'nothing-of-mine', why: 'it changed since then' }, ctx)).rejects.toThrow('no memory of yours');
-  await expect(outdated.run({ memory: stretches[0]![0]!.id, why: 'no' }, ctx)).rejects.toThrow('what no longer holds');
+  expect(await outdated.run({ memory: stretches[1]![0]!.id, why: 'it says the staging host is alpha', now: 'The staging host is beta since the move' }, ctx)).toBe('Marked as outdated: "Thing 1". It is kept, and shown as outdated from now on.');
+  await expect(outdated.run({ memory: 'nothing-of-mine', why: 'it changed since then', now: 'It is otherwise now' }, ctx)).rejects.toThrow('no memory of yours');
+  await expect(outdated.run({ memory: stretches[0]![0]!.id, why: 'no', now: 'It is otherwise now' }, ctx)).rejects.toThrow('what no longer holds');
+  // That it was wrong is not enough: what holds instead is asked for, as a statement of its own.
+  await expect(outdated.run({ memory: stretches[0]![0]!.id, why: 'it says the host is alpha' }, ctx)).rejects.toThrow('missing string argument: now');
+  await expect(outdated.run({ memory: stretches[0]![0]!.id, why: 'it says the host is alpha', now: 'beta' }, ctx)).rejects.toThrow('what holds instead');
   const now = readEvents(ctx.journal);
   const note = now.at(-1)!;
-  expect(note).toMatchObject({ type: 'note', kind: OUTDATED_KIND, data: { memory: stretches[1]![0]!.id, why: 'the staging host is beta since the move' } });
+  expect(note).toMatchObject({ type: 'note', kind: OUTDATED_KIND, data: { memory: stretches[1]![0]!.id, why: 'it says the staging host is alpha', now: 'The staging host is beta since the move' } });
   // The tie runs from the agent's own word to the memory, and holds from when it was said: no later memory is needed for it.
-  expect(links(now).filter((l) => l.kind === 'outdates')).toEqual([{ from: note.id, to: notes[1]!.id, kind: 'outdates', why: 'the staging host is beta since the move', since: note.ts }]);
-  expect([...outdatedStretches(now)]).toEqual([[stretches[1]![0]!.id, { why: 'the staging host is beta since the move', since: note.ts }]]);
+  expect(links(now).filter((l) => l.kind === 'outdates')).toEqual([{ from: note.id, to: notes[1]!.id, kind: 'outdates', why: 'it says the staging host is alpha. What holds instead: The staging host is beta since the move', since: note.ts }]);
+  expect([...outdatedStretches(now)]).toEqual([[stretches[1]![0]!.id, { why: 'it says the staging host is alpha. What holds instead: The staging host is beta since the move', since: note.ts }]]);
   // Where the memory is found, it says so; and in a request it stands with the same words.
-  expect(sinceLines(journalPast(ctx.journal), notes[1]!).join('\n')).toContain('the staging host is beta since the move (you said so yourself)');
+  expect(sinceLines(journalPast(ctx.journal), notes[1]!).join('\n')).toContain('What holds instead: The staging host is beta since the move (you said so yourself)');
   const request = buildMessages(now, 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content).join('\n');
-  expect(request).toContain('the staging host is beta since the move');
+  expect(request).toContain('What holds instead: The staging host is beta since the move');
   // Nothing was taken away: the memory is still told.
   expect(request).toContain('I was told thing 1.');
   expect(remembered(now).memories.size).toBe(3);
   // By its own id, too.
-  expect(await outdated.run({ memory: notes[2]!.id, why: 'the report goes out on Mondays now' }, ctx)).toContain('Thing 2');
+  expect(await outdated.run({ memory: notes[2]!.id, why: 'it says the report goes out on Fridays', now: 'The report goes out on Mondays' }, ctx)).toContain('Thing 2');
 });
 
 test('the exam asks whether the request itself leads to what a question asks: by a memory shown, a line of the contents, or the stretch as it happened', () => {
