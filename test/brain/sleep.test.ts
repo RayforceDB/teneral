@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
+import { known as knownIn } from '../../brain/known';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import { OUTDATED_KIND, outdatedStretches } from '../../brain/links';
 import { journalPast } from '../../brain/past';
@@ -268,4 +269,43 @@ test('a forming memory may say that a fact it was shown still holds: that is jou
   expect(notes.filter((e) => e.type === 'note' && e.kind === 'memory.fact.v1')).toHaveLength(2);
   // And the memory's own note holds nothing of the list.
   expect(JSON.stringify(notes.find((e) => e.type === 'note' && e.kind === EPISODE_KIND && (e.data as { from?: unknown }).from === fact.id))).not.toContain('confirmed');
+});
+
+test('whether a fact is one already held is decided apart, without the stretch: said again it is not set down twice, changed it replaces, and a different one is kept', async () => {
+  const told = said('the staging host is alpha and reports go to finance on Fridays', LONG);
+  const noted = replied('Noted both.');
+  const f1 = ev({ type: 'note', kind: 'memory.fact.v1', data: { text: 'The staging host is alpha', source: 'owner', episode: told.id } });
+  const f2 = ev({ type: 'note', kind: 'memory.fact.v1', data: { text: 'Reports go out to the finance team every Friday', source: 'owner', episode: told.id } });
+  const first = ev({ type: 'note', kind: EPISODE_KIND, data: { from: told.id, to: noted.id, start: told.ts, end: noted.ts, title: 'Two things', text: 'I was told two things.', outcome: 'done' } });
+  const again = said('deploy to staging, and send the report', LONG);
+  const did = replied('Deployed and sent.');
+  const now = said('thanks', LONG);
+  const mark = (e: JournalEvent) => `F${e.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+  const formed = `${MEMORY}\n\nFacts:\n- [seen] The staging deploy goes to the host alpha\n- [seen] The finance team now gets its reports every Monday\n- [seen] The deploy takes four minutes`;
+  const s = setup([told, noted, f1, f2, first, again, did, now], [answer(formed), answer(`1: same ${mark(f1)}\n2: replaces ${mark(f2)}`)]);
+  expect(await sleep(s.deps)).toBe('remembered');
+  // The second request was the judge's: no stretch in it, only the new things and the held ones near them.
+  expect(s.seen).toHaveLength(2);
+  expect(s.seen[1]!.map((m) => m.content).join('\n')).not.toContain('deploy to staging, and send the report');
+  expect(String(s.seen[1]![1]!.content)).toContain(`${mark(f1)}: The staging host is alpha`);
+  expect(String(s.seen[1]![1]!.content)).not.toContain('four minutes');
+  const notes = readEvents(s.journal).filter((e) => e.type === 'note') as (JournalEvent & { kind: string; data: Record<string, unknown> })[];
+  const facts = notes.filter((e) => e.kind === 'memory.fact.v1').slice(2).map((e) => e.data);
+  expect(facts.map((d) => d.text)).toEqual(['The finance team now gets its reports every Monday', 'The deploy takes four minutes']);
+  expect(facts[0]!.replaces).toEqual([f2.id]);
+  expect(facts[1]!.replaces).toBeUndefined();
+  // The one said again was seen to hold.
+  expect(notes.filter((e) => e.kind === 'memory.fact.confirmed.v1').map((e) => e.data.fact)).toEqual([f1.id]);
+  expect(notes.find((e) => e.kind === 'memory.identity.v1')!.data).toMatchObject({ asked: 2, same: 1, replaced: 1 });
+  expect(knownIn(readEvents(s.journal)).facts.map((f) => f.text).sort()).toEqual(['The deploy takes four minutes', 'The finance team now gets its reports every Monday', 'The staging host is alpha']);
+});
+
+test('when the judge cannot be asked, everything is kept as new: a memory is not lost for it', async () => {
+  const told = said('the staging host is alpha, remember it', LONG);
+  const noted = replied('Noted.');
+  const f1 = ev({ type: 'note', kind: 'memory.fact.v1', data: { text: 'The staging host is alpha', source: 'owner', episode: told.id } });
+  const first = ev({ type: 'note', kind: EPISODE_KIND, data: { from: told.id, to: noted.id, start: told.ts, end: noted.ts, title: 'One thing', text: 'I was told one thing.', outcome: 'done' } });
+  const s = setup([told, noted, f1, first, said('deploy to staging', LONG), replied('Done.'), said('thanks', LONG)], [answer(`${MEMORY}\n\nFacts:\n- [seen] The staging deploy goes to the host alpha`), new Error('the provider is down')]);
+  expect(await sleep(s.deps)).toBe('remembered');
+  expect(knownIn(readEvents(s.journal)).facts).toHaveLength(2);
 });

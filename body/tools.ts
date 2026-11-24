@@ -14,6 +14,7 @@ import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Enve
 import { git } from '../immune/gates';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
+import { nearest } from '../brain/identity';
 import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, named, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
 import { journalPast, shown, sinceLines, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
@@ -697,8 +698,11 @@ const know: Tool = {
       type: 'note', kind: FACT_KIND,
       data: { text, source, episode: from?.id ?? 'unknown', ...(about ? { about } : {}), ...(whom.who === '' ? {} : { who: whom.who }), ...(old === null ? {} : { replaces: [old.id] }) } satisfies FactData,
     });
+    // Whether it is one already held in other words is the agent's to say, here and now: it is shown the held facts nearest to it.
+    const near = old !== null ? [] : nearest(text, held.facts.map((f) => ({ mark: f.mark, text: f.text })), 3);
+    const alike = near.length === 0 ? '' : `\nYou already hold, close to it in words:\n${near.map((n) => `${n.mark} ${n.text}`).join('\n')}\nIf this one says how one of them stands now, \`know\` it again with \`replaces\`; if it only says one of them again, \`forget\` this one. If it is another thing, leave both.`;
     const apart = about && whom.who === '' ? ' You gave a name alone: it is kept as about that name, which several people may bear, and is tied to no one you know by an id. Say who they are, as Name (service:id), to tie it to them.' : '';
-    return `Kept as ${known([note]).facts[0]!.mark}${about ? `, about ${about}${whom.who === '' ? '' : ` (${whom.who})`}` : ''}${old === null ? '' : `, in place of ${old.mark}`}.${apart}`;
+    return `Kept as ${known([note]).facts[0]!.mark}${about ? `, about ${about}${whom.who === '' ? '' : ` (${whom.who})`}` : ''}${old === null ? '' : `, in place of ${old.mark}`}.${apart}${alike}`;
   },
 };
 
@@ -710,15 +714,18 @@ const outdated: Tool = {
       'Give the memory by the event its stretch begins at, as a found memory names it, and in a few words what no longer holds and what holds instead. ' +
       'The memory is kept, as everything is: from now on it is shown as outdated wherever it is found, with your words, and it is no longer brought back by itself. ' +
       'A memory that is only about the same thing as a newer one is not outdated.',
-    parameters: params({ memory: 'The event the memory\'s stretch begins at, or the memory\'s own id or mark', why: 'What it says that no longer holds, and what holds instead' }),
+    parameters: params({ memory: 'The event the memory\'s stretch begins at, or the memory\'s own id or mark', why: 'What it says that no longer holds', now: 'What holds instead: a true statement that can be understood on its own' }),
   },
   async run(args, ctx) {
     const named = str(args, 'memory').trim();
     const why = str(args, 'why').trim();
     if (why.length < 8) throw new Error('say in a few words what no longer holds');
+    // A memory found again must give what is so, not only that it was wrong: the correction is kept as a statement of its own.
+    const now = str(args, 'now').trim();
+    if (now.length < 8) throw new Error('say what holds instead, as a statement that can be understood on its own');
     const found = [...pastOf(ctx).remembered().memories.values()].find((m) => m.from === named || m.id === named || `M${m.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}` === named);
     if (found === undefined) throw new Error(`no memory of yours begins at, or is, ${named}: name it by the event its stretch begins at, as \`recall\` shows it`);
-    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: OUTDATED_KIND, data: { memory: found.from, why: why.slice(0, WHY_CHARS) } satisfies OutdatedData });
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: OUTDATED_KIND, data: { memory: found.from, why: why.slice(0, WHY_CHARS), now: now.slice(0, WHY_CHARS) } satisfies OutdatedData });
     return `Marked as outdated: "${found.title}". It is kept, and shown as outdated from now on.`;
   },
 };

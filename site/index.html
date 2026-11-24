@@ -136,6 +136,7 @@
   .life { margin: 40px 0 8px; overflow-x: auto; }
   .life svg { display: block; width: 100%; min-width: 620px; height: auto; color: var(--ink); }
   .life .soft { color: var(--soft); }
+  h3.built { margin: 46px 0 8px; font-size: 22px; letter-spacing: -.01em; }
   ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 30px 0 0; display: grid; gap: 14px; max-width: 70ch; }
   ol.steps li { counter-increment: s; position: relative; padding-left: 46px; color: var(--soft); }
   ol.steps li::before {
@@ -259,9 +260,9 @@
     <div class="wrap">
       <p class="eyebrow">Memory</p>
       <h2>It remembers its own life, and is examined on it.</h2>
-      <p>Most agents remember by cutting: when the conversation outgrows the model, the beginning goes. A teneral lives in episodes and forms a memory of each one once it is over, in its own words, while nothing else is asked of it. What is recent it sees word for word. What is older it sees as its own memories, briefer the further back they lie. Underneath both is the journal, which holds everything and is never rewritten, and which it can search and open at any point.</p>
+      <p>Most agents remember by cutting: when the conversation outgrows the model, the beginning goes. A teneral lives in episodes and forms a memory of each one once it is over, in its own words, while nothing else is asked of it. What is recent it sees word for word. What is older it sees as its own memories, briefer the further back they lie, and what no longer fits is still named, line by line, in a table of contents. Underneath both is the journal, which holds everything and is never rewritten, and which it can search and open at any point.</p>
 
-      <div class="life" role="img" aria-label="What an individual has in mind for one thought, from the oldest on the left to now on the right. Months ago: one memory stands for many episodes. Weeks ago: one memory for each episode. Then what it knows and means to do: facts with their sources, and open intentions. Then today, word for word. Under all of it runs the journal: every event, appended and never rewritten. Recall and open reach down into all of it.">
+      <div class="life" role="img" aria-label="What an individual has in mind for one thought, from the oldest on the left to now on the right. Months ago: one memory stands for many episodes. Weeks ago: one memory for each episode. Then what it knows and means to do: facts with their sources, and open intentions. Then today, word for word. Under all of it runs the journal: every event, appended and never rewritten. Recall, open, timeline and about reach down into all of it.">
         <svg viewBox="0 0 880 300" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
           <g font-size="12.5" fill="currentColor" stroke="none" opacity=".62" text-anchor="middle">
             <text x="115" y="150">one memory for many episodes</text>
@@ -270,7 +271,7 @@
             <text x="512" y="168">and what it means to do</text>
             <text x="725" y="150">as it happened</text>
             <text x="225" y="36">the further back, the briefer</text>
-            <text x="440" y="288">recall and open reach all of it, in about a millisecond</text>
+            <text x="440" y="288">recall, open, timeline and about reach all of it</text>
           </g>
           <g font-size="14" fill="currentColor" stroke="none" text-anchor="middle">
             <text x="115" y="64">months ago</text>
@@ -291,6 +292,81 @@
         </svg>
       </div>
 
+
+      <h3 class="built">How it is built</h3>
+      <p>One thing is written and everything else is made from it. The journal is the record; the database is the journal laid out so that it can be asked, and can be made again from the journal at any time. A thought, a look back and the exam all ask the database, and what the agent forms while idle goes into the journal like everything else.</p>
+
+      <div class="life" role="img" aria-label="How the memory is built, from top to bottom. First the journal: every event, appended and never rewritten. From it the database, RayforceDB, is made, and can be made again at any time: the events and their words, a memory of each stretch, what is known, the ties between memories and between facts, a graph of people and projects, and the agent's own questions as keys. Three things ask the database. A thought: a table of contents of the oldest memories, then memories, then what it knows, then today word for word. Looking back: recall, open, timeline and about. The exam: one question in four is held out of the index, and a change to the memory must find those no worse. Below, what happens while idle: the agent forms a memory of each stretch, names the facts, people and projects in it, says what no longer holds and sets a question; all of that is written to the journal.">
+        <svg viewBox="-34 0 948 528" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
+          <!-- the journal -->
+          <text x="440" y="24" font-size="14" text-anchor="middle" stroke="none" fill="currentColor">the journal</text>
+          <path d="M20 44 H860" stroke-width="5"/>
+          <g opacity=".5"><path d="M92 36 v16M188 36 v16M300 36 v16M392 36 v16M520 36 v16M604 36 v16M716 36 v16M800 36 v16"/></g>
+          <text x="440" y="70" font-size="12.5" text-anchor="middle" stroke="none" fill="currentColor" opacity=".62">every event, appended and never rewritten: what was said, what was done, and every note the agent wrote of it</text>
+          <path d="M440 82 V104"/><path d="M434 97 l6 8 6 -8"/>
+          <text x="454" y="97" font-size="12.5" stroke="none" fill="currentColor" opacity=".62">laid out to be asked, and made again from the journal at any time</text>
+
+          <!-- the database -->
+          <rect x="20" y="112" width="840" height="124" rx="16" stroke-dasharray="5 6"/>
+          <text x="40" y="136" font-size="14" stroke="none" fill="currentColor">the database</text>
+          <text x="146" y="136" font-size="12.5" stroke="none" fill="currentColor" opacity=".62">RayforceDB: tables and graphs, asked with queries</text>
+          <g>
+            <rect x="38" y="150" width="124" height="68" rx="12"/><rect x="174" y="150" width="124" height="68" rx="12"/><rect x="310" y="150" width="124" height="68" rx="12"/>
+            <rect x="446" y="150" width="124" height="68" rx="12"/><rect x="582" y="150" width="124" height="68" rx="12"/><rect x="718" y="150" width="124" height="68" rx="12"/>
+          </g>
+          <g font-size="13.5" text-anchor="middle" stroke="none" fill="currentColor">
+            <text x="100" y="186">events</text><text x="236" y="186">memories</text><text x="372" y="186">what is known</text>
+            <text x="508" y="186">ties</text><text x="644" y="186">who and what</text><text x="780" y="186">keys</text>
+          </g>
+          <g font-size="11.5" text-anchor="middle" stroke="none" fill="currentColor" opacity=".62">
+            <text x="100" y="204">by their words</text><text x="236" y="204">of each stretch</text><text x="372" y="204">facts, intentions</text>
+            <text x="508" y="204">replaced, outdated</text><text x="644" y="204">people, projects</text><text x="780" y="204">its questions</text>
+          </g>
+          <!-- two of them are graphs -->
+          <g stroke-width="1.2" opacity=".7">
+            <path d="M456 158 l8 5 -6 5"/><circle cx="456" cy="158" r="2.2" fill="currentColor"/><circle cx="464" cy="163" r="2.2" fill="currentColor"/><circle cx="458" cy="168" r="2.2" fill="currentColor"/>
+            <path d="M592 158 l8 5 -6 5"/><circle cx="592" cy="158" r="2.2" fill="currentColor"/><circle cx="600" cy="163" r="2.2" fill="currentColor"/><circle cx="594" cy="168" r="2.2" fill="currentColor"/>
+          </g>
+
+          <!-- who asks -->
+          <path d="M150 236 V264M440 236 V264M730 236 V264"/><path d="M144 257 l6 8 6 -8M434 257 l6 8 6 -8M724 257 l6 8 6 -8"/>
+          <rect x="20" y="272" width="260" height="132" rx="16"/><rect x="310" y="272" width="260" height="132" rx="16"/><rect x="600" y="272" width="260" height="132" rx="16"/>
+          <g font-size="14" stroke="none" fill="currentColor">
+            <text x="38" y="298">a thought</text><text x="328" y="298">looking back</text><text x="618" y="298">the exam</text>
+          </g>
+          <!-- a thought: contents, memories, what it knows, today -->
+          <rect x="38" y="310" width="46" height="22" rx="7" stroke-dasharray="3 4"/><rect x="90" y="310" width="46" height="22" rx="7"/><rect x="142" y="310" width="46" height="22" rx="7" stroke-dasharray="5 6"/><rect x="194" y="310" width="68" height="22" rx="7" fill="currentColor"/>
+          <!-- looking back: four tools -->
+          <g>
+            <rect x="328" y="310" width="52" height="22" rx="11"/><rect x="386" y="310" width="46" height="22" rx="11"/><rect x="438" y="310" width="62" height="22" rx="11"/><rect x="506" y="310" width="50" height="22" rx="11"/>
+          </g>
+          <g font-size="11.5" text-anchor="middle" stroke="none" fill="currentColor">
+            <text x="354" y="325">recall</text><text x="409" y="325">open</text><text x="469" y="325">timeline</text><text x="531" y="325">about</text>
+          </g>
+          <!-- the exam: one in four held out -->
+          <g>
+            <rect x="618" y="310" width="22" height="22" rx="6" fill="currentColor"/><rect x="646" y="310" width="22" height="22" rx="6" fill="currentColor"/><rect x="674" y="310" width="22" height="22" rx="6" fill="currentColor"/>
+            <rect x="702" y="310" width="22" height="22" rx="6" style="stroke:var(--accent)" stroke-width="2"/>
+          </g>
+          <text x="734" y="325" font-size="11.5" stroke="none" style="fill:var(--accent)">held out</text>
+          <g font-size="12.5" stroke="none" fill="currentColor" opacity=".62">
+            <text x="38" y="356">a table of contents of the oldest,</text><text x="38" y="373">then memories, what it knows,</text><text x="38" y="390">and today, word for word</text>
+            <text x="328" y="356">found by its words, or by a question</text><text x="328" y="373">once written of it; any stretch</text><text x="328" y="390">opened as it happened</text>
+            <text x="618" y="356">one question in four is kept from</text><text x="618" y="373">the index; a change to the memory</text><text x="618" y="390">must find those no worse</text>
+          </g>
+
+          <!-- while idle -->
+          <rect x="20" y="430" width="840" height="60" rx="16"/>
+          <text x="40" y="455" font-size="14" stroke="none" fill="currentColor">while idle</text>
+          <g font-size="12.5" stroke="none" fill="currentColor" opacity=".62">
+            <text x="116" y="455">it forms a memory of each stretch, names the facts, people and projects in it,</text>
+            <text x="116" y="473">says what no longer holds and what holds instead, and sets a question the stretch answers</text>
+          </g>
+          <path d="M20 460 H-16 V44 H10" style="stroke:var(--accent)" stroke-width="2"/><path d="M3 38 l8 6 -8 6" style="stroke:var(--accent)" stroke-width="2"/>
+          <text x="440" y="514" font-size="12.5" text-anchor="middle" stroke="none" style="fill:var(--accent)">all of it is written to the journal, like everything else</text>
+        </svg>
+      </div>
+
       <div class="two">
         <div class="card">
           <h3>It lives in episodes</h3>
@@ -302,7 +378,15 @@
         </div>
         <div class="card">
           <h3>It knows what holds now</h3>
-          <p>A fact is never changed: a later one names the fact it replaces. Each says where it comes from, so what stood on a web page is never taken for its owner's word.</p>
+          <p>A fact is never changed: a later one names the fact it replaces, and a memory that stopped holding is marked, with what holds instead. Whether a new fact is one already held is judged apart, by a request that never sees where it came from.</p>
+        </div>
+        <div class="card">
+          <h3>It knows who is who</h3>
+          <p>People, projects and repositories are a graph tied to the stretches about them. A person is not a name and not an account: five people may be called Anton, and one is in two services. Accounts are joined only on the owner's word; the agent may suppose, and asks.</p>
+        </div>
+        <div class="card">
+          <h3>Nothing is out of sight</h3>
+          <p>Every memory names the event its stretch begins at. Memories that no longer fit a thought are listed in a table of contents, a line each, so the agent knows what it has and where to open it.</p>
         </div>
         <div class="card">
           <h3>It keeps an agenda</h3>
@@ -314,11 +398,11 @@
         </div>
         <div class="card">
           <h3>It sits an exam it wrote</h3>
-          <p>With each memory it sets a question the episode answers, in other words than were used. Every ten memories it is examined on them, with no model asked.</p>
+          <p>With each memory it sets a question the episode answers, in other words than were used. The questions become keys that lead a search to the answer; one in four is held out, so the exam can tell what the memory finds unaided. No model is asked.</p>
         </div>
       </div>
 
-      <p style="margin-top:34px"><strong>A memory that has to earn its changes.</strong> The agent may rewrite how it remembers, like everything else in its brain. But a mutation that touches its memory must find, of what the exam asks, no less than the generation running did, and the answers are counted by the generation running, not by the candidate. A cleverer memory that remembers worse does not take.</p>
+      <p style="margin-top:34px"><strong>A memory that has to earn its changes.</strong> The agent may rewrite how it remembers, like everything else in its brain. But a mutation that touches its memory must find, of what the exam asks, no less than the generation running does, asked now of the same journal, and the answers are counted by the generation running, not by the candidate. The questions held out of the index are counted apart, so that a change cannot pass by finding only what it was told. A cleverer memory that remembers worse does not take.</p>
 
       <ul class="plain">
         <li><strong>The owner's hand.</strong> With <code>/memory</code> the owner pins a stretch so it stays word for word, withdraws a memory or a fact that does not stand, or takes the conversation back to an earlier point. None of it is asked of a model.</li>

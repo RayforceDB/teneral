@@ -244,13 +244,15 @@ export const rate = (score: Score): number => (score.questions === 0 ? 1 : score
 const percent = (score: Score): string => (score.questions === 0 ? '-' : `${Math.round((score.passed / score.questions) * 100)}%`);
 
 /** The exam's result as lines of plain text. */
-export function report(memory: Score, plain: Score, by: Past['by'], made: boolean): string[] {
+export function report(memory: Score, plain: Score, by: Past['by'], made: boolean, apart?: { held: Score; keys: Score }): string[] {
   const row = (name: string, s: Score): string => `${name.padEnd(28)}${String(s.passed).padStart(5)} of ${String(s.questions).padEnd(5)} ${percent(s).padStart(5)}   ${s.nearness.toFixed(3)}`;
   return [
     `${memory.questions} questions${made ? ', made from what the owner said (see `cloze` in brain/exam.ts)' : ''}. Passed: an answering event among the first ${TOP} finds.`,
     `${''.padEnd(28)}${'passed'.padStart(14)} ${''.padStart(5)}   nearness`,
     row(`recall (asked of the ${by})`, memory),
     row('the words as they stand', plain),
+    // What the index was told the answer to, and what it was not: only the second says how well the memory finds (brain/skill-packages/measured-change).
+    ...(apart === undefined || apart.held.questions + apart.keys.questions === 0 ? [] : [row('  of them, held out', apart.held), row('  of them, keys', apart.keys)]),
   ];
 }
 
@@ -278,6 +280,7 @@ if (import.meta.main) {
   const organs = process.env.TENERAL_ORGANS ?? '';
   // An exam must not change the agent's store while the agent runs: it asks the journal unless told to use the database.
   const past = process.env.TENERAL_EXAM_STORE === '1' && organs !== '' ? openPast(journal, libraryAt(organs)) : journalPast(journal);
-  for (const line of report(examine(byMemory(past), questions), examine(bySubstring(events), questions), past.by, written.length === 0)) console.log(line);
+  const apart = { held: examine(byMemory(past), questions.filter((q) => q.held === true)), keys: examine(byMemory(past), questions.filter((q) => q.held !== true)) };
+  for (const line of report(examine(byMemory(past), questions), examine(bySubstring(events), questions), past.by, written.length === 0, written.length === 0 ? undefined : apart)) console.log(line);
   past.close();
 }

@@ -652,3 +652,37 @@ test('a job the agent left running is an action of its own under the footer whil
     expect(s.live()).not.toContain('full-suite');
   } finally { p.kill('SIGKILL'); }
 });
+
+test('what failed in the agent\'s own working is an action under the footer, marked while there is something new, and each trouble opens in full', () => {
+  const s = stage(110, 36);
+  settled(s);
+  expect(rows(s.live()).at(-1)).not.toContain('trouble');
+  s.clock.at += 60_000;
+  const failed = 'the database failed, the journal is read through from here on: rayforce: io: connection closed';
+  s.journal({ type: 'note', kind: 'body.trouble.v1', data: { where: 'memory', text: failed } });
+  s.journal({ type: 'note', kind: 'body.trouble.v1', data: { where: 'turn failed', text: 'the provider said no\nat line one\nat line two' } }, s.clock.at + 1000);
+  s.journal({ type: 'note', kind: 'body.trouble.v1', data: { where: 'memory', text: failed } }, s.clock.at + 2000);
+  // The footer reads the journal for this now and then: a while later it is there.
+  s.clock.at += 40_000;
+  s.frame();
+  s.frame();
+  const bar = rows(s.live()).at(-1)!;
+  expect(bar).toContain('trouble');
+  expect(bar).toContain('2 new');
+  // It is the marked action, so Down goes to it and Enter opens it: the same trouble once, with how often.
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(s.live()).toContain('memory ×2');
+  expect(s.live()).toContain('turn failed');
+  expect(s.live()).toContain('all of them');
+  // Enter on the first: that one in full, in the conversation.
+  s.type(ENTER);
+  const shown = flowed(s);
+  expect(shown).toContain('memory: 2 times');
+  expect(shown).toContain(failed);
+  // Looked at: no longer said to be new, and still there to be read again.
+  s.clock.at += 40_000;
+  s.frame();
+  expect(rows(s.live()).at(-1)).toContain('2 in a day');
+  expect(rows(s.live()).at(-1)).not.toContain('new');
+});

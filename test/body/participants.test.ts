@@ -369,3 +369,14 @@ test('what a name cannot tell is the agent\'s own to go over: once in its life, 
   expect(compareOnce(f.journal, 'g', readEvents(f.journal))).toBe(false);
   expect(known(readEvents(f.journal)).intentions).toHaveLength(1);
 });
+
+test('`know` shows the held facts nearest in words to the one just set down, for the agent to say whether it is one of them', async () => {
+  const { ctx } = fresh();
+  expect(await know.run({ text: 'The staging host is alpha.', source: 'seen' }, ctx)).not.toContain('You already hold');
+  const said = await know.run({ text: 'Staging now runs on the host beta.', source: 'seen' }, ctx);
+  expect(said).toContain('You already hold, close to it in words:');
+  expect(said).toContain('The staging host is alpha.');
+  expect(said).toContain('`replaces`');
+  // Something else entirely raises nothing, and neither does a fact that already names the one it replaces.
+  expect(await know.run({ text: 'Lunch is served at noon on weekdays.', source: 'seen' }, ctx)).not.toContain('You already hold');
+});

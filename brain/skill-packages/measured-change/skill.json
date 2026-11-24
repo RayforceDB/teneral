@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "id": "measured-change",
+  "version": "1.0.0",
+  "capability": "memory.change.measurement",
+  "precedence": 100,
+  "runner": "decision-table.v1",
+  "summary": "Before claiming that a change to how you remember, find or decide made things better: how to measure it, and what the figures do and do not let you say.",
+  "triggers": [
+    "measure whether a change of memory or recall helps",
+    "exam score before and after a mutation of the memory",
+    "does this improve recall finding retrieval ranking",
+    "benchmark evaluate compare my change on the journal",
+    "the gate says the candidate remembers worse",
+    "what does this figure percentage metric show"
+  ],
+  "exclusions": [
+    "A change with no claim about quality: a rename, a comment, a move of code that the tests already hold.",
+    "A fault with one right answer that a test can state: write the test."
+  ],
+  "dependencies": { "api": "skill-runtime.v1", "tools": ["bash"] },
+  "assumptions": [
+    "The journal can be copied and the copy asked without touching the running store.",
+    "The exam's questions are in the journal, and one in four of them is held out of the index (heldOut in brain/recall.ts).",
+    "A figure is only as good as what was compared: the same copy and the same questions before and after."
+  ],
+  "decide": {
+    "fields": {
+      "compared": ["same-copy", "other-data", "nothing"],
+      "path": ["checked", "assumed"],
+      "told": ["held-out", "told-the-answer"],
+      "elsewhere": ["no-worse", "worse", "not-looked"],
+      "moved": ["better", "same", "worse"]
+    },
+    "rules": [
+      { "when": { "compared": "nothing" }, "then": "not-measured" },
+      { "when": { "compared": "other-data" }, "then": "not-comparable" },
+      { "when": { "path": "assumed" }, "then": "check-what-ran" },
+      { "when": { "told": "told-the-answer" }, "then": "measures-the-mechanism" },
+      { "when": { "moved": "worse" }, "then": "do-not-keep" },
+      { "when": { "elsewhere": "worse" }, "then": "do-not-keep" },
+      { "when": { "elsewhere": "not-looked" }, "then": "look-for-harm" },
+      { "when": { "moved": "same" }, "then": "say-it-changes-nothing" }
+    ],
+    "otherwise": "claim-with-the-figures"
+  }
+}

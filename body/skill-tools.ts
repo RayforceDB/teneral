@@ -188,10 +188,19 @@ const outcome: Tool = {
 
 export const SKILL_TOOLS: Tool[] = [manage, search, show, outcome];
 
+/** The skills that come with the body: each a folder of `brain/skill-packages`. */
+export const BUILT_IN = ['lost-response-recovery', 'measured-change'] as const;
+
 /** Register the built-in recovery skill once, when the registry is first opened. */
-export function seedRecoverySkill(ctx: ToolContext): void {
+export function seedRecoverySkill(ctx: ToolContext): void { seedSkill(ctx, 'lost-response-recovery'); }
+
+/** Every skill the body comes with, each as `seedSkill` does it. */
+export function seedBuiltIn(ctx: ToolContext): void { for (const name of BUILT_IN) seedSkill(ctx, name); }
+
+/** Register, verify and enable one built-in skill the first time it is seen; never again, whatever the agent has since done with it. */
+export function seedSkill(ctx: ToolContext, name: string): void {
   // Use the running generation, not the mutable candidate.
-  const path = join(import.meta.dir, '../brain/skill-packages/lost-response-recovery');
+  const path = join(import.meta.dir, '../brain/skill-packages', name);
   if (!existsSync(path)) return;
   const skill = readPackage(path);
   const state = current(ctx);
