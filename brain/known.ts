@@ -57,8 +57,18 @@ export interface FactData {
   episode: string;
   /** Ids of the fact notes this one takes the place of. */
   replaces?: string[];
-  /** The person it is about, when it is about one: how the agent knows whom to ask what. */
+  /** The person it is about, when it is about one: how the agent knows whom to ask what. A name, as they were called. */
   about?: string;
+  /** Who that person is: the service and the id it gives them, `zulip:7`. A name is not a person; without this the fact is about a name, which several may bear. */
+  who?: string;
+}
+/** Who a person is to a service: its name for itself and the id it gives them, as `zulip:7`. */
+export const WHO = /^[a-z][a-z0-9_-]{0,31}:[^\s(),]{1,96}$/;
+/** A name with who it is after it, in brackets as the agent is shown a speaker or after a comma: `Anton (zulip:7)`, `Anton, zulip:7`. */
+export function named(said: string): { name: string; who: string } {
+  const m = /^(.*?)\s*(?:\(\s*([^()\s]+)\s*\)|,\s*(\S+))\s*$/.exec(said.trim());
+  const who = m?.[2] ?? m?.[3] ?? '';
+  return m !== null && WHO.test(who) ? { name: m[1]!.trim(), who } : { name: said.trim(), who: '' };
 }
 export interface Fact extends FactData {
   /** When the agent last saw that it still holds (`CONFIRMED_KIND`); absent for one never looked at again since it was set down. */
@@ -228,7 +238,7 @@ function step(state: KnownState, e: JournalEvent): boolean {
     if (!text(d.text) || !SOURCES.includes(d.source as Source) || !text(d.episode)) return false;
     const replaces = Array.isArray(d.replaces) ? d.replaces.filter((id): id is string => typeof id === 'string') : [];
     for (const id of replaces) gone.add(id);
-    facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}), ...(text(d.about) ? { about: d.about.trim().slice(0, 80) } : {}) });
+    facts.set(e.id, { id: e.id, mark: markOf('F', e.id), at: e.ts, text: d.text, source: d.source as Source, episode: d.episode, ...(replaces.length > 0 ? { replaces } : {}), ...(text(d.about) ? { about: d.about.trim().slice(0, 80) } : {}), ...(typeof d.who === 'string' && WHO.test(d.who) ? { who: d.who } : {}) });
   } else if (e.kind === INTENTION_KIND) {
     if (!text(d.text)) return false;
     const origin = ORIGINS.includes(d.origin as Origin) ? (d.origin as Origin) : undefined;
@@ -348,7 +358,7 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
   if (held.facts.length > 0) {
     // A fact long neither set down nor seen to hold again is still shown, and said to be old: it is the agent's to check, not to forget.
     const old = (f: Fact): string => { const last = (f.confirmed ?? f.at).slice(0, 10); return Date.parse(today) - Date.parse(last) >= UNCONFIRMED_DAYS * 86_400_000 ? ` [last seen to hold ${last}: check before you rely on it]` : ''; };
-    const rows = held.facts.map((f) => `${f.mark} [${f.source}]${f.about === undefined ? '' : ` (about ${f.about})`}${old(f)} ${f.text}`);
+    const rows = held.facts.map((f) => `${f.mark} [${f.source}]${f.about === undefined ? '' : ` (about ${f.about}${f.who === undefined ? '' : `, ${f.who}`})`}${old(f)} ${f.text}`);
     // The newest that fit; an agent's life should not push out what it learned last.
     let from = rows.length;
     let size = 0;

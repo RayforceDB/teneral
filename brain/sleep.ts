@@ -5,7 +5,7 @@ import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type 
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
 import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
-import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, type EntityKind } from './entities-table';
+import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, named, type EntityKind } from './entities-table';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
@@ -170,14 +170,16 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + `In the brackets say where it comes from: ${SOURCES.join(', ')} (owner: your owner said it; seen: you saw it yourself, as in a tool's output; `
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
     + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
-    + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>\n'
+    + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, with who they are as you were shown it when they spoke, since several people may bear one name: - [seen] (about Ivan Petrov, zulip:7) <the fact>\n'
     + 'And when this stretch shows that a fact you already hold, listed above with its mark, still holds, say so in a line of its own, with nothing after it: - [seen] (confirms F1a2b3c4)\n'
     + 'A fact you have not seen to hold for a long time is shown to you with a word of caution; this is how it loses it.',
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
     + 'An intention left open stays in front of you for good, so close every one this stretch settles.',
-    'About:\n- [person] <name>\n- [project] <name>\n- [repo] <owner/name>\n'
+    'About:\n- [person] <name> (<service:id>)\n- [project] <name>\n- [repo] <owner/name>\n'
     + 'The people, projects and repositories this stretch was really about, each by the name you would look it up by later, written the same way every time. '
+    + 'A name is not a person: several people may be called the same. After a person\'s name give who they are, as you were shown it when they spoke, such as (zulip:7); '
+    + 'someone named without it is kept apart, as a name that may be anyone\'s. '
     + 'They tie this stretch to the others about the same ones: `about` shows them together. Not everyone and everything mentioned in passing.',
     'Questions:\n- <a question> => <the first words of the message above that answers it>\n'
     + 'One or two questions that you or your owner might ask some later month and that this stretch answers. Put each in other words than the stretch used, '
@@ -233,7 +235,7 @@ export function nearest(past: Pick<Past, 'find'> | undefined, asOf: JournalEvent
 const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
 
 /** A fact as the agent set it down: the fact it replaces is still only a mark. */
-export interface NotedFact { text: string; source: Source; replaces: string[]; about?: string }
+export interface NotedFact { text: string; source: Source; replaces: string[]; about?: string; who?: string }
 export interface Formed {
   title: string;
   text: string;
@@ -249,7 +251,7 @@ export interface Formed {
   /** Facts already held that this stretch showed to hold still: the mark of each. */
   confirmed: string[];
   /** Whom and what this stretch was about: people, projects, repositories, each by name. */
-  about: { kind: EntityKind; name: string }[];
+  about: { kind: EntityKind; name: string; who?: string }[];
 }
 
 const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about|confirms)\s+[^)]*\)\s*)*)(.*)$/i;
@@ -285,7 +287,8 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
       const confirms = /\(\s*confirms\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1] ?? '';
       if (m && confirms !== '') { found.confirmed.push(...confirms.split(/[\s,]+/).filter((mark) => mark !== '')); continue; }
       if (m && source !== undefined && m[3]!.trim().length >= 8) {
-        found.facts.push({ source, text: m[3]!.trim(), replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about }) });
+        const whom = named(about);
+        found.facts.push({ source, text: m[3]!.trim(), replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about: whom.name }), ...(whom.who === '' ? {} : { who: whom.who }) });
       }
     } else if (list === 'intentions' && found.intentions.length < LIST_MAX) {
       const m = INTENTION_LINE.exec(item);
@@ -302,7 +305,8 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
     } else if (list === 'about' && found.about.length < LIST_MAX) {
       const m = ABOUT_LINE.exec(item);
       const kind = ENTITY_KINDS.find((one) => one === m?.[1]?.toLowerCase());
-      if (m && kind !== undefined && m[2]!.trim().length >= 2) found.about.push({ kind, name: m[2]!.trim().slice(0, NAME_CHARS) });
+      const one = kind === 'person' ? named(m![2]!) : { name: m?.[2]?.trim() ?? '', who: '' };
+      if (m && kind !== undefined && one.name.length >= 2) found.about.push({ kind, name: one.name.slice(0, NAME_CHARS), ...(one.who === '' ? {} : { who: one.who }) });
     }
   }
   return { body: lines.slice(0, first), ...found };
@@ -499,7 +503,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
         put(d, {
           type: 'note', kind: FACT_KIND,
-          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }) } satisfies FactData,
+          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }) } satisfies FactData,
         });
       }
       // A fact this stretch showed to hold still is known to hold as of now: only one held then, named by the mark it was shown with.
@@ -522,7 +526,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         if (old !== undefined) put(d, { type: 'note', kind: OUTDATED_KIND, data: { memory: old.from, by: episode.first, why: said.why.slice(0, WHY_CHARS) } satisfies OutdatedData });
       }
       // Whom and what the stretch was about: a node each in the graph of the agent's life, tied to this stretch (brain/entities-table.ts).
-      for (const one of about) put(d, { type: 'note', kind: ENTITY_KIND, data: { kind: one.kind, name: one.name, episode: episode.first } });
+      for (const one of about) put(d, { type: 'note', kind: ENTITY_KIND, data: { kind: one.kind, name: one.name, ...(one.who === undefined ? {} : { who: one.who }), episode: episode.first } });
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);
         if (answer !== null) put(d, { type: 'note', kind: EXAM_KIND, data: { question: asked.question, events: [answer.id], episode: episode.first } });

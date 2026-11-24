@@ -14,7 +14,7 @@ import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Enve
 import { git } from '../immune/gates';
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
-import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
+import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark, known, named, ownerSaid, type FactData, type Intention, type IntentionData } from '../brain/known';
 import { journalPast, shown, sinceLines, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
@@ -493,12 +493,12 @@ const about: Tool = {
   spec: {
     name: 'about',
     description:
-      'Whom and what your life has been about: the people, projects and repositories you named when you formed your memories, each tied to the stretches about it. ' +
-      'With no name: all of them, the most named first. With `name`: the stretches that are about it, oldest first, each with the event `open` shows it by; ' +
-      'who and what else was named in those stretches; and the other memories that have the name in their words.',
+      'Whom and what your life has been about: the people, projects and repositories you named when you formed your memories. ' +
+      'With no name: all of them, the most named first. With `name`: the stretches about it, each with the event `open` shows it by, who and what else was named in them, ' +
+      'and the other memories that have the name in their words. A person is not a name: several of one name are shown apart, each by their accounts (`zulip:7`), and the accounts of one person together.',
     parameters: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'A person, project or repository, by the name you gave it. Leave out to list them all' } },
+      properties: { name: { type: 'string', description: 'A name, or an account of a person (`zulip:7`). Leave out to list all' } },
       required: [],
     },
   },
@@ -508,7 +508,7 @@ const about: Tool = {
     if (name === '') {
       const all = past.entities();
       if (all.length === 0) return 'You have named no one and nothing yet: a memory names whom and what its stretch was about as it is formed.';
-      return cap(all.map((one) => `[${one.kind}] ${one.name}  (${one.stretches} ${one.stretches === 1 ? 'stretch' : 'stretches'})`).join('\n'));
+      return cap(all.map((one) => `[${one.kind}] ${one.name}${one.kind !== 'person' ? '' : one.who !== '' ? ` (${[one.who, ...one.also].join(', also ')})` : ' (by name only)'}  (${one.stretches} ${one.stretches === 1 ? 'stretch' : 'stretches'})`).join('\n'));
     }
     const found = past.about(name);
     const { memories } = past.remembered();
@@ -517,13 +517,21 @@ const about: Tool = {
       return m === undefined ? `not remembered yet  (event ${from})` : `${when(m.start)}  ${m.outcome}: ${m.title}  (event ${from})`;
     };
     const byTime = (ids: string[]): string[] => ids.map((id) => ({ id, at: memories.get(id)?.start ?? '9' })).sort((a, b) => a.at.localeCompare(b.at)).map((one) => line(one.id));
-    if (found.named.length === 0 && found.told.length === 0) return `You have named nothing "${name}", and no memory of yours has it in its words. \`recall\` looks through everything that happened.`;
+    const label = (one: { kind: string; name: string; who: string; also: string[] }): string =>
+      `[${one.kind}] ${one.name}${one.kind !== 'person' ? '' : one.who !== '' ? ` (${[one.who, ...one.also].join(', also ')})` : ' (by name only)'}`;
+    if (found.found.length === 0 && found.told.length === 0) return `You have named nothing and no one "${name}", and no memory of yours has it in its words. \`recall\` looks through everything that happened.`;
     const out: string[] = [];
-    if (found.named.length > 0) {
-      out.push(`${found.named.map((one) => `[${one.kind}] ${one.name}`).join(', ')}: ${found.stretches.length} ${found.stretches.length === 1 ? 'stretch is' : 'stretches are'} about it.`, ...byTime(found.stretches));
-      if (found.beside.length > 0) out.push('', `Named in the same stretches: ${found.beside.map((one) => `[${one.kind}] ${one.name}`).join(', ')}`);
-    } else out.push(`You have named nothing "${name}".`);
-    if (found.told.length > 0) out.push('', `${found.told.length} other ${found.told.length === 1 ? 'memory has' : 'memories have'} the name in ${found.told.length === 1 ? 'its' : 'their'} words:`, ...byTime(found.told));
+    const people = found.found.filter((one) => one.kind === 'person');
+    // A name is not a person: say so wherever it could be taken for one.
+    if (people.length > 1) out.push(`${people.length} different people are called this. Each is apart below, by who the service says they are; do not take one for another.`, '');
+    for (const one of found.found) {
+      out.push(`${label(one)}: ${one.stretches.length} ${one.stretches.length === 1 ? 'stretch is' : 'stretches are'} about ${one.kind === 'person' ? 'them' : 'it'}.`
+        + (one.kind === 'person' && one.who === '' ? ' Named by a name alone, so this may be several people, and none of it is tied to anyone you know by an id.' : ''), ...byTime(one.stretches));
+      if (one.beside.length > 0) out.push(`Named in the same stretches: ${one.beside.map(label).join(', ')}`);
+      out.push('');
+    }
+    if (found.found.length === 0) out.push(`You have named nothing and no one "${name}".`, '');
+    if (found.told.length > 0) out.push(`${found.told.length} other ${found.told.length === 1 ? 'memory has' : 'memories have'} the name in ${found.told.length === 1 ? 'its' : 'their'} words${people.length > 0 ? ', which says nothing of which person it means' : ''}:`, ...byTime(found.told));
     return cap(out.join('\n'));
   },
 };
@@ -563,7 +571,7 @@ const intend: Tool = {
       // What is known of whom it is for, so that it is asked of the right person in the right place.
       const whom = (mine.to ?? '').toLowerCase();
       const of = whom === '' ? [] : pastOf(ctx).known().facts.filter((f) => f.about !== undefined && f.about.length >= 3 && whom.includes(f.about.toLowerCase()));
-      const told = of.length === 0 ? '' : `\nWhat you know of them:\n${of.slice(-8).map((f) => `${f.mark} [${f.source}] ${f.text}`).join('\n')}`;
+      const told = of.length === 0 ? '' : `\nWhat you know of people of that name, each with who it is about where that was said (a name alone may be several people):\n${of.slice(-8).map((f) => `${f.mark} [${f.source}] (about ${f.about}${f.who === undefined ? ', by name only' : `, ${f.who}`}) ${f.text}`).join('\n')}`;
       return `Kept as ${mine.mark}. It waits for an answer: put it, with its mark, to ${mine.unsure === true ? 'your owner' : mine.to ?? 'your owner'}, where you judge they will see it.${told}`;
     }
     return `Taken on as ${mine.mark}${due === undefined ? '' : `, due ${due}`}. It stays in front of you until you call done for it.`;
@@ -665,7 +673,7 @@ const know: Tool = {
       properties: {
         text: { type: 'string', description: 'The fact, in a sentence that can be understood on its own' },
         source: { type: 'string', enum: ['seen', 'read', 'inferred'], description: 'seen: you saw it yourself, as in a tool\'s output. read: it stood in a message, a page or a file from someone else. inferred: you concluded it' },
-        about: { type: 'string', description: 'Whom it is about, by the name the chat gives them, when it is about someone' },
+        about: { type: 'string', description: 'Whom it is about: their name and who they are, as you are shown a speaker, such as Anton (zulip:7). A name alone may be several people' },
         replaces: { type: 'string', description: 'The mark of a fact you hold that this one takes the place of' },
       },
       required: ['text', 'source'],
@@ -676,7 +684,8 @@ const know: Tool = {
     if (text.length < 8) throw new Error('say the fact in a sentence that can be understood on its own');
     const source = str(args, 'source');
     if (source !== 'seen' && source !== 'read' && source !== 'inferred') throw new Error('source must be one of seen, read, inferred: your owner\'s word is not set down with this tool');
-    const about = optional(args, 'about')?.trim().slice(0, 80);
+    const whom = named(optional(args, 'about') ?? '');
+    const about = whom.name.slice(0, 80);
     const held = pastOf(ctx).known();
     if (held.facts.some((f) => f.text === text)) return 'You hold that already, word for word.';
     const replaced = optional(args, 'replaces');
@@ -686,9 +695,10 @@ const know: Tool = {
     const from = pastOf(ctx).latest('stimulus');
     const note = appendEvent(ctx.journal, ctx.gen, {
       type: 'note', kind: FACT_KIND,
-      data: { text, source, episode: from?.id ?? 'unknown', ...(about ? { about } : {}), ...(old === null ? {} : { replaces: [old.id] }) } satisfies FactData,
+      data: { text, source, episode: from?.id ?? 'unknown', ...(about ? { about } : {}), ...(whom.who === '' ? {} : { who: whom.who }), ...(old === null ? {} : { replaces: [old.id] }) } satisfies FactData,
     });
-    return `Kept as ${known([note]).facts[0]!.mark}${about ? `, about ${about}` : ''}${old === null ? '' : `, in place of ${old.mark}`}.`;
+    const apart = about && whom.who === '' ? ' You gave a name alone: it is kept as about that name, which several people may bear, and is tied to no one you know by an id. Say who they are, as Name (service:id), to tie it to them.' : '';
+    return `Kept as ${known([note]).facts[0]!.mark}${about ? `, about ${about}${whom.who === '' ? '' : ` (${whom.who})`}` : ''}${old === null ? '' : `, in place of ${old.mark}`}.${apart}`;
   },
 };
 

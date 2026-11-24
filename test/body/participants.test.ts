@@ -33,7 +33,7 @@ test('everyone met in a chat is recorded once, a person, a bot or another agent 
 
 test('`know` sets a fact down at the moment it is learned, naming whom it is about; what someone says of themselves is never the owner\'s word', async () => {
   const { journal, ctx } = fresh();
-  expect(await know.run({ text: 'Ann Lee maintains the listener and wants questions about it in #lobby.', source: 'read', about: 'Ann Lee' }, ctx)).toMatch(/^Kept as F\w+, about Ann Lee\.$/);
+  expect(await know.run({ text: 'Ann Lee maintains the listener and wants questions about it in #lobby.', source: 'read', about: 'Ann Lee' }, ctx)).toMatch(/^Kept as F\w+, about Ann Lee\. You gave a name alone/);
   const held = known(readEvents(journal)).facts;
   expect(held).toMatchObject([{ text: 'Ann Lee maintains the listener and wants questions about it in #lobby.', source: 'read', about: 'Ann Lee' }]);
   // Where it was learned is the message being answered.
@@ -53,9 +53,37 @@ test('a participant is found by the name the chat gives them, whole or by its fi
   await know.run({ text: 'Ann prefers short answers.', source: 'inferred', about: 'ann' }, ctx);
   await know.run({ text: 'Annabel runs the release train.', source: 'read', about: 'Annabel' }, ctx);
   const facts = known(readEvents(journal)).facts;
-  expect(knownOf(facts, 'Ann Lee').map((f) => f.text)).toEqual(['Ann Lee maintains the listener.', 'Ann prefers short answers.']);
-  expect(knownOf(facts, 'Annabel').map((f) => f.text)).toEqual(['Annabel runs the release train.']);
-  expect(knownOf(facts, 'Bo')).toEqual([]);
+  const one = (name: string, id = '1') => ({ service: 'zulip', id, name });
+  expect(knownOf(facts, one('Ann Lee')).map((k) => k.fact.text)).toEqual(['Ann Lee maintains the listener.', 'Ann prefers short answers.']);
+  expect(knownOf(facts, one('Annabel')).map((k) => k.fact.text)).toEqual(['Annabel runs the release train.']);
+  expect(knownOf(facts, one('Bo'))).toEqual([]);
+});
+
+test('a name is not a person: of five people called Anton each is shown only what is theirs, and a fact about the name alone is given as unsure', async () => {
+  const { journal, ctx } = fresh();
+  const antons = [7, 12, 31, 44, 58].map((id) => ({ service: 'zulip', id: String(id), name: 'Anton' }));
+  // Said of one of them, by who the service says they are.
+  expect(await know.run({ text: 'This Anton maintains the parser.', source: 'read', about: 'Anton (zulip:7)' }, ctx)).toContain('about Anton (zulip:7)');
+  await know.run({ text: 'This Anton runs the release train.', source: 'read', about: 'Anton, zulip:12' }, ctx);
+  // Said of a name alone: the agent is told what that means.
+  expect(await know.run({ text: 'Anton wants answers in Russian.', source: 'read', about: 'Anton' }, ctx)).toContain('several people may bear');
+  const facts = known(readEvents(journal)).facts;
+  expect(facts.map((f) => f.who)).toEqual(['zulip:7', 'zulip:12', undefined]);
+  const shown = (p: typeof antons[number], others = antons) => knownOf(facts, p, [], others).map((k) => `${k.fact.text}${k.unsure ? ' ?' : ''}`);
+  expect(shown(antons[0]!)).toEqual(['This Anton maintains the parser.', 'Anton wants answers in Russian. ?']);
+  expect(shown(antons[1]!)).toEqual(['This Anton runs the release train.', 'Anton wants answers in Russian. ?']);
+  expect(shown(antons[2]!)).toEqual(['Anton wants answers in Russian. ?']);
+  // While only one Anton has been met, what is said of the name is plainly theirs.
+  expect(shown(antons[2]!, [antons[2]!])).toEqual(['Anton wants answers in Russian.']);
+  // Someone the owner said is the same one on another service has what is theirs there too.
+  expect(knownOf(facts, { service: 'github', id: 'ak', name: 'ak' }, ['zulip:7'], antons).map((k) => k.fact.text)).toEqual(['This Anton maintains the parser.']);
+  // And what the agent is shown says whose each is.
+  for (const p of antons) appendEvent(journal, 'g1', { type: 'note', kind: PARTICIPANT_KIND, data: p });
+  const lines = whoLines(readEvents(journal), [antons[0]!, antons[2]!]);
+  expect(lines).toContain('Anton (zulip:7,');
+  expect(lines.split('\n').find((line) => line.includes('zulip:31'))).not.toContain('maintains the parser');
+  expect(lines.split('\n').find((line) => line.includes('zulip:31'))).toContain('others bear that name, so this may not be them');
+  expect(lines.split('\n').find((line) => line.includes('zulip:7,'))).toContain('This Anton maintains the parser.');
 });
 
 test('when a message wakes the agent it is shown who is speaking and what it knows of each, and those it never met are met then', async () => {
@@ -237,4 +265,10 @@ test('entering a new place goes on forming the circles: newcomers are supposed t
   const all = enter(journal, 'g', readEvents(journal), 'parley', { id: '11', name: '#old-friends' }, [m('1', 'Ann'), m('2', 'Bo')]);
   expect(all).toBe('This is the first you hear from #old-friends. There with you: Ann (parley:1), Bo (parley:2).');
   expect(knownOf2(readEvents(journal)).intentions.filter((i) => i.origin === 'ask')).toHaveLength(2);
+});
+
+test('the graph of whom a life is about reads the same note that joins two accounts into one contact', async () => {
+  const { CONTACT_NOTE } = await import('../../brain/entities-table');
+  const { CONTACT_KIND } = await import('../../body/participants');
+  expect(CONTACT_NOTE).toBe(CONTACT_KIND);
 });

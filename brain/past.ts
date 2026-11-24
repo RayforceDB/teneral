@@ -14,7 +14,7 @@ import { ownSpentSince, spendProjection } from './spend-table';
 import { countOf, countStates, firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
 import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
 import { useLift, usedFrom, usedOf, usesProjection } from './uses-table';
-import { aboutFrom, aboutOf, entitiesFrom, entitiesOf, entitiesProjection, entityGraph, mentionOf, type About, type Entity, type Mention } from './entities-table';
+import { aboutFrom, aboutOf, entitiesFrom, entitiesOf, entitiesProjection, entityGraph, read as namings, type About, type Entity } from './entities-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonPlaces, lessonStart, lessonStep, lessons, lessonsOf, type Lesson } from './lessons';
 import { lessonsFrom, lessonsProjection } from './lessons-table';
@@ -246,7 +246,7 @@ function finder(
 export function journalPast(journal: string): Past {
   const lines = reader(journal);
   let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
-  const mentioned = (): Mention[] => lines.all().flatMap((line, seq) => { const m = mentionOf(line.event, seq); return m === null ? [] : [m]; });
+  const mentioned = () => namings(lines.all().map((line) => line.event));
   return {
     by: 'journal',
     remembered: () => remembered(lines().map((line) => line.event)),

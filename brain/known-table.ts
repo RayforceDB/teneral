@@ -22,7 +22,7 @@ import { boundAs, type Projection } from './store';
 
 export const KNOWN = 'known';
 /** Changed with the step in brain/known.ts or with the columns below. */
-export const KNOWN_VERSION = 3;
+export const KNOWN_VERSION = 4;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const syms = (data: string[]): Column => ({ type: 'sym', data });
