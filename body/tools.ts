@@ -1,3 +1,4 @@
+import { OUTDATED_KIND, WHY_CHARS, type OutdatedData } from '../brain/links';
 import { pastOf } from './asked';
 import { work } from './work';
 import { withCommands } from './path';
@@ -652,6 +653,27 @@ const know: Tool = {
   },
 };
 
+const outdated: Tool = {
+  spec: {
+    name: 'outdated',
+    description:
+      'Say that a memory of yours no longer holds: what it left open is done, what it planned was changed, a state, a place or a number it gives is now another. ' +
+      'Give the memory by the event its stretch begins at, as a found memory names it, and in a few words what no longer holds and what holds instead. ' +
+      'The memory is kept, as everything is: from now on it is shown as outdated wherever it is found, with your words, and it is no longer brought back by itself. ' +
+      'A memory that is only about the same thing as a newer one is not outdated.',
+    parameters: params({ memory: 'The event the memory\'s stretch begins at, or the memory\'s own id or mark', why: 'What it says that no longer holds, and what holds instead' }),
+  },
+  async run(args, ctx) {
+    const named = str(args, 'memory').trim();
+    const why = str(args, 'why').trim();
+    if (why.length < 8) throw new Error('say in a few words what no longer holds');
+    const found = [...pastOf(ctx).remembered().memories.values()].find((m) => m.from === named || m.id === named || `M${m.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}` === named);
+    if (found === undefined) throw new Error(`no memory of yours begins at, or is, ${named}: name it by the event its stretch begins at, as \`recall\` shows it`);
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: OUTDATED_KIND, data: { memory: found.from, why: why.slice(0, WHY_CHARS) } satisfies OutdatedData });
+    return `Marked as outdated: "${found.title}". It is kept, and shown as outdated from now on.`;
+  },
+};
+
 const forget: Tool = {
   spec: {
     name: 'forget',
@@ -736,4 +758,4 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, know, forget, lesson];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, know, forget, outdated, lesson];

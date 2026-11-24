@@ -5,7 +5,7 @@ import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
-import { LINE_MAX, links, tiesOf, type Since } from './links';
+import { LINE_MAX, OUTDATED_KIND, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { acceptanceNotes } from './acceptance';
 import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
@@ -748,6 +748,11 @@ export function sinceLines(past: Pick<Past, 'since' | 'around'>, e: JournalEvent
     const later = note(one.id);
     const d = (later as { data?: { from?: unknown; start?: unknown; title?: unknown; text?: unknown } } | null)?.data;
     if (later === null || d === undefined) continue;
+    if (later.type === 'note' && later.kind === OUTDATED_KIND) {
+      // Not a later memory: the agent said so itself.
+      lines.push(`[outdated since ${when(later.ts)}: ${one.why === '' ? 'you marked it as no longer holding' : one.why} (you said so yourself)]`);
+      continue;
+    }
     lines.push(typeof d.from === 'string'
       ? `[outdated since ${when(typeof d.start === 'string' ? d.start : later.ts)}: ${one.why === '' ? 'a later memory says otherwise' : one.why} (your memory "${String(d.title)}", of the stretch that begins at event ${d.from})]`
       : `[replaced on ${when(later.ts)} by: ${clip(String(d.text), 300)}]`);

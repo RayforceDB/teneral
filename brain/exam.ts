@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { JournalEvent } from './journal';
+import type { Remembered } from './remembered';
 import { journalPast, openPast, type Past } from './past';
 import { libraryAt } from './ray';
 import { documentOf, words } from './recall';
@@ -155,6 +156,28 @@ export function told(past: Past, events: JournalEvent[], questions: Question[]):
   return { questions: questions.length, passed, nearness: questions.length === 0 ? 0 : nearness / questions.length };
 }
 
+/**
+ * Whether what is in front of the agent leads to what a question asks: a question counts when
+ * the stretch that holds an answering event is still shown as it happened (it lies at or after
+ * `tailFrom`), or when its memory, or a wider memory that stands for it, is named in the request
+ * by the event its stretch begins at: shown, or a line of the contents of what is not shown
+ * (brain/logbook.ts). It is the measure of the request itself: recall may find what the agent
+ * would never think to look for, and this says whether the agent is told that it is there.
+ */
+export function listed(events: JournalEvent[], told: Pick<Remembered, 'memories' | 'merges'>, questions: Question[], request: { text: string; tailFrom: number }): Score {
+  const at = new Map(events.map((e, i) => [e.id, i]));
+  const spans = [...told.memories.values(), ...told.merges].flatMap((m) => {
+    const [from, to] = [at.get(m.from), at.get(m.to)];
+    return from === undefined || to === undefined ? [] : [{ from, to, id: m.from }];
+  });
+  let passed = 0;
+  for (const q of questions) {
+    const wanted = q.events.map((id) => at.get(id)).filter((i): i is number => i !== undefined);
+    if (wanted.some((i) => i >= request.tailFrom || spans.some((s) => i >= s.from && i <= s.to && request.text.includes(`event ${s.id}`)))) passed += 1;
+  }
+  return { questions: questions.length, passed, nearness: questions.length === 0 ? 0 : passed / questions.length };
+}
+
 /** An exam's result as it is journaled: what recall found, what looking for the words as they stand found, and what the memories themselves still tell. */
 export interface Result {
   recall: Score;
@@ -162,14 +185,19 @@ export interface Result {
   told: Score;
   /** Whether the questions were written by the agent, or made from the journal for want of any. */
   written: boolean;
+  /** Of the agent's own questions: how many the request itself leads to (`listed`). Absent in results from before it was measured, and where no request was given. */
+  listed?: Score;
 }
 
 /** Sits the whole exam on `events` with `past`: the questions the journal holds, or ones made from it when it holds too few. */
-export function sit(past: Past, events: JournalEvent[]): Result {
+export function sit(past: Past, events: JournalEvent[], request?: { text: string; tailFrom: number }): Result {
   const own = questionsOf(events);
   const written = own.length >= QUESTIONS_MIN;
   const questions = written ? own : [...own, ...cloze(events)];
-  return { recall: examine(byMemory(past), questions), plain: examine(bySubstring(events), questions), told: told(past, events, own), written };
+  return {
+    recall: examine(byMemory(past), questions), plain: examine(bySubstring(events), questions), told: told(past, events, own), written,
+    ...(request === undefined ? {} : { listed: listed(events, past.remembered(), own, request) }),
+  };
 }
 
 /** The latest result journaled in `events`, or null. */

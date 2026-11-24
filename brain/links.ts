@@ -23,14 +23,15 @@ import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND, remembered, type Remembered 
 
 /** One earlier memory is outdated: `memory` and `by` name two remembered stretches by the ids of their first events, `why` says what no longer holds. */
 export const OUTDATED_KIND = 'memory.outdated.v1';
-export interface OutdatedData { memory: string; by: string; why: string }
+/** `by`: the stretch whose memory outdates it, when that was said in forming a memory; absent when the agent said so itself, with its tool, and then the note is what outdates. */
+export interface OutdatedData { memory: string; by?: string; why: string }
 
 /** The kinds of notes the ties are made from: what has to be read to make them. */
 export const LINK_NOTES = [EPISODE_KIND, QUARANTINE_KIND, MERGE_KIND, FACT_KIND, OUTDATED_KIND, WITHDRAW_KIND] as const;
 
 export type LinkKind = 'outdates' | 'replaces' | 'covers';
 /** A tie between two notes, named by their ids: `from` is the later one. */
-export interface Link { from: string; to: string; kind: LinkKind; why?: string }
+export interface Link { from: string; to: string; kind: LinkKind; why?: string; /** Of an outdating the agent said itself: when it said so. */ since?: string }
 
 /** Characters of what is said about why a memory is outdated. */
 export const WHY_CHARS = 200;
@@ -55,6 +56,11 @@ export function links(events: JournalEvent[], told: Remembered = remembered(even
     const d = e.data as Record<string, unknown>;
     if (e.kind === OUTDATED_KIND) {
       const old = typeof d.memory === 'string' ? told.memories.get(d.memory) : undefined;
+      if (old !== undefined && d.by === undefined) {
+        // Said by the agent itself, at any time (the tool `outdated`): the note is the later end, and holds from when it was written.
+        add({ from: e.id, to: old.id, kind: 'outdates', why: typeof d.why === 'string' ? d.why.trim().slice(0, WHY_CHARS) : '', since: e.ts });
+        continue;
+      }
       const by = typeof d.by === 'string' ? told.memories.get(d.by) : undefined;
       // Only what came later can outdate: a tie the other way would say that the past was changed by what it did not know.
       if (old === undefined || by === undefined || !(by.start > old.start)) continue;
@@ -132,10 +138,11 @@ export function outdatedStretches(events: JournalEvent[], told: Remembered = rem
   for (const link of links(events, told)) {
     if (link.kind !== 'outdates') continue;
     const old = byNote.get(link.to);
-    const by = byNote.get(link.from);
-    if (old === undefined || by === undefined) continue;
+    // The later end is a memory, or the agent's own word that this one no longer holds.
+    const since = byNote.get(link.from)?.start ?? link.since;
+    if (old === undefined || since === undefined) continue;
     const held = out.get(old.from);
-    if (held === undefined || by.start < held.since) out.set(old.from, { why: link.why ?? '', since: by.start });
+    if (held === undefined || since < held.since) out.set(old.from, { why: link.why ?? '', since });
   }
   return out;
 }

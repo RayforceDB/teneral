@@ -38,10 +38,11 @@ test('while everything fits, a memory changes nothing: the conversation is shown
 });
 
 test('when room runs out, the oldest remembered episode is shown as its memory, and the rest as it happened', () => {
-  const { events } = life(1000);
+  const { events, a } = life(1000);
   const shown = contents(events, 1700);
   expect(shown[0]).toBe('S');
-  expect(shown[1]).toBe('[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC. What do you remember of it?');
+  // The memory says where its stretch begins: `open` shows it as it happened.
+  expect(shown[1]).toBe(`[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC, from event ${a[0]!.id}. What do you remember of it?`);
   expect(shown[2]).toBe('The first thing\n\nI did one.');
   expect(shown[3]).toBe('[memory] What follows is shown as it happened.');
   expect(shown[4]).toStartWith('two bbb');
@@ -50,12 +51,12 @@ test('when room runs out, the oldest remembered episode is shown as its memory, 
 });
 
 test('with less room still, the next one is swapped too, and memories stand in the order things happened', () => {
-  const { events } = life(1000);
+  const { events, a, b } = life(1000);
   const shown = contents(events, 700);
   expect(shown.slice(1, 6).map((s) => s!.split('\n')[0])).toEqual([
-    '[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC. What do you remember of it?',
+    `[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC, from event ${a[0]!.id}. What do you remember of it?`,
     'The first thing',
-    '[memory] 2026-11-11 00:32 UTC to 2026-11-11 00:33 UTC. What do you remember of it?',
+    `[memory] 2026-11-11 00:32 UTC to 2026-11-11 00:33 UTC, from event ${b[0]!.id}. What do you remember of it?`,
     'The second thing',
     '[memory] What follows is shown as it happened.',
   ]);
@@ -134,11 +135,26 @@ test('a memory note asks for no turn', () => {
   expect(needsTurn(events.slice(0, -1))).toBe(false);
 });
 
-test('when the logbook itself outgrows its share, the oldest memories leave it and a line says how many', () => {
+test('when the logbook itself outgrows its share, the oldest memories leave it and a table of contents names each of them', () => {
   const stretches = Array.from({ length: 12 }, (_, i) => [said(`ask ${i} ${'q'.repeat(400)}`, LONG), replied(`did ${i}`)]);
   const notes = stretches.map((s, i) => memoryOf(s[0]!, s[1]!, `Memory ${i}`, 'm'.repeat(150)));
   const shown = contents([...stretches.flat(), ...notes, said('now', LONG)], 2000);
-  expect(shown[1]).toMatch(/^\[memory\] \d+ earlier memories are not shown here\. They are in your journal\.$/);
+  const lines = shown[1]!.split('\n');
+  const gone = Number(/^\[memory\] (\d+) earlier memories are not shown here in full\./.exec(lines[0]!)![1]);
+  expect(gone).toBeGreaterThan(2);
+  expect(lines[0]).toContain('`open` with that event shows the stretch as it happened');
+  // One line for each that left, oldest first: the day it begins, its title, and the event its stretch begins at. In so
+  // small a request the lines have little room themselves: the oldest give way to a count and the days they span.
+  const unlisted = Number(/ (\d+) more, the oldest, from 2026-11-11 to 2026-11-11, are not listed/.exec(lines[0]!)?.[1] ?? 0);
+  expect(unlisted).toBeGreaterThan(0);
+  expect(lines.slice(1)).toEqual(Array.from({ length: gone - unlisted }, (_, k) => `2026-11-11 Memory ${unlisted + k} (event ${stretches[unlisted + k]![0]!.id})`));
+  // What is told in full is not listed too.
+  expect(shown.slice(2).join('\n')).toContain(`Memory ${gone}\n`);
+  // With a little more room every one that left has its line.
+  const roomier = contents([...stretches.flat(), ...notes, said('now', LONG)], 3000)[1]!.split('\n');
+  const left = Number(/^\[memory\] (\d+) earlier/.exec(roomier[0]!)![1]);
+  expect(roomier[0]).not.toContain('are not listed');
+  expect(roomier.slice(1)).toEqual(Array.from({ length: left }, (_, k) => `2026-11-11 Memory ${k} (event ${stretches[k]![0]!.id})`));
   expect(shown.join('\n')).not.toContain('Memory 0\n');
   expect(shown.join('\n')).toContain('Memory 9');
   expect(shown.join('\n')).toContain('ask 11');
@@ -163,11 +179,11 @@ test('unless told otherwise, that size is the default, far below the room', () =
 });
 
 test('with nothing wanted word for word, everything remembered is shown as memories and only the rest as it happened', () => {
-  const { events } = life(100);
+  const { events, a, b } = life(100);
   const shown = buildMessages(events, 'S', 100_000, undefined, { tailChars: 0 }).map((m) => m.content);
   expect(shown.slice(1, 6).map((s) => s!.split('\n')[0])).toEqual([
-    '[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC. What do you remember of it?', 'The first thing',
-    '[memory] 2026-11-11 00:32 UTC to 2026-11-11 00:33 UTC. What do you remember of it?', 'The second thing',
+    `[memory] 2026-11-11 00:01 UTC to 2026-11-11 00:02 UTC, from event ${a[0]!.id}. What do you remember of it?`, 'The first thing',
+    `[memory] 2026-11-11 00:32 UTC to 2026-11-11 00:33 UTC, from event ${b[0]!.id}. What do you remember of it?`, 'The second thing',
     '[memory] What follows is shown as it happened.',
   ]);
   expect(shown.slice(6)).toEqual(['three', 'doing three', 'and?']);

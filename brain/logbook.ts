@@ -74,7 +74,8 @@ function whose(m: Memory | Merge): string {
 /** A memory as two messages: the question is the memory system's, the answer is the agent's own, as it wrote it. */
 function recalled(m: Memory | Merge, more = ''): ChatMessage[] {
   return [
-    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}. What do you remember of it?${whose(m)}${more}` },
+    // Where its stretch begins is said with every memory: `open` shows the stretch as it happened, and a memory is never all there is of it.
+    { role: 'user', content: `${MEMORY_MARK} ${when(m.start)} to ${when(m.end)}, from event ${m.from}. What do you remember of it?${whose(m)}${more}` },
     { role: 'assistant', content: `${m.title}\n\n${m.text}` },
   ];
 }
@@ -86,7 +87,14 @@ export interface Entry {
   /** 1 for an episode, more for a memory of several, 0 for a pinned stretch, which is never made into anything wider. */
   level: number;
   messages: ChatMessage[];
+  /** The memory in one line, for the contents of what is not shown: the day it begins, its title, and the event its stretch begins at. Absent where there is no memory to name. */
+  line?: string;
 }
+
+/** A memory in one line of the contents. */
+const lineOf = (m: Memory | Merge): string => `${m.start.slice(0, 10)} ${m.title.replace(/\s+/g, ' ').slice(0, CONTENTS_TITLE)} (event ${m.from})`;
+/** The most of a title a line of the contents holds. */
+const CONTENTS_TITLE = 80;
 
 /** The share of the room that pinned stretches may take together. What is pinned beyond it is shown as its memory, and said to be. */
 export const PIN_SHARE = 0.3;
@@ -162,7 +170,7 @@ export function entries(kept: Episode[], count: number, { memories, quarantined,
       }
     }
     if (wide !== null) {
-      out.push({ from: i, to: reach, level: wide.level, messages: recalled(wide) });
+      out.push({ from: i, to: reach, level: wide.level, messages: recalled(wide), line: lineOf(wide) });
       i = reach + 1;
       continue;
     }
@@ -173,7 +181,7 @@ export function entries(kept: Episode[], count: number, { memories, quarantined,
       : given !== undefined ? unremembered(given)
       // Remembered once, and the memory withdrawn by the owner: it is being formed again.
       : [{ role: 'user' as const, content: `${MEMORY_MARK} ${when(episode.start)} to ${when(episode.end)}: your memory of this stretch was withdrawn and is being formed again. It is in your journal as it happened.` }];
-    out.push({ from: i, to: i, level: unmet === '' ? 1 : 0, messages });
+    out.push({ from: i, to: i, level: unmet === '' ? 1 : 0, messages, ...(memory !== undefined && memory.outcome !== 'quiet' ? { line: lineOf(memory) } : {}) });
     i += 1;
   }
   return out;
@@ -339,9 +347,40 @@ function trimmed(shown: Entry[], cap: number): ChatMessage[] {
       leave.add(entry);
     }
   }
-  const gone = [...leave].filter((entry) => entry.messages.length > 0).length;
+  const gone = [...leave].filter((entry) => entry.messages.length > 0);
   return [
-    ...(gone === 0 ? [] : [{ role: 'user' as const, content: `${MEMORY_MARK} ${gone} earlier memories are not shown here. They are in your journal.` }]),
+    ...(gone.length === 0 ? [] : [{ role: 'user' as const, content: contents(gone, Math.floor(cap * CONTENTS_SHARE)) }]),
     ...shown.filter((entry) => !leave.has(entry)).flatMap((entry) => entry.messages),
   ];
+}
+
+/** The share of the logbook's size that the contents of what is not shown may take beside it. */
+export const CONTENTS_SHARE = 0.2;
+/** Lines leave the contents this many at a time, so that it changes seldom. */
+const CONTENTS_STEP = 20;
+
+/**
+ * The contents of the memories that are not shown: a line for each, oldest first, so that the
+ * agent knows what it has and can ask for it. A memory that stands for several is one line; what
+ * it stands for is reached through it. The lines only ever gain at their end as more memories
+ * leave, so what was sent before is sent again unchanged. Should the lines themselves outgrow
+ * their room, the oldest give way, a step at a time, to a count and the days they span.
+ */
+function contents(gone: Entry[], room: number): string {
+  const lines = gone.flatMap((entry) => (entry.line === undefined ? [] : [entry.line]));
+  const unnamed = gone.length - lines.length;
+  let from = 0;
+  const size = (): number => lines.slice(from).reduce((n, line) => n + line.length + 1, 0);
+  // A long list gives way a step at a time; a short one, line by line, so that what fits is said.
+  const step = lines.length > 2 * CONTENTS_STEP ? CONTENTS_STEP : 1;
+  while (from < lines.length && size() > room) from += step;
+  from = Math.min(from, lines.length);
+  const kept = lines.slice(from);
+  const earlier = from + unnamed;
+  return [
+    `${MEMORY_MARK} ${gone.length} earlier memories are not shown here in full. They are kept: each line below is one of them, by the day it begins, its title and the event its stretch begins at. `
+    + '`open` with that event shows the stretch as it happened, `timeline` what lay around it, and `recall` finds any of them by what it was about.'
+    + (earlier === 0 ? '' : ` ${earlier} more, ${from === 0 ? 'with nothing to name them by' : `the oldest, from ${lines[0]!.slice(0, 10)} to ${lines[from - 1]!.slice(0, 10)}`}, are not listed: \`timeline\` and \`recall\` reach them.`),
+    ...kept,
+  ].join('\n');
 }
