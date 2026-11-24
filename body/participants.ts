@@ -98,6 +98,69 @@ function suppose(journal: string, gen: string, events: JournalEvent[], p: Partic
   wonder(journal, gen, p, like, `they bear the same name, ${p.name}`);
 }
 
+/**
+ * The same of everyone already met: people of one name on different services, of whom nothing has
+ * been supposed or said yet. One question for each name, not for each pair. It is asked of the
+ * whole of what was met, at start, and leaves nothing to do the next time: what it supposed is set
+ * down, so the same look-alikes are found related. Returns how many questions it set down.
+ */
+export function supposeAll(journal: string, gen: string, events: JournalEvent[]): number {
+  const held = contacts(events);
+  const related = (a: Participant, b: Participant): boolean => {
+    const [mine, theirs] = [held.get(keyOf(a)), held.get(keyOf(b))];
+    if (mine !== undefined && mine === theirs) return true;
+    const [x, y] = [mine?.key ?? keyOf(a), theirs?.key ?? keyOf(b)];
+    return (mine?.maybe.includes(y) ?? false) || (mine?.apart.includes(y) ?? false) || (theirs?.maybe.includes(x) ?? false) || (theirs?.apart.includes(x) ?? false);
+  };
+  const byName = new Map<string, Participant[]>();
+  for (const p of participants(events).values()) {
+    if (p.bot === true || flat(p.name).length < 3) continue;
+    byName.set(flat(p.name), [...(byName.get(flat(p.name)) ?? []), p]);
+  }
+  let asked = 0;
+  for (const group of byName.values()) {
+    // The pairs on different services that nothing relates yet.
+    const pairs = group.flatMap((a, i) => group.slice(i + 1).filter((b) => b.service !== a.service && !related(a, b)).map((b) => [a, b] as const));
+    if (pairs.length === 0) continue;
+    for (const [a, b] of pairs) appendEvent(journal, gen, { type: 'note', kind: CONTACT_KIND, data: { key: keyOf(a), maybe: keyOf(b), why: `they bear the same name, ${a.name}` } });
+    const those = [...new Map(pairs.flat().map((p) => [keyOf(p), p])).values()].map((p) => `${p.name} (${keyOf(p)})`);
+    appendEvent(journal, gen, {
+      type: 'note', kind: INTENTION_KIND,
+      data: { text: `Which of these accounts are the same person? ${those.join(', ')}. They bear the same name on different services, so I think some may be. Until you say, I keep them all apart.`, origin: 'ask' } satisfies IntentionData,
+    });
+    asked += 1;
+  }
+  return asked;
+}
+
+/** Written once the agent has been set to compare everyone it had met before it supposed anything of accounts. */
+export const COMPARED_KIND = 'chat.contacts.compared.v1';
+
+/**
+ * A name tells little across services: one gives a full name, another a login. Whether two
+ * accounts are one person the agent can often tell from what it knows of them, and nothing else
+ * can. So, once in its life, when it has met people on more than one service, it is given the
+ * going over of them as a thing to do: its own judgement, set down with `contact` as supposed, and
+ * its owner asked. Returns whether it was set down now.
+ */
+export function compareOnce(journal: string, gen: string, events: JournalEvent[]): boolean {
+  if (events.some((e) => e.type === 'note' && e.kind === COMPARED_KIND)) return false;
+  const people = [...participants(events).values()].filter((p) => p.bot !== true);
+  const services = [...new Set(people.map((p) => p.service))];
+  if (services.length < 2) return false;
+  appendEvent(journal, gen, { type: 'note', kind: COMPARED_KIND, data: { people: people.length, services } });
+  appendEvent(journal, gen, {
+    type: 'note', kind: INTENTION_KIND,
+    data: {
+      text: `Go over everyone I have met (\`contact\` with no name lists them: ${people.length} people on ${services.join(', ')}) and what I know of each, and look for accounts on different services that are one person: `
+        + 'a login that fits a name, the same work, the same repositories, what they said of themselves. A name is not a person and a guess joins nothing: for each pair I think is one, '
+        + '`contact` with `same_as` and no words sets it down as supposed and asks my owner. When I have gone through them all, this is done.',
+      origin: 'own',
+    } satisfies IntentionData,
+  });
+  return true;
+}
+
 /** Sets down that `p` may be the same one as each of `like`, and the one question for the owner about it. */
 export function wonder(journal: string, gen: string, p: Participant, like: Participant[], why: string): void {
   for (const other of like) appendEvent(journal, gen, { type: 'note', kind: CONTACT_KIND, data: { key: keyOf(p), maybe: keyOf(other), why } });

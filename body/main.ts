@@ -46,7 +46,7 @@ import { TOOLS, type ToolContext } from './tools';
 import { SKILL_TOOLS, keepVerified, offerFor, openSkills, seedRecoverySkill, skillUse } from './skill-tools';
 import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
-import { CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, enter, meet, whoLines } from './participants';
+import { COMPARED_KIND, CONTACT_KIND, PARTICIPANT_KIND, PLACE_KIND, compareOnce, enter, meet, supposeAll, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, communityReads, openCommunity, type Heard, type How } from './community';
 import { ATTENTION_KIND, QUIET_RUN, ensureHeard, modeFrom, typingFor } from './chat-tools';
@@ -185,6 +185,14 @@ const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, in
 ctx.skills = openSkills(ctx);
 try { seedRecoverySkill(ctx); } catch (err) { console.error(`[skills] recovery skill was not seeded: ${err instanceof Error ? err.message : String(err)}`); }
 // A verification holds for one generation: the enabled skills are verified again for this one, so that they go on being found and offered.
+// Of everyone already met: who bears the name of someone on another service and so may be the same one. Asked of the owner, once; nothing is joined (body/participants.ts).
+try {
+  const met = noted(PARTICIPANT_KIND, CONTACT_KIND, COMPARED_KIND);
+  const asked = supposeAll(journal, gen, met);
+  if (asked > 0) console.error(`[contacts] ${asked} ${asked === 1 ? 'question' : 'questions'} set down for the owner about accounts that may be one person`);
+  // And what a name cannot tell is the agent's own to go over, once.
+  if (compareOnce(journal, gen, met)) console.error('[contacts] the agent was set to go over everyone it has met for accounts that are one person');
+} catch (err) { console.error(`[contacts] look-alikes among those met were not gone over: ${err instanceof Error ? err.message : String(err)}`); }
 try { const again = keepVerified(ctx); if (again > 0) console.error(`[skills] verified ${again} enabled ${again === 1 ? 'skill' : 'skills'} for this generation`); } catch (err) { console.error(`[skills] the enabled skills could not be verified again: ${err instanceof Error ? err.message : String(err)}`); }
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
