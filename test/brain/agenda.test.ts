@@ -439,10 +439,19 @@ test('what waits is offered when its time has come and at no other moment; what 
   expect(lookedAt({ ...once, attempts: 3 }, at).checkAt).toBe(at + 4 * 3_600_000);
   expect(lookedAt({ ...once, attempts: 40 }, at).checkAt).toBe(at + DAY);
 
-  // What waits for an arrival is looked at only when it has stood untouched for days: the arrival may have been missed.
+  // What waits for an arrival, with no time set, is looked over once it has stood untouched for a day: nothing waits for ever in silence.
   const old = Date.parse(arrival.ts);
-  expect(followUps(held, old + 2 * DAY).map((i) => i.text)).not.toContain('Publish the offer once approved');
-  expect(followUps(known([arrival]), old + 3 * DAY).map((i) => i.text)).toEqual(['Publish the offer once approved']);
+  expect(followUps(held, old + 20 * 3_600_000).map((i) => i.text)).not.toContain('Publish the offer once approved');
+  expect(followUps(known([arrival]), old + DAY).map((i) => i.text)).toEqual(['Publish the offer once approved']);
+  // It is offered to be looked over, not checked: does what it waits for still exist, is it a question that waits, can it be closed.
+  const over = offered(known([arrival]), old + DAY);
+  expect(over).toContain('have no time set to look again, and have stood so for a day or more');
+  expect(over).toContain('Publish the offer once approved');
+  expect(over).toContain('it is the question that waits');
+  expect(over).not.toContain('The time you set to look again');
+  // Offered once, it has a time, and comes round again only after it.
+  const looked = lookedAt(known([arrival]).intentions[0]!.work!, old + DAY);
+  expect(looked.checkAt).toBeGreaterThan(old + DAY);
   expect(knownText(held, '2026-11-20', '[memory]')).toContain('[waiting, until what it waits for arrives; for: The owner\'s approval.]');
   expect(knownText(held, '2026-11-20', '[memory]')).toContain(`[waiting, to look again ${new Date(at + 30 * 60_000).toISOString().slice(0, 16).replace('T', ' ')} UTC; for: Look at the build page.]`);
 });
@@ -481,4 +490,36 @@ test('looking ahead names what has only waited for days, to be closed or asked a
   expect(asked).toContain('A list of things that only wait is no agenda');
   expect(at).toBeGreaterThan(0);
   expect(DONE_KIND).not.toBe(WORK_KIND);
+});
+
+test('questions put to the owner that have had no answer for a day are told again with the day\'s report, in one message, though nothing else is to be told', () => {
+  const asked = (text: string, at: number) => ({ ...ev({ type: 'note', kind: INTENTION_KIND, data: { text, origin: 'ask' } }), ts: new Date(at).toISOString() }) as JournalEvent;
+  const said = (text: string, at: number) => ({ ...ev({ type: 'assistant', text, toolCalls: [] }), ts: new Date(at).toISOString() }) as JournalEvent;
+  const q1 = asked('May the release go out on Friday?', NOW - 5 * DAY);
+  const q2 = asked('Which of the two logos do you prefer?', NOW - 5 * DAY + 1000);
+  const marks = known([q1, q2]).intentions.map((i) => i.mark);
+  const put = said(`${marks[0]} May the release go out on Friday? ${marks[1]} Which logo?`, NOW - 4 * DAY);
+  const events = [q1, q2, put];
+  // Nothing was done on its own, and still it is time: two questions have waited four days.
+  const ask = reportAsk(events, NOW);
+  expect(ask).toContain('2 questions of yours have waited for your owner\'s word for a day or more');
+  expect(ask).toContain('all of it together in one short message');
+  expect(ask).toContain('Waiting for their word:');
+  expect(ask).toContain(marks[0]!);
+  expect(ask).toContain(marks[1]!);
+  expect(ask).not.toContain('what you have been doing on your own');
+  // Put less than a day ago, a question is not told again yet; and one never put is the tick's own to put first.
+  expect(reportAsk([q1, q2, said(`${marks[0]} ${marks[1]}`, NOW - 3_600_000)], NOW)).toBe('');
+  expect(reportAsk([q1, q2], NOW)).toBe('');
+  // Told, with the mark of the day, it is not told again until the next day; then it is, for as long as no answer comes.
+  const day = new Date(NOW).toISOString().slice(0, 10).replaceAll('-', '');
+  const told = said(`R${day} Two things wait for your word: ${marks[0]} and ${marks[1]}.`, NOW + 60_000);
+  expect(reportAsk([...events, told], NOW + 3_600_000)).toBe('');
+  expect(reportAsk([...events, told], NOW + DAY + 120_000)).toContain('waited for your owner');
+  // Answered, nothing waits and nothing is told.
+  const answered = ev({ type: 'note', kind: DONE_KIND, data: { intention: q1.id, how: 'yes' } });
+  const also = ev({ type: 'note', kind: DONE_KIND, data: { intention: q2.id, how: 'the second' } });
+  expect(reportAsk([...events, told, answered, also], NOW + DAY + 120_000)).toBe('');
+  // And a tick is worth giving for it, where an agent with nothing ready would otherwise be given none.
+  expect(worthATick(known(events), NOW, ask)).toBe(true);
 });
