@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { EXAM_KIND, questionsOf } from '../../brain/exam';
-import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, OWN_CHARS, byMark, known, knownText } from '../../brain/known';
+import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, OWN_CHARS, UNCONFIRMED_DAYS, byMark, known, knownText } from '../../brain/known';
 import { buildMessages } from '../../brain/memory';
 import { journalPast } from '../../brain/past';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
@@ -145,7 +145,7 @@ test('the two lists after a memory are read line by line, and a line that is not
       { source: 'owner', text: 'The owner wants answers in Russian', replaces: ['F1a2b3c4', 'Fdeadbeef'] },
     ],
     intentions: [{ text: 'Send the weekly report', due: '2026-11-20' }, { text: 'Ask about the staging quota' }],
-    done: [], questions: [], outdated: [],
+    done: [], questions: [], outdated: [], confirmed: [],
   });
 });
 
@@ -308,4 +308,24 @@ test('ideas of its own are the agent\'s to pile up, so the list shows the newest
   expect(shown).not.toContain('Idea 1 ');
   expect(shown).toContain('Idea 4 ');
   expect(shown).toContain('(3 older ideas of your own are not shown here; they are on your agenda still, and a tick offers them in turn.)');
+});
+
+test('a fact long neither set down nor seen to hold again is shown with a word of caution, and seeing it hold takes the caution away', () => {
+  const day = (n: number): string => new Date(Date.parse('2026-01-01T00:00:00.000Z') + n * 86_400_000).toISOString();
+  const fact = (id: string, text: string, at: string): JournalEvent => ({ v: 1, id, ts: at, gen: 'g1', type: 'note', kind: FACT_KIND, data: { text, source: 'owner', episode: 'e1' } }) as JournalEvent;
+  const old = fact('fact-old', 'The staging host is alpha', day(0));
+  const fresh = fact('fact-new', 'Reports go out on Fridays', day(80));
+  const today = day(90).slice(0, 10);
+  const lines = (events: JournalEvent[]): string => knownText(known(events), today, '[memory]')!;
+  // Ninety days old, never looked at again: still shown, and said to be old. The one of ten days ago is not.
+  expect(lines([old, fresh])).toContain(`${known([old]).facts[0]!.mark} [owner] [last seen to hold 2026-01-01: check before you rely on it] The staging host is alpha`);
+  expect(lines([old, fresh])).toContain(`${known([fresh]).facts[0]!.mark} [owner] Reports go out on Fridays`);
+  // Seen to hold a week ago: known to hold as of then, and shown plainly.
+  const seen: JournalEvent = { v: 1, id: 'c1', ts: day(83), gen: 'g1', type: 'note', kind: CONFIRMED_KIND, data: { fact: 'fact-old', episode: 'e9' } } as JournalEvent;
+  expect(known([old, fresh, seen]).facts[0]!.confirmed).toBe(day(83));
+  expect(lines([old, fresh, seen])).not.toContain('check before you rely on it');
+  // Nothing is forgotten for being old, and a confirmation of what is not held is no fact.
+  expect(known([old, fresh]).facts).toHaveLength(2);
+  expect(known([fresh, { ...seen, data: { fact: 'nothing' } } as JournalEvent]).facts).toHaveLength(1);
+  expect(UNCONFIRMED_DAYS).toBe(60);
 });

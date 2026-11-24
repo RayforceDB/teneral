@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { STORE_VERSION } from '../../brain/store';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -159,7 +160,7 @@ console.log(JSON.stringify(out));
     ],
   });
   // What the server kept is beside the journal, to be found by the next body.
-  expect(existsSync(join(root, 'memory', 'store-v3'))).toBe(true);
+  expect(existsSync(join(root, 'memory', `store-v${STORE_VERSION}`))).toBe(true);
 }, 60_000);
 
 test.skipIf(!real)('a server an earlier body left running is ended before the next one is started', async () => {

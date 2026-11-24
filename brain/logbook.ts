@@ -273,7 +273,11 @@ export function headOf(events: JournalEvent[], of: Known = known(events)): Head 
  * journal with a pin among what is swapped must be given whole.
  */
 export function logbook(head: Head, messages: ChatMessage[], origin: number[], room: number, chosen: Sizes = {}): Logbook {
-  const knowing: ChatMessage[] = head.knowing === '' ? [] : [{ role: 'user', content: head.knowing }];
+  // What is known has a share of the room and no more: a list of things meant to be done can grow without end, and a
+  // request must fit whatever the journal holds. In a request of ordinary size it is nowhere near its share.
+  const most = Math.max(0, Math.floor(room * KNOWING_SHARE));
+  const known = head.knowing.length <= most ? head.knowing : head.knowing.length <= KNOWING_CUT.length || most <= KNOWING_CUT.length ? '' : `${head.knowing.slice(0, most - KNOWING_CUT.length)}${KNOWING_CUT}`;
+  const knowing: ChatMessage[] = known === '' ? [] : [{ role: 'user', content: known }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
   const { kept, told: all } = head;
   if (kept.length === 0) return nothingSwapped;
@@ -300,7 +304,12 @@ export function logbook(head: Head, messages: ChatMessage[], origin: number[], r
   let count = swapped(head, room, chosen);
   // The memories take room themselves; one more episode at a time until it all fits or there is none left to swap.
   while (count > 0 && count < kept.length && !fits(count)) count += 1;
-  return count === 0 ? nothingSwapped : { head: headOfCount(count), seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
+  if (count === 0) return nothingSwapped;
+  // In a request so small that the memories cannot be told in it at all, they are not: what is known is kept if that much
+  // fits, and the rest of the room is for what was just said. Nothing of ordinary size comes near this.
+  const told = headOfCount(count);
+  const fitsAtAll = (messages: ChatMessage[]): boolean => messages.reduce((n, m) => n + sizeOf(m), SEAM.length) <= room * HEAD_MOST;
+  return { head: fitsAtAll(told) ? told : fitsAtAll(knowing) ? knowing : [], seam: { role: 'user', content: SEAM }, start: ends[count - 1]! };
 }
 
 /**
@@ -354,8 +363,16 @@ function trimmed(shown: Entry[], cap: number): ChatMessage[] {
   ];
 }
 
+/** The most of a request's room that everything told before the conversation may take together. */
+const HEAD_MOST = 0.9;
+/** The share of a request's room that what the agent knows and means to do may take. */
+export const KNOWING_SHARE = 0.3;
+const KNOWING_CUT = `\n${MEMORY_MARK} The rest of what you know and mean to do does not fit here. It is kept: \`recall\` finds it.`;
+
 /** The share of the logbook's size that the contents of what is not shown may take beside it. */
 export const CONTENTS_SHARE = 0.2;
+/** Below this much room the contents are not laid out at all. */
+const CONTENTS_LEAST = 150;
 /** Lines leave the contents this many at a time, so that it changes seldom. */
 const CONTENTS_STEP = 20;
 
@@ -367,6 +384,8 @@ const CONTENTS_STEP = 20;
  * their room, the oldest give way, a step at a time, to a count and the days they span.
  */
 function contents(gone: Entry[], room: number): string {
+  // With no room even for saying what the lines are, only that there are such memories is said.
+  if (room < CONTENTS_LEAST) return `${MEMORY_MARK} ${gone.length} earlier memories are not shown here. They are kept: \`recall\` finds them.`;
   const lines = gone.flatMap((entry) => (entry.line === undefined ? [] : [entry.line]));
   const unnamed = gone.length - lines.length;
   let from = 0;

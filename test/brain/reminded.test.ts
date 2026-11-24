@@ -15,7 +15,7 @@ import type { ToolContext } from '../../body/tools';
 let n = 0;
 const ev = (body: EventBody): JournalEvent => ({ v: 1, id: `r${++n}`, ts: '2026-11-11T00:00:00.000Z', gen: 'g1', ...body } as JournalEvent);
 const memory = (title: string, text: string): JournalEvent => ev({ type: 'note', kind: EPISODE_KIND, data: { from: 'e1', to: 'e2', title, text, outcome: 'done' } });
-const hit = (event: JournalEvent, score: number, terms: string[]): Found => ({ doc: 0, kind: 'memory', score, terms, event });
+const hit = (event: JournalEvent, score: number, terms: string[]): Found => ({ doc: 0, kind: 'memory', score, terms, cover: 1, event });
 
 test('the memories that answer best are brought back, with how to see what happened; a weak or a one-word match is not', () => {
   const parted = memory('The parted average over symbols', 'The average over a parted symbol column returned garbage because the group map was built per part. Fixed in avg_parted.');

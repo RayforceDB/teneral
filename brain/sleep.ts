@@ -4,7 +4,7 @@ import { DEFAULT_BUDGET, assemble, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
-import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
+import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData, type Remembered } from './remembered';
@@ -169,7 +169,9 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + `In the brackets say where it comes from: ${SOURCES.join(', ')} (owner: your owner said it; seen: you saw it yourself, as in a tool's output; `
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
     + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
-    + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>',
+    + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>\n'
+    + 'And when this stretch shows that a fact you already hold, listed above with its mark, still holds, say so in a line of its own, with nothing after it: - [seen] (confirms F1a2b3c4)\n'
+    + 'A fact you have not seen to hold for a long time is shown to you with a word of caution; this is how it loses it.',
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
     + 'An intention left open stays in front of you for good, so close every one this stretch settles.',
@@ -240,9 +242,11 @@ export interface Formed {
   questions: { question: string; begins: string }[];
   /** Earlier memories this stretch made outdated: the mark each was shown with, and what no longer holds. */
   outdated: { mark: string; why: string }[];
+  /** Facts already held that this stretch showed to hold still: the mark of each. */
+  confirmed: string[];
 }
 
-const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about)\s+[^)]*\)\s*)*)(.+)$/i;
+const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about|confirms)\s+[^)]*\)\s*)*)(.*)$/i;
 const INTENTION_LINE = /^-\s*\[\s*(\d{4}-\d{2}-\d{2})?\s*\]\s*(.+)$/;
 const DONE_LINE = /^-\s*(I[0-9a-zA-Z]{4,12})\b[\s:,-]*(.*)$/;
 const QUESTION_LINE = /^-\s*(.+?)\s*=>\s*(.+)$/;
@@ -256,10 +260,10 @@ type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated';
 const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated' };
 
 /** The lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
-function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated'> & { body: string[] } {
+function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed'> & { body: string[] } {
   const heading = (line: string): List | null => HEADINGS[plain(line).toLowerCase()] ?? null;
   const first = lines.findIndex((line) => heading(line) !== null);
-  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated'> = { facts: [], intentions: [], done: [], questions: [], outdated: [] };
+  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [] };
   if (first === -1) return { body: lines, ...found };
   let list: List | null = null;
   for (const line of lines.slice(first)) {
@@ -270,6 +274,9 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
       const source = SOURCES.find((s) => s === m?.[1]?.toLowerCase());
       const replaces = /\(\s*replaces\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1] ?? '';
       const about = /\(\s*about\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1]?.trim() ?? '';
+      // A fact already held that this stretch shows to hold still: named by its mark, with or without anything said of it.
+      const confirms = /\(\s*confirms\s+([^)]*)\)/i.exec(m?.[2] ?? '')?.[1] ?? '';
+      if (m && confirms !== '') { found.confirmed.push(...confirms.split(/[\s,]+/).filter((mark) => mark !== '')); continue; }
       if (m && source !== undefined && m[3]!.trim().length >= 8) {
         found.facts.push({ source, text: m[3]!.trim(), replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about }) });
       }
@@ -470,7 +477,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, outdated, ...kept } = memory;
+      const { facts, intentions, done, questions, outdated, confirmed, ...kept } = memory;
       put(d, {
         type: 'note', kind: EPISODE_KIND,
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
@@ -483,6 +490,11 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
           type: 'note', kind: FACT_KIND,
           data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }) } satisfies FactData,
         });
+      }
+      // A fact this stretch showed to hold still is known to hold as of now: only one held then, named by the mark it was shown with.
+      for (const mark of new Set(confirmed)) {
+        const fact = byMark(held, mark);
+        if (fact !== null && held.facts.some((f) => f.id === fact.id)) put(d, { type: 'note', kind: CONFIRMED_KIND, data: { fact: fact.id, episode: episode.first } });
       }
       // What the stretch says was taken on is not set down from here. By the time a stretch is
       // remembered its promises are kept, or already held: they are set down when they are made

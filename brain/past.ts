@@ -4,7 +4,7 @@ import { episodes, type Episode } from './episodes';
 import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
-import { documentOf, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
+import { documentOf, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { LINE_MAX, OUTDATED_KIND, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { acceptanceNotes } from './acceptance';
@@ -142,6 +142,10 @@ export const projections = (): Projection[] => [knownProjection(), memoryProject
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
+/** How many keys a question may be led by, and what share of a key's score the event it leads to gains. */
+const KEYS = 5;
+const KEY_LENT = 1;
+const KEY_COVER = 0.75;
 // Measured on the first life that wrote its own questions (15 of them, each put in other words than its answer): with nothing lent, the
 // answering event was among the first five finds for 3; with 0.3 for 6; with 0.6 to 1 for 7; past 1, questions that name the answer's own
 // words began to lose it. The exam is how this number is to be changed (brain/exam.ts).
@@ -173,21 +177,47 @@ function finder(
       const event = read(hit.doc);
       return event === null ? [] : [{ ...hit, event }];
     });
+    // The questions written of what happened are keys: each that matches leads to the events it names, which are
+    // found by it as well as by their own words, or by it alone.
+    const led = new Map<number, number>();
+    // Only a key that most of the question's words are in: a word or two in common is no sign that the same thing is asked.
+    // The words are weighed by how rare they are among the keys: the telling word of a question counts for most of it.
+    const keys = withEvent(recall(index, question, { kinds: ['key'], limit: KEYS }).filter((key) => key.cover >= KEY_COVER));
+    if (keys.length > 0) {
+      const where = offsetsOf(keys.flatMap((key) => keyed(key.event)));
+      for (const key of keys) for (const id of keyed(key.event)) {
+        const doc = where.get(id);
+        if (doc !== undefined) led.set(doc, Math.max(led.get(doc) ?? 0, key.score));
+      }
+    }
+    const recallWith: typeof recall = (ix, q, o) => {
+      if (led.size === 0) return recall(ix, q, o);
+      const all = recall(ix, q, { ...o, limit: Number.MAX_SAFE_INTEGER });
+      const seen = new Set(all.map((hit) => hit.doc));
+      const lifted = all.map((hit) => (led.has(hit.doc) ? { ...hit, score: hit.score + KEY_LENT * led.get(hit.doc)! } : hit));
+      for (const [doc, score] of led) {
+        if (seen.has(doc)) continue;
+        const event = read(doc);
+        const kind = event === null ? undefined : documentOf(event)?.kind;
+        if (kind !== undefined && kind !== 'key' && (o?.kinds === undefined || o.kinds.includes(kind))) lifted.push({ doc, kind, score: KEY_LENT * score, terms: [], cover: 0 });
+      }
+      return lifted.sort((a, b) => b.score - a.score || b.doc - a.doc).slice(0, o?.limit ?? 10);
+    };
     const memories = withEvent(recall(index, question, { kinds: ['memory'], limit: LENDERS }));
     const stretches = memories.flatMap((m) => {
       const d = (m.event as { data?: { from?: unknown; to?: unknown } }).data;
       return typeof d?.from === 'string' && typeof d?.to === 'string' ? [{ from: d.from, to: d.to, score: m.score }] : [];
     });
-    if (stretches.length === 0 || LENT <= 0) return withEvent(recall(index, question, options));
+    if (stretches.length === 0 || LENT <= 0) return withEvent(recallWith(index, question, options));
     const at = offsetsOf(stretches.flatMap((st) => [st.from, st.to]));
     const spans = stretches.flatMap((st) => {
       const [from, to] = [at.get(st.from), at.get(st.to)];
       return from === undefined || to === undefined ? [] : [{ from, to, score: st.score }];
     });
-    if (spans.length === 0) return withEvent(recall(index, question, options));
+    if (spans.length === 0) return withEvent(recallWith(index, question, options));
     // Recall has already scored every matching document. Keep the ordinary global pool, then add
     // matches from the selected stretches without another index scan or a local rarity calculation.
-    const all = recall(index, question, { ...options, limit: Number.MAX_SAFE_INTEGER });
+    const all = recallWith(index, question, { ...options, limit: Number.MAX_SAFE_INTEGER });
     const inside = all.filter((hit) => hit.kind !== 'memory' && spans.some((sp) => hit.doc >= sp.from && hit.doc <= sp.to));
     const candidates = [...new Map([...all.slice(0, LOOKED + limit), ...inside].map((hit) => [hit.doc, hit])).values()];
     const closing = closingReply(spans[0]!.from, spans[0]!.to);

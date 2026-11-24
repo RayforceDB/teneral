@@ -409,3 +409,90 @@ test('the generator covers what it is meant to: calls, results, old shapes', () 
   expect(onTools).toBeGreaterThan(5);
   expect(overLimit).toBeGreaterThan(10);
 });
+
+// --- a life with a memory: the same promise for a journal that has memories, wider memories, pins, and everything the owner and the agent can say of them ---
+
+import { GAP_MS } from '../../brain/episodes';
+import { OUTDATED_KIND } from '../../brain/links';
+import { EPISODE_KIND, MERGE_KIND, QUARANTINE_KIND } from '../../brain/remembered';
+
+/** A life of `count` stretches, the first `told` of them remembered in one way or another, and whatever was said of the memories since. */
+function rememberedLife(seed: number): JournalEvent[] {
+  const { next, pick } = generator(seed * 7919);
+  let n = 0;
+  let clock = Date.parse('2026-01-01T00:00:00.000Z');
+  const ev = (body: Record<string, unknown>, afterMs = 1000): JournalEvent => ({ v: 1, id: `f${seed}.${++n}`, ts: new Date(clock += afterMs).toISOString(), gen: 'g1', ...body }) as JournalEvent;
+  const words = (most: number): string => 'w'.repeat(1 + Math.floor(next() * most));
+  const count = 2 + Math.floor(next() * 40);
+  const stretches: JournalEvent[][] = [];
+  for (let i = 0; i < count; i++) {
+    const s = [ev({ type: 'stimulus', source: pick(['terminal', 'owner:zulip', 'agent:rayboard', 'clock']), text: `matter ${i} ${words(300)}` }, GAP_MS + 1000)];
+    for (let round = Math.floor(next() * 3); round > 0; round--) {
+      const id = `c${i}.${round}`;
+      s.push(ev({ type: 'assistant', text: next() < 0.5 ? '' : words(80), toolCalls: [{ id, name: 'bash', args: { command: words(40) } }] }), ev({ type: 'tool.intent', callId: id, name: 'bash', args: {} }));
+      if (next() < 0.9) s.push(ev({ type: 'tool.result', callId: id, ok: next() < 0.8, output: words(next() < 0.2 ? 9000 : 400) }));
+    }
+    s.push(ev({ type: 'assistant', text: `settled ${i} ${words(120)}`, toolCalls: [] }));
+    stretches.push(s);
+  }
+  const told = Math.floor(next() * count);
+  const span = (first: JournalEvent[], last: JournalEvent[]) => ({ from: first[0]!.id, to: last.at(-1)!.id, start: first[0]!.ts, end: last.at(-1)!.ts });
+  const notes: JournalEvent[] = [];
+  const memories: JournalEvent[] = [];
+  for (let i = 0; i < told; i++) {
+    const s = stretches[i]!;
+    if (next() < 0.08) notes.push(ev({ type: 'note', kind: QUARANTINE_KIND, data: { ...span(s, s), reason: 'the form was wrong' } }));
+    else {
+      const memory = ev({ type: 'note', kind: EPISODE_KIND, data: { ...span(s, s), title: `Stretch ${i} ${words(60)}`, text: words(next() < 0.1 ? 4000 : 500), outcome: pick(['done', 'failed', 'open', 'quiet']) } });
+      notes.push(memory);
+      memories.push(memory);
+    }
+  }
+  // Wider memories over runs of stretches, some of them over the same run twice at two levels.
+  for (let i = 0; i + 4 <= told; i += 2 + Math.floor(next() * 6)) {
+    const to = Math.min(told - 1, i + 2 + Math.floor(next() * 5));
+    if (next() < 0.6) notes.push(ev({ type: 'note', kind: MERGE_KIND, data: { ...span(stretches[i]!, stretches[to]!), title: `Stretches ${i} to ${to}`, text: words(600), outcome: 'done', level: next() < 0.8 ? 2 : 3, ...(next() < 0.2 ? { mechanical: true } : {}) } }));
+  }
+  // What the owner and the agent say of them afterwards.
+  for (let k = Math.floor(next() * 4); k > 0 && memories.length > 0; k--) notes.push(ev({ type: 'note', kind: OUTDATED_KIND, data: { memory: (pick(memories) as { data: { from: string } }).data.from, why: words(150) } }));
+  for (let k = Math.floor(next() * 3); k > 0; k--) notes.push(ev({ type: 'note', kind: 'memory.pin.v1', data: { event: pick(pick(stretches)).id } }));
+  if (memories.length > 0 && next() < 0.2) notes.push(ev({ type: 'note', kind: 'memory.withdraw.v1', data: { ids: [pick(memories).id] } }));
+  for (let k = Math.floor(next() * 6); k > 0; k--) notes.push(ev({ type: 'note', kind: 'memory.fact.v1', data: { text: `fact ${words(200)}`, source: 'owner', episode: stretches[0]![0]!.id } }));
+  // Now and then far more is meant to be done than any request can list.
+  for (let k = Math.floor(next() * (next() < 0.1 ? 400 : 6)); k > 0; k--) notes.push(ev({ type: 'note', kind: 'memory.intention.v1', data: { text: `do ${words(200)}`, ...(next() < 0.5 ? { origin: pick(['own', 'ask']) } : {}) } }));
+  const all = [...stretches.flat(), ...notes];
+  if (next() < 0.15) all.push(ev({ type: 'note', kind: 'memory.back.v1', data: { to: stretches.at(-1)![0]!.id } }));
+  if (next() < 0.7) all.push(ev({ type: 'stimulus', source: 'terminal', text: 'and now?' }, GAP_MS + 1000));
+  return all;
+}
+
+test('any life with a memory, at any budget and laid out any way, gives a request a provider accepts and that is within its budget', () => {
+  const budgets = [300, 1500, 6000, 25_000, 120_000, 2_000_000];
+  const views = [{}, { tailChars: 0 }, { tailChars: 2000, logbookChars: 800 }, { tailChars: 50_000, logbookChars: 0 }, { tailChars: 9000, resultsChars: 500 }];
+  let withContents = 0, withMemories = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const events = rememberedLife(seed);
+    for (const budget of budgets) {
+      const view = views[(seed + budget) % views.length]!;
+      try {
+        const request = buildMessages(events, SYSTEM, budget, undefined, view);
+        check(request, budget);
+        checkResponses(request);
+        const text = request.map((m) => m.content ?? '').join('\n');
+        if (text.includes('earlier memories are not shown here in full')) withContents += 1;
+        if (text.includes('What do you remember of it?')) withMemories += 1;
+      } catch (err) {
+        throw new Error(`seed ${seed}, budget ${budget}, view ${JSON.stringify(view)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+  // The lives were of the kind meant: many requests told memories, and many had to list some they could not show.
+  expect(withMemories).toBeGreaterThan(300);
+  expect(withContents).toBeGreaterThan(30);
+  // And what is known has its share and no more, however much there is of it.
+  const crowded = rememberedLife(1);
+  let m = 0;
+  for (let k = 0; k < 600; k++) crowded.push({ v: 1, id: `many${k}`, ts: '2026-06-01T00:00:00.000Z', gen: 'g1', type: 'note', kind: 'memory.intention.v1', data: { text: `do thing ${k} ${'w'.repeat(150)}` } } as JournalEvent);
+  for (const budget of [6000, 60_000]) { const request = buildMessages(crowded, SYSTEM, budget); check(request, budget); m += request.filter((x) => (x.content ?? '').includes('The rest of what you know and mean to do does not fit here')).length; }
+  expect(m).toBe(2);
+});

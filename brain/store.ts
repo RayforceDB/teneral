@@ -28,7 +28,7 @@ import { CURRENT_NOTES, currentMemoryIds, documentOf, postings, type Index, type
 // for a body that is no longer the one running, and one that is rolled back to builds its own again.
 
 /** The version of the layout below. It is in the directory's name: see `storeDir`. */
-export const STORE_VERSION = 3;
+export const STORE_VERSION = 4;
 
 /** Where the store of a journal lies: beside it, in a directory of its own. */
 export function storeDir(journal: string): string {

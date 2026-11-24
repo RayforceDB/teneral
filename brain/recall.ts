@@ -20,10 +20,31 @@ import { asText } from './stemnote';
 // them: the database (brain/store.ts) or, when there is none, the journal read through.
 
 /** What kind of text a document is. It decides how much a match in it counts. */
-export type Kind = 'owner' | 'heard' | 'memory' | 'reply' | 'did' | 'tool';
+export type Kind = 'owner' | 'heard' | 'memory' | 'reply' | 'did' | 'tool' | 'key';
 
 /** How much a match counts by the kind of its document. The agent's own words are the many and the least. */
-export const KIND_WEIGHT: Record<Kind, number> = { memory: 1.3, owner: 1, heard: 0.9, tool: 0.6, did: 0.6, reply: 0.5 };
+export const KIND_WEIGHT: Record<Kind, number> = { memory: 1.3, key: 1.3, owner: 1, heard: 0.9, tool: 0.6, did: 0.6, reply: 0.5 };
+
+/**
+ * A question the agent wrote when it formed a memory, with the events that answer it: `{ question, events }`.
+ * It is a key: its words are indexed, and a match on them leads to the events it names, which is how
+ * something is found by words other than its own. It is never itself what is found.
+ */
+export const KEY_KIND = 'memory.exam.v1';
+/** One question in this many is held out: not indexed, so that an exam has questions the index was never told the answer to. */
+export const HELD_EVERY = 4;
+/** Whether the question of the note with this id is held out. Decided by the id alone, so it is the same for good. */
+export function heldOut(id: string): boolean {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return (h >>> 0) % HELD_EVERY === 0;
+}
+/** The ids of the events a key leads to; none for anything else. */
+export function keyed(e: JournalEvent): string[] {
+  if (e.type !== 'note' || e.kind !== KEY_KIND || typeof e.data !== 'object' || e.data === null) return [];
+  const ids = (e.data as { events?: unknown }).events;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+}
 
 /** A word shorter than this says too little to look for. */
 const WORD_MIN = 2;
@@ -94,6 +115,9 @@ export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null
   else if (e.type === 'note' && r.kind === FACT_KIND && typeof r.data === 'object' && r.data !== null) {
     found = { kind: 'memory', text: asText((r.data as { text?: unknown }).text) };
   }
+  else if (e.type === 'note' && r.kind === KEY_KIND && typeof r.data === 'object' && r.data !== null && !heldOut(e.id) && keyed(e).length > 0) {
+    found = { kind: 'key', text: asText((r.data as { question?: unknown }).question) };
+  }
   return found !== null && found.text.trim() !== '' ? found : null;
 }
 
@@ -145,6 +169,8 @@ export interface Hit {
   score: number;
   /** The question's terms this document holds. */
   terms: string[];
+  /** The share of the question those terms are, each weighed by how rare it is: 1 when the document holds every term. */
+  cover: number;
 }
 
 export interface RecallOptions {
@@ -162,7 +188,9 @@ export function recall(index: Index, question: string, options: RecallOptions = 
   const terms = queryTerms(question);
   if (terms.length === 0) return [];
   const current = index.current?.();
-  const found = current === undefined ? index.matches(terms) : index.matches(terms).filter((match) => match.kind !== 'memory' || current.has(match.doc));
+  // Keys are weighed among keys and everything else among everything else: writing questions must not change how rare a word is in what happened.
+  const forKeys = options.kinds?.includes('key') === true;
+  const found = index.matches(terms).filter((match) => (match.kind === 'key') === forKeys && (match.kind !== 'memory' || current === undefined || current.has(match.doc)));
   const total = Math.max(1, index.documents());
   const holders = new Map<string, Set<number>>();
   for (const m of found) {
@@ -173,13 +201,16 @@ export function recall(index: Index, question: string, options: RecallOptions = 
     const n = holders.get(term)?.size ?? 0;
     return Math.log(1 + (total - n + 0.5) / (n + 0.5));
   };
+  /** What every term of the question would come to together: a term nothing holds is the rarest of all. */
+  const whole = terms.reduce((sum, term) => sum + rarity(term), 0) || 1;
   const hits = new Map<number, Hit>();
   for (const m of found) {
     if (options.kinds !== undefined && !options.kinds.includes(m.kind)) continue;
     let hit = hits.get(m.doc);
-    if (hit === undefined) hits.set(m.doc, hit = { doc: m.doc, kind: m.kind, score: 0, terms: [] });
+    if (hit === undefined) hits.set(m.doc, hit = { doc: m.doc, kind: m.kind, score: 0, terms: [], cover: 0 });
     hit.score += m.w * rarity(m.term) * (KIND_WEIGHT[m.kind] ?? KIND_WEIGHT.reply);
     hit.terms.push(m.term);
+    hit.cover += rarity(m.term) / whole;
   }
   return [...hits.values()].sort((a, b) => b.score - a.score || b.doc - a.doc).slice(0, options.limit ?? 10);
 }
