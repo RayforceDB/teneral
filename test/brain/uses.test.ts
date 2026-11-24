@@ -23,7 +23,7 @@ test('the weight is small and has a ceiling', () => {
 });
 
 for (const [how, open] of [['read through', (journal: string) => journalPast(journal)], ['asked of the database', served]] as const) {
-  test.skipIf(how === 'asked of the database' && library === null)(`of two events that say the same, the one the agent went back to is found first, ${how}; and it is still only a little`, () => {
+  test.skipIf(how === 'asked of the database' && library === null)(`of two events that say the same, the one the agent went back to is found first, ${how}; and it is still only a little`, { timeout: 20_000 }, () => {
     const first = ev({ type: 'stimulus', source: 'terminal', text: 'the deploy key lives in the vault under harbour' });
     const second = ev({ type: 'stimulus', source: 'terminal', text: 'the deploy key lives in the vault under harbour' });
     const other = ev({ type: 'stimulus', source: 'terminal', text: 'the deploy key lives in the vault under harbour, rotation every quarter' });

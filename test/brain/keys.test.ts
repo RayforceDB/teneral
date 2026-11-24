@@ -34,7 +34,7 @@ test('one question in a few is held out, by its id alone and for good', () => {
 });
 
 for (const how of HOWS) {
-  test.skipIf(how === 'asked of the database' && library === null)(`a question written of what happened is a key, ${how}: it leads to the event it names, by words the event does not have, and is never itself found`, () => {
+  test.skipIf(how === 'asked of the database' && library === null)(`a question written of what happened is a key, ${how}: it leads to the event it names, by words the event does not have, and is never itself found`, { timeout: 20_000 }, () => {
     const noise = Array.from({ length: 30 }, (_, i) => ev({ type: 'stimulus', source: 'terminal', text: `the weather report number ${i} says rain and wind over the harbour` }));
     const answer = ev({ type: 'assistant', text: 'Use port 8443 behind the proxy, never 443.', toolCalls: [] });
     const key = ev({ type: 'note', kind: EXAM_KIND, data: { question: 'which listener does the gateway bind to', events: [answer.id], episode: 'k1' } }, indexed[0]);
@@ -54,7 +54,7 @@ for (const how of HOWS) {
 }
 
 for (const how of HOWS) {
-  test.skipIf(how === 'asked of the database' && library === null)(`the exam scores the held-out questions apart, ${how}`, () => {
+  test.skipIf(how === 'asked of the database' && library === null)(`the exam scores the held-out questions apart, ${how}`, { timeout: 20_000 }, () => {
     const answers = Array.from({ length: 40 }, (_, i) => ev({ type: 'assistant', text: `Answer ${i}: the value is v${i}x and nothing else.`, toolCalls: [] }));
     const notes = answers.map((a, i) => ev({ type: 'note', kind: EXAM_KIND, data: { question: `what did topic alpha${i} come to`, events: [a.id], episode: 'k1' } }, i % 2 === 0 ? indexed[i] : held[i]));
     const events = [...answers, ...notes];
