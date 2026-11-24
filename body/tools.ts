@@ -489,6 +489,45 @@ const timeline: Tool = {
   },
 };
 
+const about: Tool = {
+  spec: {
+    name: 'about',
+    description:
+      'Whom and what your life has been about: the people, projects and repositories you named when you formed your memories, each tied to the stretches about it. ' +
+      'With no name: all of them, the most named first. With `name`: the stretches that are about it, oldest first, each with the event `open` shows it by; ' +
+      'who and what else was named in those stretches; and the other memories that have the name in their words.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'A person, project or repository, by the name you gave it. Leave out to list them all' } },
+      required: [],
+    },
+  },
+  async run(args, ctx) {
+    const past = pastOf(ctx);
+    const name = optional(args, 'name')?.trim() ?? '';
+    if (name === '') {
+      const all = past.entities();
+      if (all.length === 0) return 'You have named no one and nothing yet: a memory names whom and what its stretch was about as it is formed.';
+      return cap(all.map((one) => `[${one.kind}] ${one.name}  (${one.stretches} ${one.stretches === 1 ? 'stretch' : 'stretches'})`).join('\n'));
+    }
+    const found = past.about(name);
+    const { memories } = past.remembered();
+    const line = (from: string): string => {
+      const m = memories.get(from);
+      return m === undefined ? `not remembered yet  (event ${from})` : `${when(m.start)}  ${m.outcome}: ${m.title}  (event ${from})`;
+    };
+    const byTime = (ids: string[]): string[] => ids.map((id) => ({ id, at: memories.get(id)?.start ?? '9' })).sort((a, b) => a.at.localeCompare(b.at)).map((one) => line(one.id));
+    if (found.named.length === 0 && found.told.length === 0) return `You have named nothing "${name}", and no memory of yours has it in its words. \`recall\` looks through everything that happened.`;
+    const out: string[] = [];
+    if (found.named.length > 0) {
+      out.push(`${found.named.map((one) => `[${one.kind}] ${one.name}`).join(', ')}: ${found.stretches.length} ${found.stretches.length === 1 ? 'stretch is' : 'stretches are'} about it.`, ...byTime(found.stretches));
+      if (found.beside.length > 0) out.push('', `Named in the same stretches: ${found.beside.map((one) => `[${one.kind}] ${one.name}`).join(', ')}`);
+    } else out.push(`You have named nothing "${name}".`);
+    if (found.told.length > 0) out.push('', `${found.told.length} other ${found.told.length === 1 ? 'memory has' : 'memories have'} the name in ${found.told.length === 1 ? 'its' : 'their'} words:`, ...byTime(found.told));
+    return cap(out.join('\n'));
+  },
+};
+
 const intend: Tool = {
   spec: {
     name: 'intend',
@@ -758,4 +797,4 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, know, forget, outdated, lesson];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, about, intend, done, allowed, know, forget, outdated, lesson];

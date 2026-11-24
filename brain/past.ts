@@ -13,11 +13,13 @@ import { idleTicks, ownStart, ownStep } from './idle';
 import { ownSpentSince, spendProjection } from './spend-table';
 import { countOf, countStates, firstOf, firstStates, lastOf, lastStates, newestState, statesOf, statesProjection, type StateRow } from './states-table';
 import { quietFrom, quietOf, wakeStart, wakeStep, wakesProjection } from './wakes-table';
+import { useLift, usedFrom, usedOf, usesProjection } from './uses-table';
+import { aboutFrom, aboutOf, entitiesFrom, entitiesOf, entitiesProjection, entityGraph, mentionOf, type About, type Entity, type Mention } from './entities-table';
 import { knownFrom, knownProjection } from './known-table';
 import { lessonPlaces, lessonStart, lessonStep, lessons, lessonsOf, type Lesson } from './lessons';
 import { lessonsFrom, lessonsProjection } from './lessons-table';
 import { counted } from './wire';
-import { countedBefore, countsFrom, countsOf, episodesFrom, keptFrom, memoryProjection, rememberedFrom, type MemoryCounts, type Placed } from './memory-table';
+import { MEMORY, countedBefore, countsFrom, countsOf, episodesFrom, keptFrom, memoryProjection, rememberedFrom, type MemoryCounts, type Placed } from './memory-table';
 import { remembered, type Remembered } from './remembered';
 import { TIES, tiesProjection } from './ties-table';
 import { boundAs, openStore, readLine, scan, type Line, type Projection, type Store } from './store';
@@ -81,6 +83,10 @@ export interface Past {
   stateOf(name: string, keys: string[]): string | null;
   /** Whether the newest `run` wakes from `source` that carry `mark` (the words naming a channel) and that no glance settled were all answered with silence (brain/wakes-table.ts). */
   quiet(source: string, mark: string, run: number): boolean;
+  /** Everyone and everything the agent named as what a stretch was about, the most named first (brain/entities-table.ts). */
+  entities(): Entity[];
+  /** What is tied to one of them, by name: the stretches that named it, who was named beside it, and the memories that have the name in their words. */
+  about(name: string): About;
   /** The tokens the agent's own time took from `since` on, in milliseconds (`ownSpend` in brain/agenda.ts). */
   ownSpent(since: number): number;
   /** What the stem's acceptance of a species commit says to the agent, by the id of the event that records it (brain/acceptance.ts). */
@@ -138,7 +144,7 @@ function reader(journal: string): (() => Line[]) & { all: () => Line[] } {
 }
 
 /** What is made from the events and kept in tables of the store, for everything that asks the database. */
-export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection(), wakesProjection(), statesProjection()];
+export const projections = (): Projection[] => [knownProjection(), memoryProjection(), tiesProjection(), frameProjection(), lessonsProjection(), spendProjection(), wakesProjection(), statesProjection(), entitiesProjection(), usesProjection()];
 
 /** How many of the best memories lend weight to the events of their stretches, and how much of their own score they lend. */
 const LENDERS = 3;
@@ -170,6 +176,7 @@ function finder(
   read: (off: number) => JournalEvent | null,
   offsetsOf: (ids: string[]) => Map<string, number>,
   closingReply: (from: number, to: number) => number | null,
+  used: () => Map<string, number>,
 ): Past['find'] {
   return (question, options) => {
     const limit = options?.limit ?? 10;
@@ -190,9 +197,13 @@ function finder(
         if (doc !== undefined) led.set(doc, Math.max(led.get(doc) ?? 0, key.score));
       }
     }
+    // What the agent went back to before counts for a little more (brain/uses-table.ts).
+    const opened = new Map<number, number>();
+    const times = used();
+    if (times.size > 0) for (const [id, doc] of offsetsOf([...times.keys()])) opened.set(doc, times.get(id)!);
     const recallWith: typeof recall = (ix, q, o) => {
-      if (led.size === 0) return recall(ix, q, o);
-      const all = recall(ix, q, { ...o, limit: Number.MAX_SAFE_INTEGER });
+      if (led.size === 0 && opened.size === 0) return recall(ix, q, o);
+      const all = recall(ix, q, { ...o, limit: Number.MAX_SAFE_INTEGER }).map((hit) => (opened.has(hit.doc) ? { ...hit, score: hit.score * useLift(opened.get(hit.doc)!) } : hit));
       const seen = new Set(all.map((hit) => hit.doc));
       const lifted = all.map((hit) => (led.has(hit.doc) ? { ...hit, score: hit.score + KEY_LENT * led.get(hit.doc)! } : hit));
       for (const [doc, score] of led) {
@@ -235,6 +246,7 @@ function finder(
 export function journalPast(journal: string): Past {
   const lines = reader(journal);
   let tied: { seen: number; ties: ReturnType<typeof tiesOf> } | null = null;
+  const mentioned = (): Mention[] => lines.all().flatMap((line, seq) => { const m = mentionOf(line.event, seq); return m === null ? [] : [m]; });
   return {
     by: 'journal',
     remembered: () => remembered(lines().map((line) => line.event)),
@@ -290,6 +302,8 @@ export function journalPast(journal: string): Past {
     stateOf(name, keys) { return statesOf(lines.all().map((line) => line.event), name).findLast((row) => keys.includes(row.key))?.state ?? null; },
     firstStates(name, keys) { return firstOf(statesOf(lines.all().map((line) => line.event), name), keys); },
     stateCounts(name) { return countOf(statesOf(lines.all().map((line) => line.event), name)); },
+    entities() { return entitiesOf(mentioned()); },
+    about(name) { return aboutOf(mentioned(), name, [...this.remembered().memories].map(([from, m]) => ({ from, text: `${m.title}\n${m.text}` }))); },
     quiet(source, mark, run) {
       const state = wakeStart();
       lines.all().forEach((line, seq) => { wakeStep(state, line.event, seq); });
@@ -327,7 +341,7 @@ export function journalPast(journal: string): Past {
     }, (from, to) => lines().filter((line) => line.off >= from && line.off <= to).findLast((line) => {
       const text = (line.event as { text?: unknown }).text;
       return line.event.type === 'assistant' && typeof text === 'string' && text.trim() !== '';
-    })?.off ?? null),
+    })?.off ?? null, () => usedOf(lines().map((line) => line.event))),
     asked: () => lines().findLast((line) => line.event.type === 'stimulus')?.off ?? null,
     around(id, before, after) {
       const all = lines();
@@ -405,6 +419,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   };
   const notesRead = new Map<string, { count: number; events: JournalEvent[] }>();
   const nodes = (source: string, column: string): number[] => [...(ray.table(source).columns[column] as BigInt64Array | undefined ?? [])].map(Number);
+  const entities = entityGraph(ray);
   return {
     ray,
     by: 'store',
@@ -496,6 +511,16 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       store.settle();
       return quietFrom(ray, source, mark, run);
     },
+    entities() {
+      store.sync();
+      store.settle();
+      return entitiesFrom(ray);
+    },
+    about(name) {
+      store.sync();
+      store.settle();
+      return aboutFrom(ray, entities, name, boundAs(MEMORY, 'memories'));
+    },
     states(name, where) {
       store.sync();
       store.settle();
@@ -573,7 +598,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     find(question, options) {
       store.sync();
       const ranges = aside();
-      const found = finder(store.index, store.read, offsetsOf, closingReply)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
+      const found = finder(store.index, store.read, offsetsOf, closingReply, () => { store.settle(); return usedFrom(ray); })(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
       return ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, options?.limit ?? 10);
     },
     asked() {
@@ -739,6 +764,8 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     stands: () => through((past) => past.stands()),
     ownSpent: (since) => through((past) => past.ownSpent(since)),
     quiet: (source, mark, run) => through((past) => past.quiet(source, mark, run)),
+    entities: () => through((past) => past.entities()),
+    about: (name) => through((past) => past.about(name)),
     states: (name, where) => through((past) => past.states(name, where)),
     stateOf: (name, keys) => through((past) => past.stateOf(name, keys)),
     firstStates: (name, keys) => through((past) => past.firstStates(name, keys)),

@@ -576,8 +576,8 @@ export interface GateOptions {
 
 /** The files a memory is made of. A candidate that differs in any of them from the generation running is examined. */
 export const MEMORY_FILES = [
-  'episodes', 'exam', 'frame', 'frame-table', 'known', 'known-table', 'lessons', 'lessons-table', 'links', 'logbook', 'memory', 'memory-table', 'owned', 'past',
-  'ray', 'rayserver', 'recall', 'remembered', 'semantic', 'semantic-map', 'shown', 'sleep', 'store', 'ties-table', 'wire',
+  'entities-table', 'episodes', 'exam', 'frame', 'frame-table', 'known', 'known-table', 'lessons', 'lessons-table', 'links', 'logbook', 'memory', 'memory-table', 'owned', 'past',
+  'ray', 'rayserver', 'recall', 'remembered', 'semantic', 'semantic-map', 'shown', 'sleep', 'store', 'ties-table', 'uses-table', 'wire',
 ].map((name) => `brain/${name}.ts`);
 /** How much lower than the generation running a candidate may score, as a share of the questions, and never less than one question. */
 export const EXAM_SLACK = 0.02;
