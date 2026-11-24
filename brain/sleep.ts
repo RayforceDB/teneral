@@ -6,6 +6,7 @@ import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
 import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Known, type Source } from './known';
 import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, keyOf, named, type EntityKind } from './entities-table';
+import { suspectIn } from './suspect';
 import { IDENTITY_KIND, judge, nearest as nearestHeld, type Held } from './identity';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
@@ -520,6 +521,8 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
       });
       // A fact may name the one it replaces only by a mark it was shown: a mark that names nothing, or an intention, replaces nothing.
+      // The owner's word is theirs to give; anything else that reads as an instruction is kept but held back (brain/suspect.ts).
+      const held2 = (fact: { source: string; text: string }): { suspect?: string } => { const why = fact.source === 'owner' ? null : suspectIn(fact.text); return why === null ? {} : { suspect: why }; };
       const again = new Set<string>();
       for (const [i, fact] of facts.entries()) {
         const verdict = ofFacts[i]!;
@@ -529,7 +532,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         const replaces = [...fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id), ...(verdict.is === 'replaces' && other !== undefined ? [other.id] : [])];
         put(d, {
           type: 'note', kind: FACT_KIND,
-          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }) } satisfies FactData,
+          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }), ...held2(fact) } satisfies FactData,
         });
       }
       // A fact this stretch showed to hold still is known to hold as of now: only one held then, named by the mark it was shown with.
