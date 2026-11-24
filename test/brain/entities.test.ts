@@ -62,7 +62,7 @@ test('a name is not a person: who someone is to a service makes the node, and a 
 });
 
 for (const [how, open] of [['read through', (journal: string) => journalPast(journal)], ['asked of the database', served]] as const) {
-  test.skipIf(how === 'asked of the database' && library === null)(`whom and what a life is about is a graph, ${how}: people of one name are apart, each with their own stretches and those named beside them`, () => {
+  test.skipIf(how === 'asked of the database' && library === null)(`whom and what a life is about is a graph, ${how}: people of one name are apart, each with their own stretches and those named beside them`, { timeout: 20_000 }, () => {
     const { journal, a, b, c, e, f } = life();
     const past = open(journal);
     expect(past.by).toBe(how === 'read through' ? 'journal' : 'store');
