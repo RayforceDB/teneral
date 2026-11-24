@@ -319,3 +319,53 @@ test('from what it has seen, the agent may suppose two accounts of different nam
   await contact.run({ who: 'parley:7', same_as: 'zulip:88', words: 'Anna L. on Zulip is the same Ann' }, ctx);
   expect(contacts(readEvents(journal)).get('zulip:88')).toMatchObject({ key: 'parley:7', same: ['zulip:88'], maybe: [] });
 });
+
+test('those already met are gone over once for look-alikes on other services: one question a name, and nothing the second time', async () => {
+  const { supposeAll } = await import('../../body/participants');
+  const f = fresh();
+  const note = (p: object) => appendEvent(f.journal, 'g', { type: 'note', kind: PARTICIPANT_KIND, data: p });
+  // Met before any of this was supposed: three Antons on Zulip, one on GitHub, one on Parley; two Olgas of whom the owner has spoken; a bot; a lone Ivan.
+  for (const id of ['7', '12', '31']) note({ service: 'zulip', id, name: 'Anton', bot: false });
+  note({ service: 'github', id: 'anton', name: 'anton', bot: false });
+  note({ service: 'parley', id: '3', name: 'ANTON', bot: false });
+  note({ service: 'zulip', id: '40', name: 'Olga', bot: false }); note({ service: 'github', id: 'olga', name: 'Olga', bot: false });
+  note({ service: 'zulip', id: '41', name: 'CI', bot: true }); note({ service: 'github', id: 'ci', name: 'CI', bot: true });
+  note({ service: 'zulip', id: '50', name: 'Ivan', bot: false });
+  appendEvent(f.journal, 'g', { type: 'note', kind: 'chat.contact.v1', data: { key: 'zulip:40', same: 'github:olga', words: 'same Olga' } });
+  expect(supposeAll(f.journal, 'g', readEvents(f.journal))).toBe(1);
+  const asks = known(readEvents(f.journal)).intentions.map((i) => i.text);
+  expect(asks).toHaveLength(1);
+  expect(asks[0]).toContain('Which of these accounts are the same person?');
+  for (const key of ['zulip:7', 'zulip:12', 'zulip:31', 'github:anton', 'parley:3']) expect(asks[0]).toContain(`(${key})`);
+  expect(asks[0]).not.toContain('Olga');
+  // Supposed only across services: the three on Zulip are not supposed of each other.
+  const held = contacts(readEvents(f.journal));
+  expect([...held.get('zulip:7')!.maybe].sort()).toEqual(['github:anton', 'parley:3']);
+  expect([...held.get('github:anton')!.maybe].sort()).toEqual(['parley:3', 'zulip:12', 'zulip:31', 'zulip:7']);
+  expect(held.get('zulip:7')!.same).toEqual([]);
+  // Gone over again, as at every start, there is nothing left to ask.
+  expect(supposeAll(f.journal, 'g', readEvents(f.journal))).toBe(0);
+  expect(known(readEvents(f.journal)).intentions).toHaveLength(1);
+});
+
+test('what a name cannot tell is the agent\'s own to go over: once in its life, when it has met people on more than one service', async () => {
+  const { compareOnce, COMPARED_KIND } = await import('../../body/participants');
+  const f = fresh();
+  const note = (p: object) => appendEvent(f.journal, 'g', { type: 'note', kind: PARTICIPANT_KIND, data: p });
+  note({ service: 'zulip', id: '7', name: 'Anton Kovalev', bot: false });
+  note({ service: 'github', id: 'ci', name: 'CI', bot: true });
+  // One service of people: nothing to compare.
+  expect(compareOnce(f.journal, 'g', readEvents(f.journal))).toBe(false);
+  note({ service: 'github', id: 'akov', name: 'akov', bot: false });
+  expect(compareOnce(f.journal, 'g', readEvents(f.journal))).toBe(true);
+  const mine = known(readEvents(f.journal)).intentions;
+  expect(mine).toHaveLength(1);
+  expect(mine[0]).toMatchObject({ origin: 'own', waits: false });
+  expect(mine[0]!.text).toContain('2 people on zulip, github');
+  expect(mine[0]!.text).toContain('`same_as` and no words');
+  expect(readEvents(f.journal).filter((e) => e.type === 'note' && e.kind === COMPARED_KIND)).toHaveLength(1);
+  // Never a second time, whoever is met later.
+  note({ service: 'parley', id: '1', name: 'Olga', bot: false });
+  expect(compareOnce(f.journal, 'g', readEvents(f.journal))).toBe(false);
+  expect(known(readEvents(f.journal)).intentions).toHaveLength(1);
+});
