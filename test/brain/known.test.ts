@@ -292,7 +292,7 @@ test('a fact may be about a person, and a question for them is shown what is kno
   const ctx = context(journalOf([about, fact('The owner is in Lisbon')]));
   const kept = await tool('intend').run({ text: 'Which region does the failing deploy run in?', origin: 'ask', to: 'Ivan Petrov, in the deploy chat' }, ctx);
   expect(kept).toContain('to Ivan Petrov, in the deploy chat');
-  expect(kept).toContain('What you know of them:');
+  expect(kept).toContain('What you know of people of that name');
   expect(kept).toContain('He answers for the deploys');
   expect(kept).not.toContain('Lisbon');
 });

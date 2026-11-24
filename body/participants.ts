@@ -174,15 +174,27 @@ export function ownerSays(events: JournalEvent[], words: string): JournalEvent |
 const FACTS_EACH = 4;
 const FACT_CHARS = 240;
 
-/** The facts that name this participant: by the name the service gives, or its first word, spaces and case aside. */
-export function knownOf(facts: Fact[], name: string): Fact[] {
-  const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
-  const whole = flat(name);
+const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
+/** Whether a fact set down about a name alone could be about someone called `name`: the name, or its first word, spaces and case aside. */
+function fits(about: string, name: string): boolean {
+  const [said, whole] = [flat(about), flat(name)];
   const first = whole.split(' ')[0] ?? '';
-  if (whole.length < 3) return [];
-  return facts.filter((f) => {
-    const about = flat(f.about ?? '');
-    return about.length >= 3 && (about === whole || about === first || whole.startsWith(`${about} `) || about.startsWith(`${whole} `));
+  return whole.length >= 3 && said.length >= 3 && (said === whole || said === first || whole.startsWith(`${said} `) || said.startsWith(`${whole} `));
+}
+
+/**
+ * The facts about this participant. A name is not a person: five people in one channel may be
+ * called Anton. A fact that says who it is about (`who`, the service and the id) is theirs and
+ * nobody else's, whatever anyone is called. A fact about a name alone is given to someone of that
+ * name only while nobody else the agent has met bears it (`others`: everyone else met); once two
+ * do, it is given to both and said to be unsure (`unsure`), for the agent to settle.
+ */
+export function knownOf(facts: Fact[], p: Participant, same: string[] = [], others: Participant[] = []): { fact: Fact; unsure: boolean }[] {
+  const mine = [keyOf(p), ...same];
+  return facts.flatMap((f) => {
+    if (f.who !== undefined) return mine.includes(f.who) ? [{ fact: f, unsure: false }] : [];
+    if (!fits(f.about ?? '', p.name)) return [];
+    return [{ fact: f, unsure: others.some((other) => !mine.includes(keyOf(other)) && fits(f.about ?? '', other.name)) }];
   });
 }
 
@@ -193,9 +205,10 @@ export function knownOf(facts: Fact[], name: string): Fact[] {
 export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = [], community?: Pick<Community, 'indicators'> & Partial<Pick<Community, 'standing'>>, facts: Fact[] = known(standing(events)).facts): string {
   if (speakers.length === 0) return '';
   const held = contacts(events);
+  const everyone = [...participants(events).values()];
   const rows = speakers.map((p) => {
     const kind = p.bot === true ? 'a bot' : p.bot === false ? 'not a bot, by the service' : 'kind not known';
-    const of = knownOf(facts, p.name).slice(-FACTS_EACH);
+    const of = knownOf(facts, p, held.get(keyOf(p))?.same ?? [], everyone).slice(-FACTS_EACH);
     const first = fresh.some((f) => keyOf(f) === keyOf(p));
     const c = held.get(keyOf(p));
     const circle = c?.circle !== undefined ? `, ${c.circle}, by your owner's word` : c?.supposed !== undefined ? `, ${c.supposed}, as you suppose` : ', in no circle yet';
@@ -204,11 +217,11 @@ export function whoLines(events: JournalEvent[], speakers: Participant[], fresh:
     const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`
       + (stand === null ? '' : `; tie ${stand.tie} of 100 (${tieWord(stand.tie)}), importance ${stand.importance} of 100`);
     const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
-    const what = [traits, ...of.map((f) => `${f.mark} [${f.source}] ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
+    const what = [traits, ...of.map(({ fact: f, unsure }) => `${f.mark} [${f.source}]${unsure ? ` [about someone called ${f.about}; others bear that name, so this may not be them]` : ''} ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
     return `- ${p.name} (${keyOf(p)}, ${kind}${circle}${count}): ${what !== '' ? what : first ? 'you have not met them before' : 'you have set nothing down about them yet'}`;
   });
   return 'Who is speaking, and what you know of each:\n' + rows.join('\n')
-    + '\nWhen one of them says who they are, what they work on or answer for, or how they want to be dealt with, set it down: a lasting characteristic with `contact`, anything else with `know`, naming them. It is here the next time they speak. '
+    + '\nWhen one of them says who they are, what they work on or answer for, or how they want to be dealt with, set it down: a lasting characteristic with `contact`, anything else with `know`, naming them with who they are, as above: Name (service:id). It is here the next time they speak. '
     + 'A circle is your owner\'s to give; how far you go with someone follows the circle they are in, and with someone in none you are helpful and say nothing of your owner\'s affairs.';
 }
 
