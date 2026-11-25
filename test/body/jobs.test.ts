@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TOOLS } from '../../body/tools';
-import { endedJob, jobHistory, jobsLeftRunning, stopPreviousJobs } from '../../body/jobs';
+import { endedJob, jobHistory, jobNotesFrom, jobsLeftRunning, stopCurrentJobs, stopPreviousJobs } from '../../body/jobs';
 import { readEvents } from '../../brain/journal';
 
 function tool(name: string) {
@@ -131,5 +131,23 @@ test('a job of another generation, one still running and one the agent stopped a
   } finally {
     await tool('jobs').run({ action: 'stop', name: 'long' }, ctx);
     expect(await gone(Number(readFileSync(join(dir, 'pid'), 'utf8')))).toBe(true);
+  }
+});
+
+test('as the process ends its jobs are stopped from the journal: nothing is asked of a past whose database is gone by then', async () => {
+  const { dir, ctx } = setup();
+  await tool('bash').run({ name: 'left', command: 'sleep 300 >/dev/null 2>&1 & echo $! > pid' }, ctx);
+  const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'));
+  // The body asks its past for the notes of jobs while it lives. At the exit the past is not asked:
+  // it would answer from the journal and note a trouble, the database having been stopped first.
+  let asked = 0;
+  jobNotesFrom(() => { asked += 1; return readEvents(ctx.journal); });
+  try {
+    stopCurrentJobs(ctx.journal, ctx.gen);
+    expect(asked).toBe(0);
+    expect(await gone(pid)).toBe(true);
+    expect(jobHistory(readEvents(ctx.journal)).get('left')?.state).toBe('stopped');
+  } finally {
+    jobNotesFrom(null);
   }
 });
