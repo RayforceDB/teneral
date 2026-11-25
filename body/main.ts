@@ -67,6 +67,8 @@ const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
+/** How long, after a turn, the database is given to embed what it has not yet: a few portions, which nobody waits for. */
+const EMBED_MS = 3_000;
 // What the body says of its own working: said as ever, and what says that something failed is set down too, so that the owner sees it (brain/trouble.ts).
 const say = teller((data) => { appendEvent(journal, gen, { type: 'note', kind: TROUBLE_KIND, data }); });
 const past = await openServedPast(journal, organs === '' ? null : organs, say);
@@ -526,7 +528,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       // The latest reminders are asked of the past: the turn hands over only the end of the journal it holds.
       // A skill the agent keeps that fits what was said: offered by a line, opened by the agent if it judges that it fits.
       offer: (question) => offerFor(ctx, question),
-      remind: (question, inFront) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12 }), inFront, lately(past.notes([REMINDED_KIND])), past); },
+      remind: (question, inFront) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12, words: true }), inFront, lately(past.notes([REMINDED_KIND])), past); },
       imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
@@ -888,6 +890,8 @@ for (;;) {
     // out again from the journal at the next start, which costs far less than writing it every time.
     try {
       past.sync();
+      // And a little of what the database has not embedded yet is embedded (brain/vectors.ts): after a turn, never in one.
+      past.embed(EMBED_MS);
       if (Date.now() - storeWrittenAt >= STORE_WRITE_MS) {
         past.persist();
         storeWrittenAt = Date.now();

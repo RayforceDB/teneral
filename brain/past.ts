@@ -4,7 +4,8 @@ import { episodes, type Episode } from './episodes';
 import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
-import { documentOf, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
+import { documentOf, fused, FUSED, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
+import { openVectors } from './vectors';
 import { LINE_MAX, OUTDATED_KIND, links, tiesOf, type Since } from './links';
 import { known, type Known } from './known';
 import { acceptanceNotes } from './acceptance';
@@ -37,7 +38,7 @@ export interface Past {
   /** `store` when the database answers, `journal` when the journal is read through. */
   by: 'store' | 'journal';
   /** The events that answer `question` best, each with the event itself. */
-  find(question: string, options?: { kinds?: Kind[]; limit?: number }): Found[];
+  find(question: string, options?: { kinds?: Kind[]; limit?: number; /** Only what shares words with the question: nothing found by meaning alone (brain/vectors.ts). */ words?: boolean }): Found[];
   /** Where the line of the latest thing said to the agent begins: what it is answering now, which is no find of its own past. Null when nothing was said yet. */
   asked(): number | null;
   /** The event with this id and the ones around it, in order; null when the journal has no such event. */
@@ -108,6 +109,12 @@ export interface Past {
   /** Brings the store up to the journal's end, and writes it out. Both are nothing to do when the journal is read through. */
   sync(): void;
   persist(): void;
+  /**
+   * Gives the database a little of what it has not embedded yet to embed (brain/vectors.ts), for at
+   * most about `ms` milliseconds. Returns how many documents have a vector; nothing to do, and 0,
+   * when there are to be no vectors.
+   */
+  embed(ms: number): number;
   close(): void;
   /** The database itself, when it answers: for other tables made from the journal (body/community.ts). A process has one runtime. */
   ray?: Ray;
@@ -352,13 +359,23 @@ export function journalPast(journal: string): Past {
     },
     sync() {},
     persist() {},
+    embed: () => 0,
     close() {},
   };
 }
 
 /** The past of `journal`, asked of a store in the database `ray`. `owned` says the runtime was opened for this and is closed with it. */
-export function storePast(journal: string, ray: Ray, store: Store, owned: boolean): Past {
+export function storePast(journal: string, ray: Ray, store: Store, owned: boolean, log: (line: string) => void = () => {}): Past {
   const offsets = (source: string): number[] => [...(store.ask(source).columns.off as BigInt64Array | undefined ?? [])].map(Number);
+  /** The documents as vectors, when this agent has a model and the database can use it: null otherwise, and then everything below is as it was. */
+  const vectors = openVectors(ray, journal, (off, take) => {
+    const t = store.ask(`(select {from: events where: (> off ${Math.floor(off)}) asc: off take: ${Math.floor(take)} off: off date: date line: line})`);
+    const offs = t.columns.off as BigInt64Array | undefined ?? new BigInt64Array(0);
+    const days = t.columns.date as Int32Array | undefined ?? new Int32Array(0);
+    return (t.columns.line as string[] | undefined ?? []).flatMap((line, i) => {
+      try { return [{ off: Number(offs[i]), day: Number(days[i]), event: JSON.parse(line) as JournalEvent }]; } catch { return []; }
+    });
+  }, log);
   /**
    * The stretches of the journal the owner took back, as bytes from and to: from the line of the
    * message a note names up to the note's own line. The store holds every line; what stands is
@@ -598,8 +615,25 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     find(question, options) {
       store.sync();
       const ranges = aside();
-      const found = finder(store.index, store.read, offsetsOf, closingReply, () => { store.settle(); return usedFrom(ray); })(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
-      return ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, options?.limit ?? 10);
+      const limit = options?.limit ?? 10;
+      // By meaning too, when there are vectors: the questions of the exam are found among themselves by their words, and stay so.
+      const meant = vectors !== null && options?.words !== true && options?.kinds?.includes('key') !== true && vectors.covered() > 0;
+      const wide = meant ? Math.max(limit, FUSED) : limit;
+      const found = finder(store.index, store.read, offsetsOf, closingReply, () => { store.settle(); return usedFrom(ray); })(question, ranges.length === 0 ? { ...options, limit: wide } : { ...options, limit: wide + 50 });
+      const byWords = ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, wide);
+      if (!meant) return byWords.slice(0, limit);
+      const current = store.index.current?.();
+      const held = new Map(byWords.map((hit) => [hit.doc, hit]));
+      // What is nearest in meaning, of what may be found at all: a memory that still stands, an event the owner did not take back.
+      const near = vectors.near(question, FUSED, options?.kinds).flatMap((one): Found[] => {
+        if (one.kind === 'memory' && current !== undefined && !current.has(one.doc)) return [];
+        const had = held.get(one.doc);
+        if (had !== undefined) return [had];
+        const event = store.read(one.doc);
+        return event === null || !stands(ranges, one.doc, event) ? [] : [{ doc: one.doc, kind: one.kind, score: 0, terms: [], cover: 0, event }];
+      });
+      for (const hit of near) if (!held.has(hit.doc)) held.set(hit.doc, hit);
+      return fused(byWords.map((hit) => hit.doc), near.map((hit) => hit.doc)).slice(0, limit).map(({ doc, score }) => ({ ...held.get(doc)!, score }));
     },
     asked() {
       store.sync();
@@ -623,9 +657,18 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
       return { events: [...shownBefore, ...read(later)], at: shownBefore.length };
     },
     sync: () => { store.sync(); },
-    persist: () => store.persist(),
+    persist: () => { store.persist(); vectors?.persist(); },
+    embed(ms) {
+      if (vectors === null) return 0;
+      store.sync();
+      const until = Date.now() + ms;
+      // At least one portion, then more while there is time: a portion is about a second of the database's work.
+      do { if (vectors.step() === 0) break; } while (Date.now() < until);
+      return vectors.covered();
+    },
     close() {
       store.persist();
+      vectors?.persist();
       if (owned) ray.close();
     },
   };
@@ -643,7 +686,7 @@ export function openPast(journal: string, library: string | null, log: (line: st
       try {
         const store = openStore(ray, journal, undefined, projections());
         if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
-        return storePast(journal, ray, store, true);
+        return storePast(journal, ray, store, true, log);
       } catch (err) {
         ray.close();
         throw err;
@@ -677,7 +720,7 @@ export async function openServedPast(journal: string, organsDir: string | null, 
       try {
         const store = openStore(ray, journal, undefined, projections());
         if (store.rebuilt !== null) log(`[memory] the store was built again from the journal: ${store.rebuilt}`);
-        return { served: storePast(journal, ray, store, true), server };
+        return { served: storePast(journal, ray, store, true, log), server };
       } catch (err) {
         ray.close();
         throw err;
@@ -785,6 +828,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     around: (id, before, after) => through((past) => past.around(id, before, after)),
     sync: () => { again(); through((past) => past.sync()); },
     persist: () => through((past) => past.persist()),
+    embed: (ms) => through((past) => past.embed(ms)),
     close: () => { closed = true; try { now.close(); } finally { server.stop(); } },
   };
 }
