@@ -215,6 +215,22 @@ export function recall(index: Index, question: string, options: RecallOptions = 
   return [...hits.values()].sort((a, b) => b.score - a.score || b.doc - a.doc).slice(0, options.limit ?? 10);
 }
 
+/** How many of the best by words and of the nearest by meaning are put together, and how gently a place in either counts. */
+export const FUSED = 200;
+export const FUSE_K = 60;
+
+/**
+ * Two rankings of documents made one: a document counts for its place in each ranking it is in,
+ * `1 / (FUSE_K + place)`, so one that both find comes before one that either finds, and neither
+ * ranking's own scores, which measure different things, are compared with the other's. Returns
+ * the documents, the best first; those that tie, the later first.
+ */
+export function fused(byWords: number[], byMeaning: number[]): { doc: number; score: number }[] {
+  const score = new Map<number, number>();
+  for (const list of [byWords, byMeaning]) list.forEach((doc, place) => score.set(doc, (score.get(doc) ?? 0) + 1 / (FUSE_K + place)));
+  return [...score].map(([doc, s]) => ({ doc, score: s })).sort((a, b) => b.score - a.score || b.doc - a.doc);
+}
+
 /**
  * An index that keeps nothing: the lines it is given are read through for every question. It is
  * what recall falls back on when there is no database, and what the database's answers are
