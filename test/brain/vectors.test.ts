@@ -15,8 +15,27 @@ import { library, ray } from './rayforce';
 // enough to lie in the repository, and what is tested with it is how vectors are kept and asked,
 // not what they find. What they find is measured on a real journal with a real model.
 
-/** Whether the library here can embed at all: the pinned build of an agent may be from before it could. */
-const capable = library !== null && (() => { try { ray().run('(set mem_vec_probe .emb.encode)'); return true; } catch { return false; } })();
+/**
+ * Whether the library here can do what brain/vectors.ts asks of it: embed text, keep the vectors in a
+ * table partitioned by day, and answer a question over that table with `nearest:`. Asked by doing
+ * it once, with one document: a build can have the first of these and not the last, and a test
+ * that then ran would fail for the build's sake, not the code's.
+ */
+const capable = library !== null && (() => {
+  try {
+    const journal = join(mkdtempSync(join(tmpdir(), 'teneral-vectors-probe-')), 'memory', 'journal.jsonl');
+    mkdirSync(dirname(journal), { recursive: true });
+    cpSync(join(import.meta.dir, 'embed-tiny'), modelDir(journal), { recursive: true });
+    const complaints: string[] = [];
+    const one = { off: 0, day: 9587, event: { v: 1, id: 'probe', ts: '', gen: 'g', type: 'stimulus', source: 'terminal', text: 'hello world' } as JournalEvent };
+    const vectors = openVectors(ray(), journal, (off) => (off < 0 ? [one] : []), (line) => complaints.push(line));
+    if (vectors === null || vectors.step() !== 1) return false;
+    vectors.persist();
+    return vectors.near('hello', 1).length === 1 && complaints.length === 0;
+  } catch {
+    return false;
+  }
+})();
 
 let n = 0;
 const ev = (body: Record<string, unknown>, day = 1): JournalEvent =>
