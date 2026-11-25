@@ -452,7 +452,10 @@ export function openRay(options: RayOptions): Ray {
     commit: built,
     ...(transport === undefined ? {} : { transport }),
     run(source) {
-      ask(source, () => undefined);
+      // What a statement leaves is not asked for, so the server is not made to send it: `(set name
+      // (.db.parted.get ...))` leaves the whole table, which a server would decode and write to
+      // this side only for it to be dropped here.
+      ask(remote ? `(do ${source}\n0)` : source, () => undefined);
     },
     query(source) {
       return ask(source, read);
@@ -468,7 +471,8 @@ export function openRay(options: RayOptions): Ray {
       // Made here, sent as it is, bound there: `set` is called with the name and the table, and nothing is parsed.
       bindHere(OUTGOING, columns);
       try {
-        evaluate(`(.ipc.send ${HANDLE} (list set (quote ${name}) ${OUTGOING}))`, () => undefined);
+        // `set` leaves the table it bound: the reply is the 0 after it, not the table sent back.
+        evaluate(`(.ipc.send ${HANDLE} (list do (list set (quote ${name}) ${OUTGOING}) 0))`, () => undefined);
       } finally {
         evaluate(`(set ${OUTGOING} null)`, () => undefined);
       }
