@@ -440,6 +440,18 @@ A few run at a time (`TENERAL_SUBAGENTS`); one started beyond that waits for a p
 
 In `./one talk` each running subagent has a row over the input box, with its name and its task, and the `jobs` action under the footer counts them with the commands the agent left running. The limits are settings: `TENERAL_SUBAGENTS`, `TENERAL_SUBAGENT_STEPS`, `TENERAL_SUBAGENT_MINUTES`, `TENERAL_SUBAGENT_TOKENS`, and `TENERAL_SUBAGENT_MODEL` for a cheaper model.
 
+### Scripts
+
+The agent has a `script` tool: JavaScript of its own that calls its tools as functions (`await tools.read({ path })`), run by bun in a process of its own. Nothing turns it on; it is one of the tools.
+
+Without it every call of a tool is a round with the model, and all a tool returned is carried in every request of the turn after it. Work that is many calls whose results only decide the next ones (read twenty files and keep three, search memory and open what was found) is then twenty rounds. As a script it is one call, and the agent is shown only what the script returns and prints.
+
+A call a script makes is run by the body, by the very tool the agent would have called, and is written to the journal under the tool's own name, marked with the call that ran the script. What it returned is in the journal and in memory, and in no request.
+
+A script can call only the tools that say so themselves (`scripted` in `body/tools.ts`): `read`, `write`, `edit`, `bash`, `recall`, `open`, `timeline`, `about`. A tool that speaks to anyone, mutates, or cannot be taken back is refused, and the agent calls it itself, one call at a time. A script has five minutes and two hundred calls, then it is killed with everything it started; the owner's interruption stops it at once.
+
+The process is no cage: a script can do what `bash` can do, in the same directory and with the same environment. What it is kept from is the tools it was not given.
+
 ### Changing the model while it runs
 
 Which model the agent thinks with, and where it comes from, is four lines of `.env`: `TENERAL_PROVIDER`, `TENERAL_BASE_URL`, `TENERAL_API_KEY` and `TENERAL_MODEL`. The stem looks at the file every two seconds. When those lines say something else than before, and nothing an agent needs is missing from them, it stops the agent's body and starts it again with the new ones. Nothing else restarts: not the container, not the stem, not `./one talk`. The journal is the agent's memory, so the conversation goes on where it was, and a turn that was in progress begins again from what the journal holds of it. This is not counted as a crash, and the journal gets a note of kind `provider.changed` with the provider and the model, never the key. A file that is incomplete (a key taken out, a sign-in not made) changes nothing; `./one logs` says what is missing, and the agent goes on as it was.

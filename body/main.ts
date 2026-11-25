@@ -45,6 +45,7 @@ import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCu
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { Owners, SPENT_KIND, readPairing } from './pairing';
 import { TOOLS, type ToolContext } from './tools';
+import { scriptTool } from './script';
 import { SKILL_TOOLS, keepVerified, keptSkills, offerFor, openSkills, seedBuiltIn, skillUse } from './skill-tools';
 import { JOB_KIND, endedJob, jobNotesFrom, stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
@@ -186,7 +187,9 @@ const subagents = new Subagents({
   // The heart finds its note at the next beat. End sleep or work at rest as an arrival would.
   onEnded: () => wake?.(),
 });
-const allTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
+const ownTools = [...TOOLS, ...SKILL_TOOLS, subagentTool(subagents)];
+// Always there, like any other tool: what a script may call is said by each tool itself (body/script.ts).
+const allTools = [...ownTools, scriptTool(ownTools)];
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id, inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, community, toolNames: allTools.map(t => t.spec.name) };
 ctx.skills = openSkills(ctx);
 try { seedBuiltIn(ctx); } catch (err) { say(`[skills] the built-in skills were not seeded: ${err instanceof Error ? err.message : String(err)}`); }

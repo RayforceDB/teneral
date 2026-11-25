@@ -386,7 +386,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         const tool = d.tools.find((t) => t.spec.name === call.name);
         if (!tool) throw new Error(`unknown tool: ${call.name}`);
         // The tools are the agent's to rewrite; whatever one returns, the journal holds text.
-        const running = tool.run(mended(tool.spec.parameters, call.args), d.ctx, d.signal);
+        const running = tool.run(mended(tool.spec.parameters, call.args), d.ctx, d.signal, { id: call.id });
         const result = wait ? await Promise.race([running, wait.gone]) : await running;
         if (result === LEFT) {
           // A tool that ignores the signal must not hold an interrupted turn. What it later returns or throws is nobody's.
@@ -396,7 +396,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         if (d.signal?.aborted && result !== LEFT && tool.idempotent) {
           // Only a tool that explicitly promises this may be repeated. The owner still stops the turn;
           // the retry just completes a read whose first attempt was cut short, with no signal attached.
-          output = String(await tool.run(mended(tool.spec.parameters, call.args), d.ctx));
+          output = String(await tool.run(mended(tool.spec.parameters, call.args), d.ctx, undefined, { id: call.id }));
         }
       } catch (err) {
         ok = false;

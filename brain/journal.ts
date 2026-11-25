@@ -38,8 +38,10 @@ export type BrainEvent =
   // `usage` and `reasoning` (a summary of the model's reasoning, for the owner to read) came later
   // and are optional: every journal written before them, and any reply without them, reads as before.
   | { type: 'assistant'; text: string; toolCalls: ToolCall[]; usage?: Usage; reasoning?: string }
-  | { type: 'tool.intent'; callId: string; name: string; args: unknown }
-  | { type: 'tool.result'; callId: string; ok: boolean; output: string }
+  // `within` came later and is optional: the call was made by a script the agent wrote (body/script.ts), and is the id of the
+  // call that ran the script. Such a call is no call of a reply: its result is the script's to read, and the agent is not shown it.
+  | { type: 'tool.intent'; callId: string; name: string; args: unknown; within?: string }
+  | { type: 'tool.result'; callId: string; ok: boolean; output: string; within?: string }
   // The owner stopped the turn in progress (keeper/owner.ts). It ends that turn: nothing is owed after it.
   // It came later too: a journal without one reads as before, and a reader from before it passes it by.
   | { type: 'turn.interrupted' }
