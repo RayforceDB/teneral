@@ -158,9 +158,16 @@ export function stopPreviousJobs(journal: string, gen: string): string[] {
   return stopped;
 }
 
-/** Normal process exits do not get a later generation to clean up after them. */
+/**
+ * Normal process exits do not get a later generation to clean up after them.
+ *
+ * The journal is read, and nothing is asked of the body's past: this runs as the process ends, when
+ * the database's server has been stopped already (it is stopped by the first thing registered for
+ * the exit). Asked then, the past would answer from the journal all the same, and would say that
+ * the database had failed: a trouble noted at every mutation that was no trouble.
+ */
 export function stopCurrentJobs(journal: string, gen: string): void {
-  for (const job of jobHistory(readRegistry(journal)).values()) {
+  for (const job of jobHistory(readEvents(journal)).values()) {
     if (job.gen === gen && job.state === 'running') stop(journal, gen, job, 'process-exit');
   }
 }
