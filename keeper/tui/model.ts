@@ -152,11 +152,14 @@ export function stand(s: Standing, e: JournalEvent): Standing {
       return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, background: !next.turn.busy ? false : next.background, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
     }
     case 'tool.intent': {
+      // A call a script made (body/script.ts): the script is the tool that runs, until its own result.
+      if (typeof f.within === 'string') return next;
       const name = cut(flat(clean(asText(f.name))), 40);
       const callId = asText(f.callId);
       return { ...next, tool: { callId, name } };
     }
     case 'tool.result': {
+      if (typeof f.within === 'string') return next;
       const callId = asText(f.callId);
       return { ...next, tool: s.tool?.callId === callId ? null : s.tool };
     }

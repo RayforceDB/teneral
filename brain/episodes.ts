@@ -53,9 +53,14 @@ export interface Span {
 
 const asText = (value: unknown): string => (typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value) ?? '');
 
+/** Whether `e` is of a call a script made (body/script.ts), not of a call of a reply. */
+export const inner = (e: JournalEvent): boolean => (e.type === 'tool.intent' || e.type === 'tool.result') && typeof (e as { within?: unknown }).within === 'string';
+
 /** What one event counts for: the text a request would carry for it. Records nobody is shown count nothing. */
 export function eventChars(e: JournalEvent): number {
   const r = e as { text?: unknown; toolCalls?: unknown; output?: unknown };
+  // What a script was returned is the script's: no request carries it.
+  if (inner(e)) return 0;
   switch (e.type) {
     case 'stimulus': return asText(r.text).length;
     case 'assistant': return asText(r.text).length + (Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? JSON.stringify(r.toolCalls).length : 0);
@@ -114,7 +119,8 @@ export interface Slim {
 
 export function slimOf(e: JournalEvent): Slim {
   const calls = e.type === 'assistant' ? (e as { toolCalls?: unknown }).toolCalls : undefined;
-  return { id: e.id, ts: e.ts, type: e.type, chars: eventChars(e), shown: shownChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e), clock: e.type === 'stimulus' && (e as { source?: unknown }).source === 'clock' };
+  // A result a script was given answers no call of the reply: the rule that counts those must not take it for one.
+  return { id: e.id, ts: e.ts, type: inner(e) ? `${e.type}.inner` : e.type, chars: eventChars(e), shown: shownChars(e), calls: Array.isArray(calls) ? calls.length : 0, asks: asks(e), clock: e.type === 'stimulus' && (e as { source?: unknown }).source === 'clock' };
 }
 
 /**

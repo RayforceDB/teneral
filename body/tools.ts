@@ -55,8 +55,14 @@ export interface Tool {
   spec: ToolSpec;
   /** Safe to invoke again with the same arguments after an interruption. */
   idempotent?: boolean;
-  /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (brain/loop.ts). */
-  run(args: unknown, ctx: ToolContext, signal?: AbortSignal): Promise<string>;
+  /**
+   * May be called by a script the agent writes (body/script.ts), with nobody looking at each call
+   * before the next. Only for a tool whose doing stays with the agent: it reads, or it changes the
+   * workspace. Never for one that speaks to anyone, or that cannot be taken back.
+   */
+  scripted?: boolean;
+  /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (brain/loop.ts). `call` is the call of the reply being run. */
+  run(args: unknown, ctx: ToolContext, signal?: AbortSignal, call?: { id: string }): Promise<string>;
 }
 
 const OUTPUT_CAP = 20_000;
@@ -104,6 +110,7 @@ function toolPath(ctx: ToolContext, given: string): string {
 }
 
 const read: Tool = {
+  scripted: true,
   idempotent: true,
   spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace; absolute paths are allowed only inside your soul directory.', parameters: params({ path: 'File path' }) },
   async run(args, ctx) {
@@ -112,6 +119,7 @@ const read: Tool = {
 };
 
 const write: Tool = {
+  scripted: true,
   spec: {
     name: 'write',
     description: 'Create or overwrite a file, creating parent directories.',
@@ -127,6 +135,7 @@ const write: Tool = {
 };
 
 const edit: Tool = {
+  scripted: true,
   spec: {
     name: 'edit',
     description: 'Replace one exact occurrence of `old` with `new` in a file. Fails unless `old` occurs exactly once.',
@@ -171,7 +180,7 @@ const BASH_LIMIT_MS = 120_000;
 const DRAIN_MS = 500;
 
 /** Reads a pipe whatever its size, so the writer never blocks; `into` decides what is kept. `stop` ends the reading early. */
-function drain(pipe: ReadableStream<Uint8Array>, into: Clipped): { done: Promise<void>; stop: () => void } {
+export function drain(pipe: ReadableStream<Uint8Array>, into: Clipped): { done: Promise<void>; stop: () => void } {
   const reader = pipe.getReader();
   const decoder = new TextDecoder();
   const done = (async () => {
@@ -253,6 +262,7 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
 }
 
 const bash: Tool = {
+  scripted: true,
   spec: {
     name: 'bash',
     description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped. It does not see your API key.',
@@ -410,6 +420,7 @@ const FOUND_CHARS = 700;
 const OPENED_CHARS = 3000;
 
 const recallTool: Tool = {
+  scripted: true,
   spec: {
     name: 'recall',
     description:
@@ -443,6 +454,7 @@ const recallTool: Tool = {
 };
 
 const open: Tool = {
+  scripted: true,
   spec: {
     name: 'open',
     description:
@@ -467,6 +479,7 @@ const open: Tool = {
 };
 
 const timeline: Tool = {
+  scripted: true,
   spec: {
     name: 'timeline',
     description:
@@ -492,6 +505,7 @@ const timeline: Tool = {
 };
 
 const about: Tool = {
+  scripted: true,
   spec: {
     name: 'about',
     description:

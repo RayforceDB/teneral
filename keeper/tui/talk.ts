@@ -507,7 +507,8 @@ export class TalkScreen {
     // Something failed in the agent's own working just now: the footer says so at once, not at its next reading of the journal.
     if (live && e.type === 'note' && e.kind === TROUBLE_KIND) { this.memory.read = 0; this.dirty = true; }
     // A step ended: what was kept goes out now, and the agent reads it with its next one.
-    if (live && ['assistant', 'tool.result', 'turn.interrupted', 'generation.ready'].includes(e.type)) this.sendQueued();
+    // A result a script was given ends no step: the script goes on.
+    if (live && ['assistant', 'tool.result', 'turn.interrupted', 'generation.ready'].includes(e.type) && typeof (e as { within?: unknown }).within !== 'string') this.sendQueued();
   }
 
   /** Whether a line typed now is kept here rather than sent: the agent is in the middle of a step, and would not read it before the next anyway. */

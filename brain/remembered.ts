@@ -54,7 +54,8 @@ export function voicesOf(events: JournalEvent[]): Voices {
     const r = e as { text?: unknown; source?: unknown; output?: unknown; toolCalls?: unknown };
     if (e.type === 'stimulus') v[fromOwner(r.source) ? 'owner' : 'others'] += size(r.text);
     else if (e.type === 'assistant') v.own += size(r.text) + (Array.isArray(r.toolCalls) && r.toolCalls.length > 0 ? size(r.toolCalls) : 0);
-    else if (e.type === 'tool.result') v.tools += size(r.output);
+    // What a script was returned the agent never read (body/script.ts).
+    else if (e.type === 'tool.result' && typeof (e as { within?: unknown }).within !== 'string') v.tools += size(r.output);
   }
   return v;
 }
