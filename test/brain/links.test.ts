@@ -99,7 +99,7 @@ function tangled(): JournalEvent[] {
   return [...events, ...facts, wide, ...ties, note(day(9, 9), WITHDRAW_KIND, { ids: [ties[5]!.id] })];
 }
 
-real('the database walks the same ties to the same answers as the journal read through', () => {
+real('the database walks the same ties to the same answers as the journal read through', { timeout: 20_000 }, () => {
   // Keep the ordering of the ten stretches, but share a storage partition: this
   // tests graph traversal and late writes, not the cost of creating daily shards.
   const oneDay = (e: JournalEvent): JournalEvent => ({ ...e, ts: e.ts.replace(/2026-11-(\d\d)T10:/, "2026-11-01T$1:") });

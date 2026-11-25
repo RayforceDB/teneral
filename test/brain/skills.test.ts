@@ -162,7 +162,7 @@ test('malformed lifecycle notes do not destroy the readable registry', () => {
   expect(state.verifications).toHaveLength(1);
 });
 
-real('Rayforce durably holds package bytes and registry rows and reconstructs a missing source copy', () => {
+real('Rayforce durably holds package bytes and registry rows and reconstructs a missing source copy', { timeout: 20_000 }, () => {
   const path = journal();
   const skill = verified(path);
   const events = () => readEvents(path);

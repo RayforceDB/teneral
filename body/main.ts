@@ -67,8 +67,8 @@ const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
-/** How long, after a turn, the database is given to embed what it has not yet: a few portions, which nobody waits for. */
-const EMBED_MS = 3_000;
+/** Between two portions the database embeds while the agent waits, how long the agent listens for anything said to it. */
+const EMBED_PAUSE_MS = 250;
 // What the body says of its own working: said as ever, and what says that something failed is set down too, so that the owner sees it (brain/trouble.ts).
 const say = teller((data) => { appendEvent(journal, gen, { type: 'note', kind: TROUBLE_KIND, data }); });
 const past = await openServedPast(journal, organs === '' ? null : organs, say);
@@ -551,14 +551,14 @@ async function turn(): Promise<{ error: unknown } | null> {
   }
 }
 
-/** Sleeps until a sensor emits or the agent is told to quit, or for `ms` when given. */
-function idle(ms?: number): Promise<void> {
-  return new Promise<void>((resolve) => {
+/** Sleeps until a sensor emits or the agent is told to quit, or for `ms` when given. True when it was woken, false when the time ran out. */
+function idle(ms?: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     // A delay longer than a timer holds would fire at once.
-    const timer = ms === undefined ? undefined : setTimeout(resolve, Math.min(ms, TIMER_MAX_MS));
-    wake = () => { clearTimeout(timer); resolve(); };
+    const timer = ms === undefined ? undefined : setTimeout(() => resolve(false), Math.min(ms, TIMER_MAX_MS));
+    wake = () => { clearTimeout(timer); resolve(true); };
     idleWake = wake;
-  }).then(() => { wake = null; idleWake = null; });
+  }).then((woken) => { wake = null; idleWake = null; return woken; });
 }
 
 /** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
@@ -890,8 +890,6 @@ for (;;) {
     // out again from the journal at the next start, which costs far less than writing it every time.
     try {
       past.sync();
-      // And a little of what the database has not embedded yet is embedded (brain/vectors.ts): after a turn, never in one.
-      past.embed(EMBED_MS);
       if (Date.now() - storeWrittenAt >= STORE_WRITE_MS) {
         past.persist();
         storeWrittenAt = Date.now();
@@ -904,7 +902,22 @@ for (;;) {
     tidiedAt = past.count();
   }
   // Until something arrives, until rest begins and there may be something of its own to do, or until what the agent waits for may have come.
-  await idle(heart.waitFor());
+  // While it waits, the database embeds what it has not yet (brain/vectors.ts): a portion, about a second of its work,
+  // then a look whether anything arrived. Whoever speaks meanwhile is heard after the portion that was under way.
+  const waitFor = heart.waitFor();
+  const until = waitFor === undefined ? Number.POSITIVE_INFINITY : Date.now() + waitFor;
+  let woken = false;
+  try {
+    for (let covered = -1; !quitting && !woken && Date.now() < until;) {
+      const now = past.embed(0);
+      if (now === covered) break;   // nothing was left to embed
+      covered = now;
+      woken = await idle(Math.max(0, Math.min(EMBED_PAUSE_MS, until - Date.now())));
+    }
+  } catch (err) {
+    say(`[memory] the documents could not be embedded: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!woken && !quitting && Date.now() < until) await idle(waitFor === undefined ? undefined : until - Date.now());
 }
 
 stopBackground();
