@@ -46,6 +46,15 @@ test('one expression comes to its value, what is printed is shown, and a script 
   expect(await script.run({ code: '6 * 7' }, ctx)).toBe('returned; it made 0 calls\n42');
   expect(await script.run({ code: 'console.log("on the way"); return "there";' }, ctx)).toBe('returned; it made 0 calls\nthere\n[printed]\non the way\n');
   expect(await script.run({ code: 'const nothing = 1;' }, ctx)).toBe('returned; it made 0 calls');
+  // An expression with a semicolon after it is an expression still; and `tools` itself can be returned without anything waiting on it.
+  expect(await script.run({ code: '6 * 7;\n' }, ctx)).toBe('returned; it made 0 calls\n42');
+  expect(await script.run({ code: 'return typeof tools.read' }, ctx)).toBe('returned; it made 0 calls\nfunction');
+  expect(await script.run({ code: 'return tools' }, ctx)).toBe('returned; it made 0 calls\n{}');
+  // What is written without a line's end, and much of it, is whole when the script has returned.
+  const much = await script.run({ code: 'process.stdout.write("A" + "x".repeat(300_000) + "ENDMARK"); return 1' }, ctx);
+  expect(much.endsWith('ENDMARK')).toBe(true);
+  // Anything can come down the channel: it is passed by.
+  expect(await script.run({ code: 'process.send(null); process.send("x"); process.send([1]); return "still here"' }, ctx)).toBe('returned; it made 0 calls\nstill here');
   await expect(script.run({ code: 'throw new Error("it went wrong")' }, ctx)).rejects.toThrow(/failed; it made 0 calls\nError: it went wrong/);
   await expect(script.run({ code: 'this is not (' }, ctx)).rejects.toThrow(/it is not JavaScript that can be run/);
   await expect(script.run({ code: '  ' }, ctx)).rejects.toThrow('code is required');
@@ -124,4 +133,34 @@ test('in a turn, a script is one call of the reply: what its calls returned is i
   const pending: number[] = [];
   for (const e of events.slice(0, 6)) { ruleStep(state, slimOf(e)); pending.push(state.pending); }
   expect(pending).toEqual([0, 1, 1, 1, 1, 0]);
+});
+
+test('a script does not outlive the body that ran it', { timeout: 30_000 }, async () => {
+  const { dir, ctx } = setup();
+  // A body of its own, killed while its script is in the middle of its own work and of something it started.
+  const body = join(dir, 'body.ts');
+  writeFileSync(body, `
+    import { scriptTool } from ${JSON.stringify(join(import.meta.dir, '..', '..', 'body', 'script.ts'))};
+    const ctx = ${JSON.stringify(ctx)};
+    void scriptTool([]).run({ code: 'await Bun.write("script.pid", String(process.pid)); Bun.spawn(["sleep", "300"]); await Bun.sleep(300000);' }, ctx);
+  `);
+  const p = Bun.spawn([process.execPath, body], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  const pidFile = Bun.file(join(dir, 'script.pid'));
+  let pid = 0;
+  const alive = (): boolean => { try { process.kill(-pid, 0); return true; } catch { return false; } };
+  try {
+    for (let i = 0; i < 400 && !(pid > 1); i++) { await Bun.sleep(25); pid = Number(await pidFile.text().catch(() => '')); }
+    expect(pid).toBeGreaterThan(1);
+    // A moment for what it starts to be started.
+    await Bun.sleep(200);
+    expect(alive()).toBe(true);
+    p.kill('SIGKILL');
+    await p.exited;
+    for (let i = 0; i < 100 && alive(); i++) await Bun.sleep(25);
+    // The whole group: the script and what it started.
+    expect(alive()).toBe(false);
+  } finally {
+    p.kill('SIGKILL');
+    if (pid > 1) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone, as it should be */ } }
+  }
 });

@@ -33,6 +33,12 @@ export const SCRIPT_CALLS = 200;
 const OUTPUT_CAP = 20_000;
 const RUNNER = join(import.meta.dir, 'script-runner.ts');
 
+/** The scripts that run now: a body that ends takes them with it. */
+const live = new Set<number>();
+process.on('exit', () => {
+  for (const pid of live) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } }
+});
+
 type FromScript = { ready?: boolean; call?: number; name?: string; args?: unknown; done?: boolean; ok?: boolean; value?: string };
 
 /** The tool that runs a script over `tools`: those of them that may be scripted are what the script can call. */
@@ -44,7 +50,7 @@ export function scriptTool(tools: Tool[], o: { limitMs?: number; calls?: number 
       name: 'script',
       description: [
         'Run JavaScript of your own that calls your tools, in a process of its own (bun). You are shown only what it returns and prints; what the tools returned to it is not shown to you.',
-        `It can call: ${names.join(', ')}. Each is \`await tools.NAME({...})\` with the arguments the tool takes, and gives the text the tool returns; a tool that fails throws. Everything else you call yourself.`,
+        `It can call: ${names.join(', ')}. Each is \`await tools.NAME({...})\` with the arguments the tool takes, and gives the text the tool returns; a tool that fails throws. Await every call: one still under way when the script returns may not be made. Everything else you call yourself.`,
         'Use it when several calls only decide the next ones, or when you need little of much: read many files and keep what matters, search and open what was found, do the same to each of a list. `return` what you need, shortly; a script that is one expression comes to its value.',
         'Not for a single call, and not when you need to see a result whole to judge it.',
         `It has ${Math.round((o.limitMs ?? SCRIPT_LIMIT_MS) / 60_000)} minutes and ${o.calls ?? SCRIPT_CALLS} calls, then it is killed with everything it started. Every call it made is in your journal under the tool's name.`,
@@ -75,6 +81,8 @@ export function scriptTool(tools: Tool[], o: { limitMs?: number; calls?: number 
         cwd: ctx.workspace, env: withCommands(bashEnv(process.env)), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
         serialization: 'json',
         ipc(message: FromScript) {
+          // A script can send anything down the channel.
+          if (typeof message !== 'object' || message === null) return;
           if (message.ready) { p.send({ script: code }); return; }
           if (message.done) {
             if (ended === null) ended = { ok: message.ok === true, value: String(message.value ?? '') };
@@ -113,6 +121,11 @@ export function scriptTool(tools: Tool[], o: { limitMs?: number; calls?: number 
         },
       });
 
+      live.add(p.pid);
+      // It must not outlive the body, and a body that is killed stops nothing itself. A script that hears its channel close
+      // ends itself (body/script-runner.ts); one that is in a loop hears nothing. So something waits beside it on a pipe only
+      // the body holds: when the body is gone, however it went, the pipe closes and the script's whole group is killed.
+      const watch = Bun.spawn(['sh', '-c', 'read _; kill -9 -- "-$1" 2>/dev/null', 'sh', String(p.pid)], { stdin: 'pipe', stdout: 'ignore', stderr: 'ignore' });
       const killGroup = (): void => {
         try { process.kill(-p.pid, 'SIGKILL'); } catch { try { p.kill('SIGKILL'); } catch { /* gone */ } }
       };
@@ -130,6 +143,8 @@ export function scriptTool(tools: Tool[], o: { limitMs?: number; calls?: number 
       try {
         // It ends by saying so, or by ending: a script that exits, or is killed, says nothing.
         await Promise.race([finished, p.exited]);
+        // Having said it is done it ends by itself, once what it printed has gone out. It is not waited for long.
+        if (why === null) await Promise.race([p.exited, new Promise((resolve) => setTimeout(resolve, 2_000))]);
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
@@ -139,6 +154,9 @@ export function scriptTool(tools: Tool[], o: { limitMs?: number; calls?: number 
       // A call that was under way is journaled with its result before the script's own result is.
       await queue;
       await p.exited;
+      live.delete(p.pid);
+      // Killed, not let go: the group it would kill is gone, and its number may be another's by now.
+      watch.kill('SIGKILL');
       await Promise.race([Promise.all(pipes.map((pipe) => pipe.done)), new Promise((resolve) => setTimeout(resolve, 500))]);
       for (const pipe of pipes) pipe.stop();
 
