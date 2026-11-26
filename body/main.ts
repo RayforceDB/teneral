@@ -34,7 +34,7 @@ import { clockText } from './sensors';
 import { followUps, lookedAt, offered, reportAsk, settle, tickDueOf, worthATick } from '../brain/agenda';
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
-import { TROUBLE_KIND, teller } from '../brain/trouble';
+import { OVER_KIND, TROUBLE_KIND, teller } from '../brain/trouble';
 import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
 import { EPISODE_KIND, MERGE_KIND } from '../brain/remembered';
 import { libraryAt } from '../brain/ray';
@@ -71,7 +71,11 @@ const organs = process.env.TENERAL_ORGANS ?? '';
 /** Between two portions the database embeds while the agent waits, how long the agent listens for anything said to it. */
 const EMBED_PAUSE_MS = 250;
 // What the body says of its own working: said as ever, and what says that something failed is set down too, so that the owner sees it (brain/trouble.ts).
-const say = teller((data) => { appendEvent(journal, gen, { type: 'note', kind: TROUBLE_KIND, data }); });
+const say = teller(
+  (data) => { appendEvent(journal, gen, { type: 'note', kind: TROUBLE_KIND, data }); }, undefined, undefined,
+  // A state that has ended: the owner is not shown for a day a trouble that was over in a minute (brain/trouble.ts).
+  (data) => { appendEvent(journal, gen, { type: 'note', kind: OVER_KIND, data }); },
+);
 const past = await openServedPast(journal, organs === '' ? null : organs, say);
 // What the body reads of the journal, asked of the past: the notes of some kinds, what the owner typed, and the end of the
 // journal from the latest thing said to the agent on. None of it is the journal held whole.
