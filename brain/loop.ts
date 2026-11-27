@@ -180,6 +180,8 @@ export function noOpCall(call: { name: string; args: unknown }): boolean {
   return (command === undefined || typeof command === 'string') && /^\s*(true|:|exit(\s+0)?)?\s*;?\s*$/.test(command ?? '');
 }
 
+/** What a call is answered with in the turn after a mutation was requested: said so that the model stops calling and answers. */
+export const HANDED_OVER = 'error: not run. Your mutation is already requested, and this body hands over to the stem as soon as this turn ends: no tool runs before that. Answer in words now, with no tool call, or with nothing if there is nothing to say; what needs a tool waits for the generation that follows.';
 export const NO_OP_RESULT = 'Not run: this call does nothing. A turn ends with a reply that has no tool call in it; on a clock turn with nothing to do, that reply is exactly ' + QUIET_REPLY + '. A second round of calls like this ends the turn for you.';
 
 export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
@@ -226,6 +228,10 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
   // what it just did; it would do it again for as long as it is asked. The third ends the turn.
   let lastRequest = '';
   let sameRequests = 0;
+  // A mutation asked for in an earlier turn: this turn only answers the owner's line that arrived beside it
+  // (body/main.ts). No tool runs in it, and it is told so; the second round of calls all the same ends it.
+  const handed = d.ctx.mutationCommit !== null;
+  let refusedRounds = 0;
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
     // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
@@ -370,7 +376,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         // The mutation committed the workspace; anything run after it would change what the gates judge.
         // No intent: the call never started. It still gets a result, so every call has an answer.
         appendEvent(d.journal, d.gen, {
-          type: 'tool.result', callId: call.id, ok: false, output: 'error: not run, because a mutation was requested earlier in this reply',
+          type: 'tool.result', callId: call.id, ok: false, output: handed ? HANDED_OVER : 'error: not run, because a mutation was requested earlier in this reply',
         });
         continue;
       }
@@ -416,7 +422,8 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
       appendEvent(d.journal, d.gen, { type: 'tool.result', callId: call.id, ok, output: output.toWellFormed() });
     }
     // A mutation that was requested before the interruption is the stem's to judge now; the interruption is dropped.
-    if (d.ctx.mutationCommit !== null) return 'mutation';
+    // Requested in this turn, it ends here. In the turn after, the model is first let say its words, having been told why nothing ran.
+    if (d.ctx.mutationCommit !== null && (!handed || ++refusedRounds >= 2)) return 'mutation';
     if (d.signal?.aborted) return interrupted();
   }
   // The note below reads as a finished reply. Written over something the model never saw, it would

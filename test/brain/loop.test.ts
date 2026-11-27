@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTurn, journalSuffixReads, noOpCall, NO_OP_RESULT } from '../../brain/loop';
 import { NO_OP_REPLY, QUIET_REPLY, SAME_REQUEST_REPLY } from '../../brain/quiet';
+import { HANDED_OVER } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { ARRIVED, needsTurn } from '../../brain/memory';
@@ -873,4 +874,24 @@ test('a request that stops changing ends the turn at the third, with a reply tha
   expect(ran).toBe(3);
   expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: SAME_REQUEST_REPLY, toolCalls: [] });
   expect(shown).toEqual([SAME_REQUEST_REPLY]);
+});
+
+test('in the turn after a mutation was requested no tool runs, the model is told why and answers in words; calling on ends it at the second round', async () => {
+  const ran: string[] = [];
+  const tool: Tool = { spec: { name: 'chat_reply', description: '', parameters: {} }, async run() { ran.push('ran'); return 'sent'; } };
+  const call = (id: string) => ({ id, name: 'chat_reply', args: {} });
+  // It calls once, is told, and then says its words: the turn is done, and the body hands over.
+  const a = setup([{ text: '', toolCalls: [call('c1')] }, { text: 'It is requested; I wait for the stem.', toolCalls: [] }], [tool]);
+  a.deps.ctx.mutationCommit = 'abc';
+  appendEvent(a.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'ask again' });
+  expect(await runTurn(a.deps)).toBe('done');
+  expect(readEvents(a.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: false, output: HANDED_OVER });
+  expect(readEvents(a.journal).at(-1)).toMatchObject({ type: 'assistant', text: 'It is requested; I wait for the stem.' });
+  // It goes on calling: two rounds, and no more.
+  const b = setup(Array.from({ length: 9 }, (_, i) => ({ text: 'I understand.', toolCalls: [call(`c${i}`)] })), [tool]);
+  b.deps.ctx.mutationCommit = 'abc';
+  appendEvent(b.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'ask again' });
+  expect(await runTurn(b.deps)).toBe('mutation');
+  expect(readEvents(b.journal).filter((e) => e.type === 'tool.result').length).toBe(2);
+  expect(ran).toEqual([]);
 });
