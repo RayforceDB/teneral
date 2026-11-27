@@ -14,6 +14,7 @@ import { memoryCommand } from '../memory';
 import { modelCommand } from '../model';
 import { configured } from '../../stem/configuration';
 import { health, healthBadge } from '../../brain/health';
+import { workingBadge } from '../../brain/working';
 import { known } from '../../brain/known';
 import { JOB_KIND, jobHistory, jobStatus, type JobRecord } from '../../body/jobs';
 import { standing } from '../../brain/owned';
@@ -533,7 +534,7 @@ export class TalkScreen {
       // First, and of everything the journal holds, not only the conversation that stands: a trouble is a record, and is shown whatever else cannot be worked out.
       this.troubled = troubles(all, now - TROUBLE_DAY_MS);
       const events = standing(all);
-      badge = healthBadge(health(events, now)) || 'memory well · exam pending';
+      badge = [healthBadge(health(events, now)) || 'memory well · exam pending', workingBadge(events)].filter((part) => part !== '').join(' · ');
       const count = known(events).intentions.filter((i) => i.waits && i.to === undefined).length;
       waits = count === 0 ? '' : `${count} for you`;
     } catch { /* a journal that cannot be read says nothing of the memory */ }

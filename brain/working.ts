@@ -1,3 +1,4 @@
+import type { JournalEvent } from './journal';
 import type { Lesson } from './lessons';
 
 // How the agent works, in numbers it can act on: which of its tools it calls and which it never
@@ -25,6 +26,39 @@ export interface Working {
   tools: string[];
   /** The lessons that stand. */
   lessons: Lesson[];
+}
+
+/**
+ * The note of a count, written when the agent is shown it: `{ days, total, never, kept, waiting }`,
+ * `never` only where there were calls enough to judge by, the lessons only where there is a tool
+ * for them. It is what the owner's status line reads: the keeper has no list of the agent's tools.
+ */
+export const WORKING_KIND = 'working.counted.v1';
+export interface Counted { days: number; total: number; never?: string[]; kept?: number; waiting?: number }
+
+export function countedOf(w: Working): Counted {
+  const total = w.calls.reduce((sum, c) => sum + c.n, 0);
+  const called = new Set(w.calls.filter((c) => c.n > 0).map((c) => c.name));
+  const kept = w.lessons.filter((l) => l.accepted !== undefined).length;
+  return {
+    days: WORKING_DAYS, total,
+    ...(total >= CALLS_MIN ? { never: w.tools.filter((name) => !called.has(name)).sort() } : {}),
+    ...(w.tools.includes('lesson') ? { kept, waiting: w.lessons.length - kept } : {}),
+  };
+}
+
+/** The last count in a few characters, for a status line: empty when nothing was counted yet or there is nothing to remark. */
+export function workingBadge(events: JournalEvent[]): string {
+  let last: Counted | null = null;
+  for (let i = events.length - 1; i >= 0 && last === null; i--) {
+    const e = events[i]!;
+    if (e.type === 'note' && e.kind === WORKING_KIND && typeof e.data === 'object' && e.data !== null) last = e.data as Counted;
+  }
+  if (last === null) return '';
+  const parts: string[] = [];
+  if (Array.isArray(last.never) && last.never.length > 0) parts.push(`${last.never.length} ${last.never.length === 1 ? 'tool' : 'tools'} unused`);
+  if (typeof last.kept === 'number' && typeof last.waiting === 'number') parts.push(last.kept + last.waiting === 0 ? 'no lessons' : `lessons ${last.kept} kept${last.waiting > 0 ? `, ${last.waiting} waiting` : ''}`);
+  return parts.join(' · ');
 }
 
 /** The same in a few lines of words; empty when there is nothing worth saying. */

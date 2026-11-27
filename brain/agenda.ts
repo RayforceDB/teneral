@@ -1,4 +1,4 @@
-import { WORKING_DAYS, workingText } from './working';
+import { WORKING_DAYS, WORKING_KIND, countedOf, workingText, type Counted } from './working';
 import { appendEvent, type EventBody, type JournalEvent, type Usage } from './journal';
 import { DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, type Intention, type IntentionData, type Known, type WorkState } from './known';
 import { MEMORY_MARK } from './logbook';
@@ -283,9 +283,12 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
   const at = Date.parse(events.at(-1)?.ts ?? '') || Date.now();
   // How it works is counted only where there is a past to ask: read through, a journal of months is not read once more for it.
   let working = '';
+  let tally: Counted | null = null;
   if (asked !== undefined) {
     try {
-      working = workingText({ calls: asked.called(at - WORKING_DAYS * DAY_MS), tools: d.specs.map((spec) => spec.name), lessons: process.env.TENERAL_LESSONS === '0' ? [] : asked.lessons().held });
+      const w = { calls: asked.called(at - WORKING_DAYS * DAY_MS), tools: d.specs.map((spec) => spec.name).filter((name) => process.env.TENERAL_LESSONS !== '0' || name !== 'lesson'), lessons: process.env.TENERAL_LESSONS === '0' ? [] : asked.lessons().held };
+      working = workingText(w);
+      tally = countedOf(w);
     } catch (err) {
       console.error(`[memory] how the agent works was not counted for the look ahead: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -320,6 +323,8 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
         put(d, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
         closed += 1;
       }
+      // What it was shown of how it works, for the owner's status line and for whoever asks later what it was told.
+      if (tally !== null) put(d, { type: 'note', kind: WORKING_KIND, data: tally });
       put(d, { type: 'note', kind: REFLECTION_KIND, data: { own: own.length, unsure: unsure.length, asks: asks.length, closed, ...(usage ? { usage } : {}) } });
       return 'reflected';
     }

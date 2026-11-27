@@ -8,7 +8,7 @@ import { known } from '../../brain/known';
 import type { Lesson } from '../../brain/lessons';
 import { journalPast, projections, storePast, type Past } from '../../brain/past';
 import { openStore } from '../../brain/store';
-import { WORKING_DAYS, workingText } from '../../brain/working';
+import { WORKING_DAYS, WORKING_KIND, countedOf, workingBadge, workingText } from '../../brain/working';
 import { library, ray } from './rayforce';
 
 const DAY = 86_400_000;
@@ -53,6 +53,15 @@ test('the agent is told which of its tools it never calls and what has come of i
   expect(workingText({ calls: [{ name: 'bash', n: 300 }], tools: ['bash'], lessons: [] })).toBe('');
   const many = Array.from({ length: 15 }, (_, i) => `tool-${String(i).padStart(2, '0')}`);
   expect(workingText({ calls: [{ name: 'bash', n: 300 }], tools: ['bash', ...many], lessons: [] })).toContain('`tool-11` and 3 more');
+
+  // The count is noted as it was shown, and the owner's status line says the last of it in a few words.
+  const note = (data: object): JournalEvent => ({ v: 1, id: `k${++n}`, ts: new Date(NOW).toISOString(), gen: 'g1', type: 'note', kind: WORKING_KIND, data }) as JournalEvent;
+  expect(countedOf({ calls: busy, tools, lessons: [lesson(true), lesson(false)] })).toEqual({ days: 30, total: 353, never: ['lesson', 'script'], kept: 1, waiting: 1 });
+  expect(countedOf({ calls: [{ name: 'bash', n: 12 }], tools: ['bash'], lessons: [] })).toEqual({ days: 30, total: 12 });
+  expect(workingBadge([])).toBe('');
+  expect(workingBadge([note(countedOf({ calls: busy, tools, lessons: [] }))])).toBe('2 tools unused · no lessons');
+  expect(workingBadge([note({ days: 30, total: 900, never: ['x'], kept: 0, waiting: 0 }), note(countedOf({ calls: [...busy, { name: 'lesson', n: 2 }], tools, lessons: [lesson(true), lesson(false), lesson(false)] }))])).toBe('1 tool unused · lessons 1 kept, 2 waiting');
+  expect(workingBadge([note({ days: 30, total: 900, never: [], kept: 3, waiting: 0 })])).toBe('lessons 3 kept');
 
   // The look ahead is asked with it, and without it is asked as it was.
   const held = known([]);
