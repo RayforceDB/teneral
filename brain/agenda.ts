@@ -1,3 +1,4 @@
+import { WORKING_DAYS, workingText } from './working';
 import { appendEvent, type EventBody, type JournalEvent, type Usage } from './journal';
 import { DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, type Intention, type IntentionData, type Known, type WorkState } from './known';
 import { MEMORY_MARK } from './logbook';
@@ -180,7 +181,7 @@ export function reflectionDueOf(notes: JournalEvent[], held: Known, idleSince: (
 }
 
 /** What the agent is asked, after everything a turn would show it. */
-export function reflectQuestion(held: Known, measured = '', now = Date.now()): string {
+export function reflectQuestion(held: Known, measured = '', now = Date.now(), working = ''): string {
   const own = held.intentions.filter((i) => i.origin === 'own').length;
   const stale = held.intentions.filter((i) => !i.waits && i.work?.status === 'waiting' && now - Date.parse(i.work.at ?? i.at) >= STALE_DAYS * DAY_MS);
   return [
@@ -194,6 +195,9 @@ export function reflectQuestion(held: Known, measured = '', now = Date.now()): s
     + (own >= OWN_OPEN_MANY ? ` You already hold ${own} ideas of your own that are open: before adding to them, close under Done those that no longer matter.` : ''),
     ...(stale.length === 0 ? [] : [`These have waited ${STALE_DAYS} days or more with nothing recorded: ${stale.slice(0, LISTED_STALE).map((i) => i.mark).join(', ')}. `
       + 'A list of things that only wait is no agenda. Of each, say under Done whether it is settled or given up; what still stands and needs your owner\'s word, put to them again under Ask, naming its mark.']),
+    ...(working === '' ? [] : [`How you work, counted: ${working}. A tool you never call is one you do not need, or one you were not told of well enough to reach for; `
+      + 'no lesson in weeks of work means that nothing taught you anything, or that what did was not set down. Which it is, you can tell and nobody else can. '
+      + 'Where the fault is in how you are made, the description of a tool, a word of your prompt, mending it is work of your own, and belongs on your agenda like any other.']),
     ...(measured === '' ? [] : [`What has come of it so far: ${measured}. Let that tell you what is worth setting down: `
       + 'ideas that are never done are not worth more of, and what your owner refused once is not to be asked again in other words.']),
     'An idea of your own is no permission. What your owner has plainly allowed you, or what touches only your own work, goes under Agenda. '
@@ -276,7 +280,17 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
   const held = asked === undefined ? known(events) : asked.known();
   const counted = asked === undefined ? initiative(events) : initiativeOf(held, asked.ofType('generation.rolledback'), asked.stands().idle);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(counted), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  const at = Date.parse(events.at(-1)?.ts ?? '') || Date.now();
+  // How it works is counted only where there is a past to ask: read through, a journal of months is not read once more for it.
+  let working = '';
+  if (asked !== undefined) {
+    try {
+      working = workingText({ calls: asked.called(at - WORKING_DAYS * DAY_MS), tools: d.specs.map((spec) => spec.name), lessons: process.env.TENERAL_LESSONS === '0' ? [] : asked.lessons().held });
+    } catch (err) {
+      console.error(`[memory] how the agent works was not counted for the look ahead: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  let messages: ChatMessage[] = requestFrom(d.asked, events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(counted), at, working), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;

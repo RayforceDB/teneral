@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readEvents, type JournalEvent } from './journal';
 import { episodes, type Episode } from './episodes';
 import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
-import { libraryAt, openRay, type Ray } from './ray';
+import { libraryAt, openRay, type Ray, toRayDay } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, fused, FUSED, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { openVectors } from './vectors';
@@ -51,6 +51,8 @@ export interface Past {
   stimuli(sources: readonly string[]): JournalEvent[];
   /** The calls of the tool `name` made at or after the time `since` (milliseconds), as their intents were journaled, the newest first. */
   callsSince(name: string, since: number): JournalEvent[];
+  /** How often each tool was called since the day of the time `since` (milliseconds) began, by name. */
+  called(since: number): { name: string; n: number }[];
   /** Every event of this type, in order: for the rare kinds of record. */
   ofType(type: string): JournalEvent[];
   /** What the owner said after the event numbered `seq` (from the terminal or a source `owner:…`), in order, of the conversation as it stands. */
@@ -285,6 +287,12 @@ export function journalPast(journal: string): Past {
     },
     count: () => lines.all().length,
     ofType: (type) => lines.all().flatMap((line) => (line.event.type === type ? [line.event] : [])),
+    called(since) {
+      const from = toRayDay(new Date(since).toISOString());
+      const counts = new Map<string, number>();
+      for (const { event: e } of lines.all()) if (e.type === 'tool.intent' && toRayDay(e.ts) >= from) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+      return [...counts].map(([name, n]) => ({ name, n }));
+    },
     callsSince: (name, since) => lines.all().flatMap((line) => (line.event.type === 'tool.intent' && line.event.name === name && Date.parse(line.event.ts) >= since ? [line.event] : [])).reverse(),
     ownerSaidSince(seq) {
       const stands = new Set(lines());
@@ -481,6 +489,10 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     ofType(type) {
       store.sync();
       return store.ofType(type);
+    },
+    called(since) {
+      store.sync();
+      return store.called(toRayDay(new Date(since).toISOString()));
     },
     callsSince(name, since) {
       store.sync();
@@ -800,6 +812,7 @@ function guarded(first: { served: Past; server: RayServer }, serve: () => Promis
     count: () => through((past) => past.count()),
     ownerSaidSince: (seq) => through((past) => past.ownerSaidSince(seq)),
     callsSince: (name, since) => through((past) => past.callsSince(name, since)),
+    called: (since) => through((past) => past.called(since)),
     ofType: (type) => through((past) => past.ofType(type)),
     lessons: () => through((past) => past.lessons()),
     settled: () => through((past) => past.settled()),
