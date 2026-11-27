@@ -20,7 +20,7 @@ import { boundAs, type Projection } from './store';
 
 export const LESSONS = 'lessons';
 /** Changed with the step in brain/lessons.ts, with the rules of cutting (brain/episodes.ts), or with the columns below. */
-export const LESSONS_VERSION = 2;
+export const LESSONS_VERSION = 3;
 
 const strs = (data: string[]): Column => ({ type: 'str', data });
 const nums = (data: number[]): Column => ({ type: 'i64', data: BigInt64Array.from(data, BigInt) });

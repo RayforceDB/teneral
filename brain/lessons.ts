@@ -4,6 +4,11 @@ import { ruleStart, ruleStep, slimOf, type RuleState } from './episodes';
 // A lesson is a hypothesis from one conversation, not a new owner rule. Only a later
 // conversation, running a different generation, can make it permanent. The journal remains the
 // store; expiry and the single switch affect both reading and writing.
+//
+// A proposal comes from the agent while it lives a conversation (the `lesson` tool), or from the
+// forming of a memory of a stretch that is over (brain/sleep.ts): that one says `by: 'sleep'`, and
+// names the stretch it is of and an event of it. Either way it waits: a later conversation is
+// shown it and accepts it or lets it run out.
 
 export const LESSON_KIND = 'memory.lesson.v1';
 export const LESSON_ACCEPT_KIND = 'memory.lesson.accept.v1';
@@ -65,7 +70,8 @@ export function lessonStep(state: LessonState, e: JournalEvent): boolean {
   state.ids.push(e.id);
   if (e.type !== 'note' || !LESSON_NOTES.includes(e.kind) || typeof e.data !== 'object' || e.data === null) return false;
   const evidence = (e.data as { evidence?: unknown }).evidence;
-  const within = e.kind === LESSON_KIND && validIds(evidence) && evidence.every((id) => state.ids.includes(id));
+  // What sleep proposes is of a stretch that is over: the body took its evidence from that stretch itself.
+  const within = e.kind === LESSON_KIND && validIds(evidence) && ((e.data as { by?: unknown }).by === 'sleep' || evidence.every((id) => state.ids.includes(id)));
   state.records.push({ event: e, conversation: state.conversation, within });
   return true;
 }
@@ -88,11 +94,12 @@ export function lessonsOf(records: LessonRecord[], placeOf: (id: string) => numb
       const evidence = d.evidence as string[];
       // The record itself belongs to the same conversation as its evidence; it must not be
       // silently folded into a later episode merely because no new stimulus intervened.
-      if (d.conversation !== conversation || !within) continue;
+      const asleep = d.by === 'sleep';
+      if ((!asleep && d.conversation !== conversation) || !within) continue;
       held.set(e.id, {
         id: e.id, mark: `L${e.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}`,
         text: (d.text as string).trim(), topic: (d.topic as string).trim(), evidence,
-        conversation, ...(validText(d.expected, 500) ? { expected: (d.expected as string).trim() } : {}),
+        conversation: asleep ? d.conversation : conversation, ...(validText(d.expected, 500) ? { expected: (d.expected as string).trim() } : {}),
         version: 1, proposedGen: e.gen, at: e.ts, expiresAt: future(e.ts, PROPOSED_DAYS), checks: [],
       });
     } else if (e.kind === LESSON_ACCEPT_KIND && typeof d.lesson === 'string') {
@@ -138,7 +145,7 @@ export function lessons(events: JournalEvent[], now = Date.parse(events.at(-1)?.
 
 const words = (text: string): Set<string> => new Set(text.toLowerCase().match(/[a-z0-9_./-]{4,}/g) ?? []);
 
-/** Relevant accepted lessons, plus proposals local to the conversation now being lived. */
+/** Relevant accepted lessons, proposals local to the conversation now being lived, and proposals of earlier conversations that wait to be accepted. */
 export function lessonText(events: JournalEvent[], enabled = process.env.TENERAL_LESSONS !== '0', mark = '[memory]'): string | null {
   if (!enabled) return null;
   const state = lessonStart();
@@ -150,6 +157,8 @@ export function lessonText(events: JournalEvent[], enabled = process.env.TENERAL
 
 /** How many of the latest events say what the agent is at now. */
 export const RECENT = 30;
+/** How many proposals that wait are shown at once: the latest. */
+export const WAITING = 3;
 
 /** The same from the lessons themselves, the conversation being lived (the first event of it) and the latest `RECENT` events. */
 export function lessonTextOf(all: Lesson[], current: string | undefined, latest: JournalEvent[], mark = '[memory]'): string | null {
@@ -162,9 +171,15 @@ export function lessonTextOf(all: Lesson[], current: string | undefined, latest:
   const relevant = all.filter(l => l.accepted && [...words(`${l.topic} ${l.text}`)].some(w => context.has(w)))
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 3);
   const local = all.filter(l => !l.accepted && l.conversation === current).slice(-3);
+  // A proposal can be accepted only by a later conversation in another generation, and that conversation has to be shown it:
+  // unseen, it would run out with nobody having read it. Only where it can be accepted now.
+  const gen = latest.at(-1)?.gen;
+  const waits = gen === undefined ? [] : all.filter(l => !l.accepted && l.conversation !== current && l.proposedGen !== gen).slice(-WAITING);
   const lines: string[] = [];
-  for (const l of [...local, ...relevant]) {
-    const status = l.accepted ? `accepted; v${l.version}; expires ${l.expiresAt.slice(0, 10)}` : `local to ${l.conversation}; separate acceptance required`;
+  for (const l of [...local, ...waits, ...relevant]) {
+    const status = l.accepted ? `accepted; v${l.version}; expires ${l.expiresAt.slice(0, 10)}`
+      : l.conversation === current ? `local to ${l.conversation}; separate acceptance required`
+      : `proposed ${l.at.slice(0, 10)} in an earlier conversation, waits until ${l.expiresAt.slice(0, 10)}; if it still seems right to you, keep it: lesson with action accept and lesson ${l.mark}; if not, leave it and it runs out`;
     const expected = l.expected ? ` Expected effect: ${l.expected} [${l.checks.length === 0 ? 'verification due' : `checked ${l.checks.at(-1)!.at.slice(0, 10)}: ${l.checks.at(-1)!.outcome}`}]` : '';
     lines.push(`${l.mark} [${status}] ${l.topic}: ${l.text} Evidence: ${l.evidence.join(', ')}.${expected}`);
   }

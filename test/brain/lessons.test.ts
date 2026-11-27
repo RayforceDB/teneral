@@ -31,9 +31,18 @@ test('a proposal is local and provenance-linked, never automatically permanent',
   expect(lessons(events)).toHaveLength(1);
   expect(lessonText(events)).toContain('local to');
   expect(lessonText(events)).toContain(source.id);
-  // A genuinely later conversation no longer carries the unaccepted proposal into requests.
-  const later = [...events, ev({ type: 'generation.promoted', commit: 'b', previous: 'a' }, at(2), 'g2'), ev({ type: 'stimulus', source: 'terminal', text: 'foreground mutation again' }, at(3), 'g2')];
-  expect(lessonText(later)).toBeNull();
+  // A later conversation in the same generation cannot accept it, and is not shown it.
+  const same = [...events, ev({ type: 'stimulus', source: 'terminal', text: 'something else entirely' }, at(600))];
+  expect(lessonText(same)).toBeNull();
+  // A later conversation in another generation is the one that can: it is shown the proposal, with how to keep it, until it runs out.
+  const later = [...events, ev({ type: 'generation.promoted', commit: 'b', previous: 'a' }, at(600), 'g2'), ev({ type: 'stimulus', source: 'terminal', text: 'something else entirely' }, at(601), 'g2')];
+  const shown = lessonText(later)!;
+  expect(shown).toContain('Abort a running foreground turn');
+  expect(shown).toContain('waits until 2026-11-23');
+  expect(shown).toMatch(/action accept and lesson L\w+/);
+  expect(shown).not.toContain('local to');
+  const late = [...later, ev({ type: 'stimulus', source: 'terminal', text: 'a week on' }, at(8 * 24 * 60), 'g2')];
+  expect(lessonText(late)).toBeNull();
 });
 
 test('only a later conversation in another generation can accept; optimistic versions are enforced', () => {
@@ -110,5 +119,27 @@ test('the same switch refuses new lesson tool writes', async () => {
     process.env.TENERAL_LESSONS = '0';
     await expect(f.tool.run({ action: 'propose', basedOn: 0, topic: 'foreground', text: 'A lesson.', conversation: source.id, evidence: [source.id] }, f.ctx)).rejects.toThrow('disabled');
     expect(readEvents(f.ctx.journal)).toHaveLength(1);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+
+test('a lesson is proposed with a topic and its text alone, and kept by its mark alone: the body knows the conversation and the version', async () => {
+  const f = await fixture();
+  try {
+    const source = f.add({ type: 'stimulus', source: 'terminal', text: 'you sent the report before checking the figures' });
+    const proposed = await f.tool.run({ action: 'propose', topic: 'reports', text: 'Check every figure against its source before sending a report.' }, f.ctx);
+    const mark = proposed.match(/L\w+/)![0];
+    const note = readEvents(f.ctx.journal).at(-1)!;
+    expect(note).toMatchObject({ type: 'note', kind: LESSON_KIND, data: { conversation: source.id, evidence: [source.id], version: 1 } });
+    await expect(f.tool.run({ action: 'accept', lesson: mark }, f.ctx)).rejects.toThrow('generation');
+    f.add({ type: 'assistant', text: 'Noted.', toolCalls: [] });
+    f.add({ type: 'generation.promoted', commit: 'b', previous: 'a' }, 'g2');
+    f.add({ type: 'stimulus', source: 'terminal', text: 'another day, another report' }, 'g2');
+    f.ctx.gen = 'g2';
+    expect(lessonText(readEvents(f.ctx.journal))).toContain(mark);
+    expect(await f.tool.run({ action: 'accept', lesson: mark }, f.ctx)).toContain('Accepted');
+    expect(lessons(readEvents(f.ctx.journal))[0]!.accepted?.gen).toBe('g2');
+    // A check still says which version it read, and names what it saw.
+    await expect(f.tool.run({ action: 'check', lesson: mark, outcome: 'observed' }, f.ctx)).rejects.toThrow();
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
