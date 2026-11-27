@@ -440,6 +440,16 @@ A few run at a time (`TENERAL_SUBAGENTS`); one started beyond that waits for a p
 
 In `./one talk` each running subagent has a row over the input box, with its name and its task, and the `jobs` action under the footer counts them with the commands the agent left running. The limits are settings: `TENERAL_SUBAGENTS`, `TENERAL_SUBAGENT_STEPS`, `TENERAL_SUBAGENT_MINUTES`, `TENERAL_SUBAGENT_TOKENS`, and `TENERAL_SUBAGENT_MODEL` for a cheaper model.
 
+### Lessons
+
+A lesson is what an experience taught the agent about how to act, as distinct from a fact (what is
+so) and a skill (the steps of a task). It begins as a proposal: the agent makes one with the
+`lesson` tool, giving a topic and the lesson, or the forming of a memory names one for the stretch
+it is of. A proposal lasts a week and decides nothing. A later conversation, once the agent's code
+has changed, is shown the proposals that wait and keeps one with `lesson` and its mark; kept, a
+lesson is shown whenever what the agent is at touches its topic, for ninety days. At most 64 stand
+at once, and `TENERAL_LESSONS=0` turns the whole of it off.
+
 ### Scripts
 
 The agent has a `script` tool: JavaScript of its own that calls its tools as functions (`await tools.read({ path })`), run by bun in a process of its own. Nothing turns it on; it is one of the tools.

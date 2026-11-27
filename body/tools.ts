@@ -769,21 +769,23 @@ const forget: Tool = {
 const lesson: Tool = {
   spec: {
     name: 'lesson',
-    description: 'Record and separately review evidence-linked lessons. propose keeps one local to its originating conversation; accept is allowed only from a later conversation in a different generation and needs basedOn 1; check verifies an accepted expected effect using later journal evidence. A single TENERAL_LESSONS=0 switch disables both reads and writes.',
+    description: 'Keep what an experience taught you about how to act: a mistake and what avoids it, a correction of your judgement, something you would do differently next time. '
+      + 'Not what is so (`know`) nor the steps of a task (a skill). Propose one when it happens, in a sentence that makes sense months later: action propose with topic and text. '
+      + 'A proposal lasts a week. A later conversation, after your code has changed, is shown it and keeps it with action accept and its mark; kept, it is shown whenever what you are at touches its topic, for ninety days. '
+      + 'If you gave an expected effect, action check with outcome records later whether it was seen.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['propose', 'accept', 'check'] },
-        topic: { type: 'string', description: 'Short retrieval topic for propose' },
-        text: { type: 'string', description: 'The bounded lesson for propose' },
-        conversation: { type: 'string', description: 'First journal event id of the originating episode for propose' },
-        evidence: { type: 'array', items: { type: 'string' }, description: '1–16 exact source journal event ids; checks must cite events after acceptance' },
-        expected: { type: 'string', description: 'Optional observable effect to verify later' },
-        lesson: { type: 'string', description: 'Lesson mark or full id for accept/check' },
-        basedOn: { type: 'number', description: 'Exact version read most recently; proposal and acceptance are both version 1, each check increments it' },
-        outcome: { type: 'string', enum: ['observed', 'not_observed'], description: 'For check: whether journal evidence shows the expected effect' },
+        topic: { type: 'string', description: 'For propose: a few words naming what it is about' },
+        text: { type: 'string', description: 'For propose: the lesson itself' },
+        expected: { type: 'string', description: 'For propose, optional: what should be seen later if the lesson is right' },
+        evidence: { type: 'array', items: { type: 'string' }, description: 'Ids of the journal events that show it. Optional for propose and accept. A check must name events after the acceptance' },
+        lesson: { type: 'string', description: 'For accept and check: the mark of the lesson, such as L1a2b3c4d' },
+        basedOn: { type: 'number', description: 'For check: the version of the lesson as you were last shown it' },
+        outcome: { type: 'string', enum: ['observed', 'not_observed'], description: 'For check: whether what was expected was seen' },
       },
-      required: ['action', 'evidence', 'basedOn'],
+      required: ['action'],
     },
   },
   async run(args, ctx) {
@@ -791,27 +793,30 @@ const lesson: Tool = {
     const action = str(args, 'action');
     const { held, conversation: living } = pastOf(ctx).lessons();
     const record = (args as Record<string, unknown>);
-    const rawEvidence = record.evidence;
+    // Left out where it may be, the conversation being lived is the evidence: its first event.
+    const rawEvidence = record.evidence === undefined && action !== 'check' && living !== undefined ? [living] : record.evidence;
+    if (record.basedOn === undefined && action === 'propose') record.basedOn = 0;
     if (!Array.isArray(rawEvidence) || rawEvidence.length < 1 || rawEvidence.length > 16 || !rawEvidence.every(x => typeof x === 'string')) throw new Error('evidence must contain 1–16 exact journal event ids');
     const evidence = rawEvidence as string[];
-    if (record.basedOn !== 0 && (!Number.isSafeInteger(record.basedOn) || (record.basedOn as number) < 1)) throw new Error('basedOn must be 0 for a proposal or the positive version last read');
+    if (record.basedOn !== undefined && record.basedOn !== 0 && (!Number.isSafeInteger(record.basedOn) || (record.basedOn as number) < 1)) throw new Error('basedOn must be 0 for a proposal or the positive version last read');
     if (action === 'propose') {
       if (record.basedOn !== 0) throw new Error('a new lesson has basedOn 0');
       if (held.length >= 64) throw new Error('lesson store is full (64); let old lessons expire before proposing more');
-      const conversation = str(args, 'conversation');
-      // The conversation being lived, as the rules alone cut the journal, is always open: it is the last.
-      if (living === undefined || living !== conversation) throw new Error(`conversation must be the first event id of the current open episode: ${living ?? 'none'}`);
+      // The conversation being lived, as the rules alone cut the journal, is always open: it is the last. The body knows which it is.
+      if (living === undefined) throw new Error('there is no conversation to propose a lesson in');
+      const conversation = living;
       const there = pastOf(ctx).places(evidence);
       if (evidence.some(id => !there.has(id))) throw new Error('every evidence id must exist in the journal');
       const text = str(args, 'text').trim(); const topic = str(args, 'topic').trim();
       if (text.length > 2000 || topic.length > 120) throw new Error('lesson text/topic is too long');
       const expected = optional(args, 'expected')?.trim();
       const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_KIND, data: { text, topic, evidence, conversation, ...(expected ? { expected } : {}), version: 1 } });
-      return `Proposed local lesson L${note.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)} (v1). It is not permanent; a later conversation in another generation must accept it separately.`;
+      return `Proposed lesson L${note.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}. It is a hypothesis for a week: a later conversation, after your code has changed, is shown it and keeps it or lets it run out.`;
     }
     const mark = str(args, 'lesson');
     const found = held.find(l => l.id === mark || l.mark === mark);
     if (!found) throw new Error(`no current lesson has mark ${mark}`);
+    if (record.basedOn === undefined && action === 'accept') record.basedOn = found.version;
     if (record.basedOn !== found.version) throw new Error(`stale lesson version: read ${record.basedOn}, current ${found.version}; reread before writing`);
     if (action === 'accept') {
       if (found.accepted) throw new Error('lesson is already accepted');

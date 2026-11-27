@@ -1,3 +1,4 @@
+import { LESSON_KIND, lessonText, lessons } from '../../brain/lessons';
 import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -207,7 +208,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [],
+    facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [], lessons: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });
@@ -352,4 +353,32 @@ test('a stretch of talk is not asked for a procedure, nor is one whose body know
   expect(await sleep(two.deps)).toBe('remembered');
   expect(await sleep(two.deps)).toBe('remembered');
   expect(knownIn(readEvents(two.journal)).intentions.filter((i) => i.text.startsWith('Write the skill release-the-parser'))).toHaveLength(1);
+});
+
+
+test('a stretch may teach a lesson: it is set down as a proposal of that stretch, shown to a later conversation after the code has changed, and with lessons off nothing is asked', async () => {
+  const { first, second, events } = twoEpisodes();
+  const LESSON = `${MEMORY}\n\nLessons:\n- sending mail: Send a test message to myself before telling my owner that the mail works. => It is set up and\n- a second one: This line is over the one a stretch may give and is left out. => please set up`;
+  expect(question({ id: 'e', from: 0, to: 2, first: 'a', last: 'b', start: first[0]!.ts, end: first[1]!.ts, chars: 100, why: 'gap' } as Parameters<typeof question>[0], first, 600)).not.toContain('Lessons:');
+  const s = setup(events, [answer(LESSON)]);
+  expect(await sleep(s.deps)).toBe('remembered');
+  expect(String(s.seen[0]!.at(-1)!.content)).toContain('Lessons:\n- <a few words');
+  const notes = readEvents(s.journal).filter((e) => e.type === 'note' && e.kind === LESSON_KIND);
+  expect(notes.map((e) => (e as { data: unknown }).data)).toEqual([{ text: 'Send a test message to myself before telling my owner that the mail works.', topic: 'sending mail', evidence: [first[1]!.id], conversation: first[0]!.id, version: 1, by: 'sleep' }]);
+  const held = lessons(readEvents(s.journal));
+  expect(held.map((l) => `${l.conversation} ${l.proposedGen} ${l.accepted === undefined}`)).toEqual([`${first[0]!.id} g2 true`]);
+  // The generation that formed the memory cannot keep it, and is not shown it; the next one is (the notes are written at the hour of the test).
+  expect(lessonText(readEvents(s.journal))).toBeNull();
+  const next = [...readEvents(s.journal), ev({ type: 'stimulus', source: 'terminal', text: 'good morning' }, LONG)].map((e, i, all) => (i === all.length - 1 ? { ...e, gen: 'g3', ts: new Date(Date.now() + 60_000).toISOString() } : e));
+  expect(lessonText(next)).toContain('Send a test message to myself');
+  expect(second.length).toBe(2);
+
+  // With lessons off nothing is asked and nothing set down, whatever the answer holds.
+  process.env.TENERAL_LESSONS = '0';
+  try {
+    const off = setup(twoEpisodes().events, [answer(LESSON)]);
+    expect(await sleep(off.deps)).toBe('remembered');
+    expect(String(off.seen[0]!.at(-1)!.content)).not.toContain('Lessons:');
+    expect(readEvents(off.journal).some((e) => e.type === 'note' && e.kind === LESSON_KIND)).toBe(false);
+  } finally { delete process.env.TENERAL_LESSONS; }
 });

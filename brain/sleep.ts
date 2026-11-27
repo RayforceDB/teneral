@@ -4,6 +4,7 @@ import { DEFAULT_BUDGET, assemble, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { PIN_KIND, UNPIN_KIND, pinned, standing } from './owned';
+import { LESSON_KIND, LESSON_LIMIT, lessons as lessonsHeld, type Lesson } from './lessons';
 import { CONFIRMED_KIND, DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Known, type Source } from './known';
 import { ENTITY_KIND, ENTITY_KINDS, NAME_CHARS, keyOf, named, type EntityKind } from './entities-table';
 import { suspectIn } from './suspect';
@@ -150,7 +151,7 @@ function opening(events: JournalEvent[]): string {
 }
 
 /** What the agent is asked, after the journal up to the end of the episode. */
-export function question(episode: Episode, events: JournalEvent[], chars: number, earlier: Earlier[] = [], skills: KeptSkill[] | null = null): string {
+export function question(episode: Episode, events: JournalEvent[], chars: number, earlier: Earlier[] = [], skills: KeptSkill[] | null = null, lessons = false): string {
   const begins = opening(events);
   return [
     `${MEMORY_MARK} It is time to form a memory. It is of the stretch of the conversation above from ${when(episode.start)} to ${when(episode.end)}: `
@@ -189,6 +190,14 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'One or two questions that you or your owner might ask some later month and that this stretch answers. Put each in other words than the stretch used, '
     + 'as someone would who remembers what it was about and not how it was said. After => copy exactly the first six words or so of the one message in this stretch that holds the answer. '
     + 'They are kept to test, later, whether you can still find what you knew.',
+    ...(!lessons ? [] : [
+      'Lessons:\n- <a few words naming what it is about>: <the lesson> => <the first words of the message above that shows it>\n'
+      + 'A lesson is what this stretch taught you about how to act: something went wrong and you now see what would have avoided it, your owner corrected your judgement, '
+      + 'or you found that a way you usually go about things does not serve. Say it as what you will do next time, in a sentence that can be understood on its own. '
+      + 'Not what is so (that is a fact), not the steps of a task (that is a procedure), and not something any careful worker already knows. '
+      + 'After => copy exactly the first six words or so of the one message in this stretch that shows it. At most one, and most stretches give none. '
+      + 'It is kept only as a hypothesis: you are shown it in a later conversation, and keep it then if it still seems right.',
+    ]),
     // Only of a stretch in which much was done: a way of doing something is found by doing, and a stretch of talk has none.
     ...(skills === null ? [] : [
       'Procedures:\n- new <short-name>: <the way of doing something that this stretch worked out>\n- fix <skill>: <what in it this stretch showed to be wrong or missing>\n'
@@ -269,6 +278,8 @@ export interface Formed {
   about: { kind: EntityKind; name: string; who?: string }[];
   /** Ways of doing something this stretch worked out, or showed a kept skill to be wrong in: each to become a skill, or a fix to one. */
   procedures: { op: 'new' | 'fix'; id: string; what: string }[];
+  /** What this stretch taught about how to act, with the beginning of the message that shows it. */
+  lessons: { topic: string; text: string; begins: string }[];
 }
 
 const FACT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*((?:\(\s*(?:replaces|about|confirms)\s+[^)]*\)\s*)*)(.*)$/i;
@@ -281,7 +292,10 @@ const QUESTIONS_MAX = 2;
 /** The most of either that one episode may set down: a list longer than this is not a list of what matters. */
 const LIST_MAX = 12;
 
-type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'about' | 'procedures';
+type List = 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'about' | 'procedures' | 'lessons';
+/** A lesson a stretch gives: `- topic: the lesson => how the message that shows it begins`. One stretch gives one at most. */
+const LESSON_LINE = /^-\s*([^:]{3,120}?)\s*:\s*(.+?)\s*=>\s*(.+)$/;
+const LESSONS_MAX = 1;
 const PROCEDURE_LINE = /^-\s*(new|fix)\s+`?([a-z][a-z0-9-]{1,39})`?\s*[:\u2014-]\s*(.+)$/i;
 /** The most procedures one stretch may name, and the fewest tool calls a stretch must have for the list to be asked for. */
 const PROCEDURES_MAX = 2;
@@ -291,13 +305,13 @@ export interface KeptSkill { id: string; summary: string }
 /** The note that a stretch named a procedure: `{ op, id, what, episode }`. */
 export const PROCEDURE_KIND = 'skill.proposed.v1';
 const ABOUT_LINE = /^-\s*\[\s*([a-z]+)\s*\]\s*(.+)$/i;
-const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated', 'about:': 'about', 'procedures:': 'procedures' };
+const HEADINGS: Record<string, List> = { 'facts:': 'facts', 'intentions:': 'intentions', 'done:': 'done', 'questions:': 'questions', 'outdated:': 'outdated', 'about:': 'about', 'procedures:': 'procedures', 'lessons:': 'lessons' };
 
 /** The lists at the end of an answer, and the answer without them. A line that is not in form is left out. */
-function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures'> & { body: string[] } {
+function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures' | 'lessons'> & { body: string[] } {
   const heading = (line: string): List | null => HEADINGS[plain(line).toLowerCase()] ?? null;
   const first = lines.findIndex((line) => heading(line) !== null);
-  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [] };
+  const found: Pick<Formed, 'facts' | 'intentions' | 'done' | 'questions' | 'outdated' | 'confirmed' | 'about' | 'procedures' | 'lessons'> = { facts: [], intentions: [], done: [], questions: [], outdated: [], confirmed: [], about: [], procedures: [], lessons: [] };
   if (first === -1) return { body: lines, ...found };
   let list: List | null = null;
   for (const line of lines.slice(first)) {
@@ -332,6 +346,9 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
     } else if (list === 'procedures' && found.procedures.length < PROCEDURES_MAX) {
       const m = PROCEDURE_LINE.exec(item);
       if (m && m[3]!.trim().length >= 20) found.procedures.push({ op: m[1]!.toLowerCase() as 'new' | 'fix', id: m[2]!.toLowerCase(), what: m[3]!.trim().slice(0, 600) });
+    } else if (list === 'lessons' && found.lessons.length < LESSONS_MAX) {
+      const m = LESSON_LINE.exec(item);
+      if (m && m[2]!.trim().length >= 20) found.lessons.push({ topic: m[1]!.trim(), text: m[2]!.trim().slice(0, 2000), begins: m[3]!.trim().replace(/^["'«“]+|["'»”…. ]+$/g, '') });
     } else if (list === 'about' && found.about.length < LIST_MAX) {
       const m = ABOUT_LINE.exec(item);
       const kind = ENTITY_KINDS.find((one) => one === m?.[1]?.toLowerCase());
@@ -413,6 +430,8 @@ interface Read {
   last(): JournalEvent[];
   /** The procedures stretches have named so far, as `new release-it`: one is not set before the agent twice. */
   proposed(): Set<string>;
+  /** The lessons that stand, proposed or accepted. */
+  lessons(): Lesson[];
 }
 
 const proposedIn = (events: JournalEvent[]): Set<string> => new Set(events.flatMap((e) => (e.type === 'note' && e.kind === PROCEDURE_KIND ? [`${String((e.data as { op?: unknown }).op)} ${String((e.data as { id?: unknown }).id)}`] : [])));
@@ -431,6 +450,7 @@ function fromJournal(events: JournalEvent[]): Read {
     },
     last: () => events,
     proposed: () => proposedIn(events),
+    lessons: () => lessonsHeld(events),
   };
 }
 
@@ -461,6 +481,7 @@ function fromPast(past: Past): Read {
     },
     last: () => past.standingFrom(Math.max(0, past.count() - 1)),
     proposed: () => proposedIn(past.notes([PROCEDURE_KIND])),
+    lessons: () => past.lessons().held,
   };
 }
 
@@ -507,7 +528,9 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   const near = nearest(d.past, read.notesAsOf(episode), episode, lived);
   // Asked for a way of doing something only where much was done.
   const keptSkills = lived.filter((e) => e.type === 'tool.intent').length >= PROCEDURE_CALLS ? (d.skills?.() ?? null) : null;
-  const ask = question(episode, lived, chars, near, keptSkills);
+  // A lesson is asked for unless lessons are switched off or as many are held as may be.
+  const heldLessons = process.env.TENERAL_LESSONS === '0' ? null : read.lessons();
+  const ask = question(episode, lived, chars, near, keptSkills, heldLessons !== null && heldLessons.length < LESSON_LIMIT);
   let messages: ChatMessage[] = asOfRequest(d, () => read.asOf(episode), episode, budget, ask);
   let usage: Usage | undefined;
   let problem = '';
@@ -530,7 +553,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, outdated, confirmed, about, procedures, ...kept } = memory;
+      const { facts, intentions, done, questions, outdated, confirmed, about, procedures, lessons: taught, ...kept } = memory;
       // Whether what this stretch gave is something already held is decided apart, by a request that never sees the stretch
       // (brain/identity.ts), before anything is written: should the agent be woken meanwhile, the memory is formed another time.
       const held = read.knownAsOf(episode);
@@ -616,6 +639,15 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
             origin: 'own',
           } satisfies IntentionData,
         });
+      }
+      // What the stretch taught is a proposal like any other (brain/lessons.ts): it waits for a later conversation to keep it.
+      // Not one on a topic a lesson is already held on, and none where lessons are off or full.
+      if (heldLessons !== null && heldLessons.length < LESSON_LIMIT) {
+        const topics = new Set(heldLessons.map((l) => l.topic.toLowerCase()));
+        for (const one of taught) {
+          if (topics.has(one.topic.toLowerCase())) continue;
+          put(d, { type: 'note', kind: LESSON_KIND, data: { text: one.text, topic: one.topic, evidence: [answering(lived, one.begins)?.id ?? episode.first], conversation: episode.first, version: 1, by: 'sleep' } });
+        }
       }
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);
