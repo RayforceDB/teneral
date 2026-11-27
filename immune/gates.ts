@@ -316,6 +316,24 @@ interface Running {
 }
 
 /**
+ * What stays behind to end a started command when the process that started it is gone. A command
+ * has a process group of its own, so that all of it can be stopped; for the same reason nothing
+ * stops it when its starter is killed outright: a test run cut by a time limit in the middle of a
+ * smoke run left the body it had started alive for good, with a database of its own, asking a
+ * stand-in model that was no longer there. This looks twice a second, in a group of its own so that
+ * it outlives its starter, and ends by itself when the command's group is empty.
+ */
+const WATCH = `
+const starter = Number(process.argv.at(-2)), group = Number(process.argv.at(-1));
+setInterval(() => {
+  try { process.kill(-group, 0); } catch (e) { if (e.code !== 'EPERM') process.exit(0); }
+  if (process.ppid === starter) return;
+  try { process.kill(-group, 'SIGKILL'); } catch {}
+  process.exit(0);
+}, 500);
+`;
+
+/**
  * Starts a command without waiting for it, in a process group of its own and with no terminal:
  * unlike `sh`, this leaves the event loop free, so a stop signal is heard while it runs.
  */
@@ -324,6 +342,11 @@ function start(cmd: readonly string[], cwd: string, env: Record<string, string>,
   const stderr = new Tail(keepBytes);
   const child = spawn(cmd[0]!, cmd.slice(1), { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const pid = child.pid ?? 0;
+  if (pid > 0) {
+    try {
+      spawn(process.execPath, ['-e', WATCH, String(process.pid), String(pid)], { detached: true, stdio: 'ignore' }).unref();
+    } catch { /* nothing to watch it with: it is stopped as before, by whoever started it */ }
+  }
   child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
   child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
   let finished = false;
