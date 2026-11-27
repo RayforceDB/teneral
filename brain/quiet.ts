@@ -22,3 +22,16 @@ export const quietReply = (text: string): boolean => {
   }
   return true;
 };
+/**
+ * What stands before the marker when a reply ends with it on a line of its own, and null when it
+ * does not end so. A model often says why it stays quiet and then signs off with the marker: the
+ * marker is the answer, and the words before it are its reasons, not a message to anyone.
+ * The marker first and prose after it is a reply, as above.
+ */
+export const quietEnd = (text: string): string | null => {
+  const rest = text.trim();
+  if (!rest.endsWith(QUIET_REPLY)) return null;
+  const before = rest.slice(0, rest.length - QUIET_REPLY.length);
+  if (before !== '' && !before.endsWith('\n')) return null;
+  return before.trim();
+};

@@ -71,6 +71,8 @@ test('repeated internal markers on a clock tick become one quiet marker, without
   for (const [text, quiet] of [
     [Array.from({ length: 12 }, () => QUIET_REPLY).join('\n\n'), true],
     [`${QUIET_REPLY} I did work.`, false],
+    [`Nothing here names me.\n\n${QUIET_REPLY}`, true],
+    [`I will answer with ${QUIET_REPLY}`, false],
   ] as const) {
     const s = setup([{ text, toolCalls: [] }]);
     appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'clock', text: 'tick' });
@@ -78,6 +80,8 @@ test('repeated internal markers on a clock tick become one quiet marker, without
     expect(await runTurn({ ...s.deps, onText: value => shown.push(value) })).toBe('done');
     expect(readEvents(s.journal).at(-1)).toMatchObject({ text: quiet ? QUIET_REPLY : text, toolCalls: [] });
     expect(shown).toEqual(quiet ? [] : [text]);
+    // Why it stayed quiet is not lost: it is kept with its thoughts.
+    if (text.startsWith('Nothing here')) expect(readEvents(s.journal).at(-1)).toMatchObject({ reasoning: 'Nothing here names me.' });
   }
 });
 

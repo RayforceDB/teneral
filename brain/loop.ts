@@ -8,7 +8,7 @@ import type { Past } from './past';
 import { DEFAULT_BUDGET, stemNote, type Sight, type View } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
-import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, SAME_REQUEST_REPLY, quietReply } from './quiet';
+import { NO_OP_REPLY, QUIET_REPLY, ROUND_LIMIT_REPLY, SAME_REQUEST_REPLY, quietEnd, quietReply } from './quiet';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
@@ -327,10 +327,13 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
     }
     // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
     const journaledCalls = reply.cutOff === true && reply.partialCalls !== undefined ? reply.partialCalls : reply.toolCalls;
-    const quiet = quietTick && reply.toolCalls.length === 0 && quietReply(reply.text);
+    // Why it stays quiet, said before the marker, is kept with its thoughts: the reply is the marker, as every reader of the journal expects it.
+    const why = quietTick && reply.toolCalls.length === 0 ? quietEnd(reply.text) : null;
+    const quiet = quietTick && reply.toolCalls.length === 0 && (quietReply(reply.text) || why !== null);
+    const reasoning = [reply.reasoning ?? '', why ?? ''].filter((part) => part !== '').join('\n\n');
     appendEvent(d.journal, d.gen, {
       type: 'assistant', text: quiet ? QUIET_REPLY : reply.text, toolCalls: journaledCalls,
-      ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
+      ...(reply.usage ? { usage: reply.usage } : {}), ...(reasoning !== '' ? { reasoning } : {}),
     });
     if (reply.text !== '' && !streamed && !quiet) d.onText?.(reply.text);
     if (reply.cutOff === true && !continued && round + 1 < (d.maxRounds ?? 50)) {
