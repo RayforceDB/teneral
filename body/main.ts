@@ -243,6 +243,8 @@ let current: AbortController | null = null;
 let retryAt: number | null = null;
 /** The already-requested mutation to hand to the stem once no foreground terminal line is unanswered. */
 let handoff: string | null = null;
+/** The one turn given, after a mutation was requested, to an owner's line that arrived beside it has been run. */
+let answeredBeside = false;
 const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
 
 /**
@@ -812,7 +814,10 @@ for (;;) {
       const last = past.latest('stimulus');
       // A terminal line read during the mutation turn is durable and must get its reply now.
       // Re-running mutate would be rejected as a repeated request, so keep the original handoff.
-      if (last?.type !== 'stimulus' || last.source !== 'terminal' || !turnOwed(past, journal)) process.exit(75);
+      // Once: a turn that does not settle it (calls that are all refused, a failure) is not tried again here, and the
+      // next generation finds the line still owed. Tried again, it went on for as long as the model kept calling.
+      if (answeredBeside || last?.type !== 'stimulus' || last.source !== 'terminal' || !turnOwed(past, journal)) process.exit(75);
+      answeredBeside = true;
     }
     if (failed === null) {
       retryAt = null;
