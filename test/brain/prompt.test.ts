@@ -311,16 +311,21 @@ test('the agent is told of its `code` command, which is in no list of tools', ()
   }
 });
 
-test('what is in every request whatever is said stays within its room: the prompt and the tools', async () => {
-  // The prompt and the list of tools are sent with every request and are never cut to fit: what they
-  // take, the conversation does not get. They were 70,000 and 24,500 characters when this was written,
-  // three eighths of a request of the usual size. This test is the question asked of every addition:
-  // is it needed in every request? What is needed only now and then belongs in a skill, which is read
-  // when it is called for, or behind a command that explains itself (`code --help`).
-  // To add here, take something of the same size out, or raise a number below and say why in the commit.
+test('what is in every request whatever is said is watched: no one tool says too much, and the whole does not grow unseen', async () => {
+  // The prompt and the list of tools are sent with every request and are never cut to fit. A hard ceiling on their sum
+  // was here, and what it did was wrong twice: a tool nobody was told of was never called, and a description was cut
+  // short the day it was found that the agent did not use the tool because of its description. A thousand characters
+  // are a third of a percent of a request and cost next to nothing where the beginning of a request is cached. What
+  // grows unwatched is harder to see: each addition takes from the attention given to the rest. So two things are held.
   const { TOOLS } = await import('../../body/tools');
-  expect(prompt.length).toBeLessThanOrEqual(72_000);
-  // 26,500 since `about` and `know` say that a person is who a service says they are, not a name: it has to be said where the name is given.
-  // 27,500 with `schedule`: something to do again and again is set with a tool, and a tool has to be in the list to be called.
-  expect(JSON.stringify(TOOLS.map((tool) => tool.spec)).length).toBeLessThanOrEqual(27_500);
+  // One tool does not say more than this: what needs more is a skill, read when it is called for, or a command that
+  // explains itself (`code --help`).
+  const TOOL_MAX = 2_000;
+  expect(TOOLS.filter((tool) => JSON.stringify(tool.spec).length > TOOL_MAX).map((tool) => tool.spec.name)).toEqual([]);
+  // And the whole is not more than a twentieth over what it was when last looked at. When this fails, look at what was
+  // added and whether it is needed in every request; then set down the size as it is now, and say in the commit what grew.
+  const SEEN = { prompt: 72_800, tools: 27_700 };
+  const SLACK = 1.05;
+  expect(prompt.length).toBeLessThanOrEqual(Math.floor(SEEN.prompt * SLACK));
+  expect(JSON.stringify(TOOLS.map((tool) => tool.spec)).length).toBeLessThanOrEqual(Math.floor(SEEN.tools * SLACK));
 });

@@ -777,10 +777,10 @@ const lesson: Tool = {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['propose', 'accept', 'check'] },
-        topic: { type: 'string', description: 'For propose: a few words naming what it is about' },
+        topic: { type: 'string', description: 'For propose: a few words naming what it is about; the lesson is shown again when these words come up' },
         text: { type: 'string', description: 'For propose: the lesson itself' },
         expected: { type: 'string', description: 'For propose, optional: what should be seen later if the lesson is right' },
-        evidence: { type: 'array', items: { type: 'string' }, description: 'Ids of the journal events that show it. Optional for propose and accept. A check must name events after the acceptance' },
+        evidence: { type: 'array', items: { type: 'string' }, description: 'Ids of the journal events that show it, as `timeline` and `open` give them. Optional for propose and accept: left out, the conversation you are in stands for it. A check must name events after the acceptance' },
         lesson: { type: 'string', description: 'For accept and check: the mark of the lesson, such as L1a2b3c4d' },
         basedOn: { type: 'number', description: 'For check: the version of the lesson as you were last shown it' },
         outcome: { type: 'string', enum: ['observed', 'not_observed'], description: 'For check: whether what was expected was seen' },
