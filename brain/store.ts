@@ -181,6 +181,8 @@ export interface Store {
   noted(kinds: readonly string[]): JournalEvent[];
   /** The newest `limit` calls of the tool `name`, as their intents were journaled, the newest first. */
   calls(name: string, limit: number): JournalEvent[];
+  /** How often each tool was called on or after the day `day` (as `toRayDay` numbers days), counted by the database. */
+  called(day: number): { name: string; n: number }[];
   /** Every event of this type, in the journal's order: for the few kinds of record that are rare (a generation rolled back). */
   ofType(type: string): JournalEvent[];
   /** Every source something was ever said from. */
@@ -590,6 +592,12 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal), pr
       if (!mounted || limit <= 0) return [];
       ray.bind(ASKED, { w: { type: 'sym', data: [name.slice(0, 64)] } });
       return eventsOf(ray.table(`(select {from: ${BOUND} where: (and (== type 'tool.intent) (in source (at ${ASKED} 'w))) desc: seq take: ${Math.trunc(limit)} line: line})`));
+    },
+    called(day) {
+      if (!mounted) return [];
+      const t = ray.table(`(select {from: ${BOUND} where: (and (>= date ${dayName(day)}) (== type 'tool.intent)) by: source n: (count seq)})`);
+      const ns = t.columns.n as BigInt64Array | undefined ?? new BigInt64Array(0);
+      return (t.columns.source as string[] | undefined ?? []).map((name, i) => ({ name, n: Number(ns[i]) }));
     },
     ofType(type) {
       if (!mounted) return [];
