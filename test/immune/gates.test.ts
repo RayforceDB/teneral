@@ -811,3 +811,24 @@ test('a candidate that gives no answers fails its exam', async () => {
   expect(result).toMatchObject({ ok: false, gate: 'memory' });
   expect(result.output).toContain('gave no answers');
 });
+
+test('what a gate run started does not outlive the run: killed outright in the middle of a check, it leaves nothing running', async () => {
+  const { dir, seed } = makeLineage({ 'body/a.ts': 'export const a = 1;\n' });
+  writeFiles(dir, { 'body/a.ts': 'export const a = 2;\n' });
+  const next = commitAll(dir, 'next');
+  const pidFile = join(dir, '..', `left-${randomUUID()}.pid`);
+  // A gate run in a process of its own, whose one check writes where it is and then stays.
+  const script = `import { runGates } from ${JSON.stringify(resolve(import.meta.dir, '../../immune/gates.ts'))};\n`
+    + `await runGates(${JSON.stringify(dir)}, ${JSON.stringify(seed)}, ${JSON.stringify(next)}, [{ gate: 'stays', cmd: ['bash', '-c', 'echo $$ > ${pidFile}; sleep 300'] }]);\n`;
+  const runner = Bun.spawn([process.execPath, '-e', script], { stdout: 'ignore', stderr: 'ignore' });
+  const until = async (what: () => boolean, ms: number) => { const end = Date.now() + ms; while (!what() && Date.now() < end) await new Promise((r) => setTimeout(r, 50)); return what(); };
+  expect(await until(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '', 30_000)).toBe(true);
+  const left = Number(readFileSync(pidFile, 'utf8').trim());
+  const alive = () => { try { process.kill(left, 0); return true; } catch { return false; } };
+  expect(alive()).toBe(true);
+  // As a time limit does it: no signal the run could act on.
+  runner.kill('SIGKILL');
+  await runner.exited;
+  expect(await until(() => !alive(), 10_000)).toBe(true);
+  rmSync(pidFile, { force: true });
+}, SLOW);
