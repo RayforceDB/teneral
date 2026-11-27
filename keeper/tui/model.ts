@@ -3,7 +3,7 @@ import { eventName, type JournalEvent } from '../../brain/journal';
 import { AT_REST, gist, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
-import { QUIET_REPLY, quietReply } from '../../brain/quiet';
+import { QUIET_REPLY, quietEnd, quietReply } from '../../brain/quiet';
 import { routineClock } from '../../body/sensors';
 import { SUBAGENT_KIND } from '../../body/subagents';
 
@@ -146,7 +146,7 @@ export function stand(s: Standing, e: JournalEvent): Standing {
       return { ...next, asked: false, background: source === 'clock' && routineClock(asText(f.text)) };
     }
     case 'assistant': {
-      const text = asText(f.text).trim();
+      const text = (quietEnd(asText(f.text)) ?? asText(f.text)).trim();
       const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
       const words = text !== '' && !text.startsWith(NOT_FROM_MODEL) && !quietReply(text);
       return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, background: !next.turn.busy ? false : next.background, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
@@ -382,7 +382,11 @@ export class Transcript {
         return;
       }
       case 'assistant': {
-        const text = clean(asText(f.text)).trim();
+        const whole = clean(asText(f.text)).trim();
+        // Signed off with the marker after saying why (a journal from before the body kept those words with its thoughts):
+        // the marker is never shown, and in a turn nobody asked for the words before it are no reply either.
+        const why = quietEnd(whole);
+        const text = why === null ? whole : this.own !== null ? QUIET_REPLY : why;
         const reasoning = typeof f.reasoning === 'string' ? clean(f.reasoning).trim() : '';
         const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
         if (this.own !== null && calls === 0) {
@@ -398,7 +402,9 @@ export class Transcript {
             const others = gone.filter((e) => e.kind === 'quiet').length - 1;
             if (did > 0 || label !== 'clock') {
               const what = first?.kind === 'quiet' && first.text !== '' ? `${first.text}${others > 0 ? ` (+${others} more)` : ''}` : '';
-              this.push({ kind: 'quiet', label: `${label}, nothing to say${did > 0 ? ` after ${did} ${did === 1 ? 'step' : 'steps'}` : ''}`, text: what });
+              // Said of the agent, in words an owner reads at a glance: it saw this and chose not to answer.
+              const steps = did > 0 ? `${did} ${did === 1 ? 'step' : 'steps'}, ` : '';
+              this.push({ kind: 'quiet', label: label === 'clock' ? `clock, ${steps}nothing to report` : `${label}, ${steps}read, no answer needed`, text: what });
             }
             return;
           }
