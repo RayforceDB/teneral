@@ -35,7 +35,7 @@ import { followUps, lookedAt, offered, reportAsk, settle, tickDueOf, worthATick 
 import { WORK_KIND, known } from '../brain/known';
 import { openServedPast, sourceOf } from '../brain/past';
 import { OVER_KIND, TROUBLE_KIND, teller } from '../brain/trouble';
-import { REMINDED_KIND, chooseReminder, lately } from '../brain/reminded';
+import { REMINDED_KIND, chooseReminder, lately, lookedBy } from '../brain/reminded';
 import { EPISODE_KIND, MERGE_KIND } from '../brain/remembered';
 import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep, waitingOf } from '../brain/sleep';
@@ -537,7 +537,12 @@ async function turn(): Promise<{ error: unknown } | null> {
       // The latest reminders are asked of the past: the turn hands over only the end of the journal it holds.
       // A skill the agent keeps that fits what was said: offered by a line, opened by the agent if it judges that it fits.
       offer: (question) => offerFor(ctx, question),
-      remind: (question, inFront) => { past.sync(); return chooseReminder(past.find(question, { kinds: ['memory'], limit: 12, words: true }), inFront, lately(past.notes([REMINDED_KIND])), past); },
+      // What was said in another language than English is put into English first: the memories are written in it (brain/reminded.ts).
+      remind: async (question, inFront) => {
+        const by = await lookedBy(question, glanceProvider, current?.signal);
+        past.sync();
+        return chooseReminder(past.find(by, { kinds: ['memory'], limit: 12, words: true }), inFront, lately(past.notes([REMINDED_KIND])), past);
+      },
       imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),

@@ -9,7 +9,7 @@ import { OUTDATED_KIND } from '../../brain/links';
 import { journalPast, type Found } from '../../brain/past';
 import type { ChatMessage, Provider } from '../../brain/provider';
 import { EPISODE_KIND } from '../../brain/remembered';
-import { QUESTION_MIN, REMINDED_KIND, REMINDER_MEMORIES, chooseReminder, lately, remindedNote } from '../../brain/reminded';
+import { QUESTION_MIN, REMINDED_KIND, REMINDER_MEMORIES, chooseReminder, lately, lookedBy, otherThanEnglish, remindedNote } from '../../brain/reminded';
 import type { ToolContext } from '../../body/tools';
 
 let n = 0;
@@ -171,4 +171,32 @@ test('a memory that a later one made outdated is not brought back: the later one
   expect(reminder.text).toContain('December 4th');
   expect(reminder.text).not.toContain('November 20th');
   expect(reminder.text).toContain('Each says what was so at the time it gives');
+});
+
+test('what was said in another language is put into English before it is looked by, and English is looked by as it is', async () => {
+  // Told by the letters alone: a few names in Latin letters do not make a Russian line English, nor a Russian word an English one Russian.
+  expect(otherThanEnglish('почему мы отказались от проверки файлов на диске в rayforce?')).toBe(true);
+  expect(otherThanEnglish('why did we drop the checks of files on disk, as in "доверяем"?')).toBe(false);
+  expect(otherThanEnglish('warum prüfen wir die Dateien nicht?')).toBe(false);
+  expect(otherThanEnglish('12345 ...')).toBe(false);
+  const asked: string[] = [];
+  const says = (text: string) => async (messages: { content?: string | null }[], tools: unknown[]) => { asked.push(String(messages.at(-1)!.content)); expect(tools).toEqual([]); return { text, toolCalls: [] }; };
+  // English: nothing is asked of any model.
+  expect(await lookedBy('why did we drop the checks of files on disk?', says('never') as never)).toBe('why did we drop the checks of files on disk?');
+  expect(asked).toEqual([]);
+  // Another language: its own words, and the English after them.
+  const said = 'почему мы отказались от проверки файлов на диске?';
+  expect(await lookedBy(said, says('  why did we give up checking the files on disk?\n') as never)).toBe(`${said}\nwhy did we give up checking the files on disk?`);
+  expect(asked).toEqual([said]);
+  // Nothing said back, a provider that fails, one that is too slow: the words as they were said.
+  expect(await lookedBy(said, says('  ') as never)).toBe(said);
+  expect(await lookedBy(said, (async () => { throw new Error('down'); }) as never)).toBe(said);
+  const slow = ((_m: unknown, _t: unknown, o: { signal?: AbortSignal }) => new Promise((_, reject) => o.signal!.addEventListener('abort', () => reject(new Error('aborted'))))) as never;
+  expect(await lookedBy(said, slow, undefined, 20)).toBe(said);
+});
+
+test('a past that answers a moment later is waited for: what it gives is in the first request all the same', async () => {
+  const s = setup(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); return { ids: ['m1'], text: '[memory] it was the group map' }; }, QUESTION);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen[0]!.slice(1, 3).map((m) => m.content)).toEqual([QUESTION, '[memory] it was the group map']);
 });

@@ -38,7 +38,7 @@ export interface TurnDeps {
    * brings back (brain/reminded.ts). `inFront` is the request as it would be sent without it.
    * Null when nothing does. Omitted in tests of everything else.
    */
-  remind?: (question: string, inFront: string, events: JournalEvent[]) => Reminder | null;
+  remind?: (question: string, inFront: string, events: JournalEvent[]) => Reminder | null | Promise<Reminder | null>;
   /**
    * A skill the agent keeps that fits what was just said: offered once, by a line that names it and how to read it.
    * The procedure itself is not shown: the agent opens it if it judges that it fits. Null when none fits.
@@ -246,7 +246,7 @@ async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interru
         let reminder: Reminder | null = null;
         try {
           const inFront = request(events, d.system(), budget - specsSize, undefined, { tailChars: d.tailChars, ...(d.logbookChars === undefined ? {} : { logbookChars: d.logbookChars }) });
-          reminder = d.remind(question, inFront.map((m) => m.content ?? '').join('\n'), events);
+          reminder = await d.remind(question, inFront.map((m) => m.content ?? '').join('\n'), events);
         } catch (err) {
           // Remembering is a help, not a condition: the turn goes on without it.
           console.error(`[memory] nothing was brought back for this turn: ${err instanceof Error ? err.message : String(err)}`);

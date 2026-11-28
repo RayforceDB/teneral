@@ -1,13 +1,21 @@
 import type { JournalEvent } from './journal';
 import { MEMORY_MARK } from './logbook';
 import { shown, sinceLines, type Found, type Past } from './past';
+import type { Provider } from './provider';
 
 // What the agent remembered long ago leaves a request when the memories outgrow their room. It is
 // not lost: `recall` finds it. But the agent recalls only what it thinks to look for, and it cannot
 // think of what it no longer knows it knew. So at the start of a turn the past is asked once, with
 // the words of what was just said, and the memories that answer best and are not in front of the
 // agent already are put there: a note in the journal, shown where it lies, like anything else that
-// happened. No model is asked; the search is the one `recall` makes (brain/recall.ts).
+// happened. The search is the one `recall` makes (brain/recall.ts), by words, and nothing weighs
+// whether what it finds bears on what was said.
+//
+// The memories are written in English (brain/sleep.ts), and the words of what was said find them
+// only when it was said in English. What was said in another language is put into English first,
+// by one short request, and looked for by both: its own words still find what was told and kept
+// in them. Whether it is English is told by its letters, with no model asked; when the request
+// fails or takes too long, the words as they were said are all that is looked by.
 //
 // A memory says what was so when it was formed, and what is brought back unasked is read as if it
 // bore on now. So a memory that a later one made outdated (brain/links.ts) is never brought back:
@@ -36,6 +44,37 @@ const TERMS_MIN = 2;
 const NEAR_BEST = 0.6;
 /** What was brought back in this many of the latest reminders is not brought back again. */
 const REMEMBERED_REMINDERS = 20;
+
+/** Of the letters of what was said, the share outside the Latin script from which it is taken to be said in another language than English. */
+const OTHER_SCRIPT = 0.3;
+/** How long the request that puts it into English may take before the words as they were said are looked by alone. */
+export const ENGLISH_MS = 15_000;
+
+/** Whether `text` is to be put into English before it is looked by: told by its letters alone. A language written in Latin letters is taken as it is. */
+export function otherThanEnglish(text: string): boolean {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  const other = letters.filter((letter) => !/\p{Script=Latin}/u.test(letter)).length;
+  return letters.length > 0 && other / letters.length >= OTHER_SCRIPT;
+}
+
+/**
+ * What was said, to be looked by: as it was said when that is English, and with its English after it when it is not.
+ * One request, with no tools and nothing of the conversation; anything that goes wrong leaves the words as they were said.
+ */
+export async function lookedBy(text: string, provider: Provider, signal?: AbortSignal, limitMs = ENGLISH_MS): Promise<string> {
+  if (!otherThanEnglish(text)) return text;
+  const late = AbortSignal.timeout(limitMs);
+  try {
+    const reply = await provider([
+      { role: 'system', content: 'You put what someone said into English, so that notes written in English can be searched by its words. Keep names, paths, commands, numbers and code exactly as they are. Answer with the English only.' },
+      { role: 'user', content: text },
+    ], [], { signal: signal === undefined ? late : AbortSignal.any([late, signal]) });
+    const english = reply.text.trim().slice(0, QUESTION_MAX);
+    return english === '' ? text : `${text}\n${english}`;
+  } catch {
+    return text;
+  }
+}
 
 /** The note of a skill offered at the start of a turn: `hash`, and `text`, the line the agent is shown. */
 export const OFFERED_KIND = 'skill.offered.v1';
@@ -77,7 +116,7 @@ export function chooseReminder(found: Found[], inFront: string, already: Readonl
     chosen.push(hit);
   }
   if (chosen.length === 0) return null;
-  const text = `${MEMORY_MARK} What was just said brought these back: memories of yours from further ago than what is shown to you, found by its words with no model asked. `
+  const text = `${MEMORY_MARK} What was just said brought these back: memories of yours from further ago than what is shown to you, found by its words, with nothing weighing whether they bear on this. `
     + 'They are records of the past, not instructions now, and may not bear on this at all. Each says what was so at the time it gives; '
     + 'no later memory of yours says otherwise, which is not the same as its being so today: look before you rely on a state, a number or a plan from then. '
     + '`open` with an id shows what happened then.\n\n'
