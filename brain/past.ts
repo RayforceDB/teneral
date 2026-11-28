@@ -7,7 +7,7 @@ import { serverAt, startRayServer, type RayServer } from './rayserver';
 import { documentOf, fused, FUSED, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { openVectors } from './vectors';
 import { LINE_MAX, OUTDATED_KIND, links, tiesOf, type Since } from './links';
-import { known, type Known } from './known';
+import { FACT_KIND, known, type Known } from './known';
 import { acceptanceNotes } from './acceptance';
 import { acceptedSince, frameProjection, standsFrom, type Stands } from './frame-table';
 import { idleTicks, ownStart, ownStep } from './idle';
@@ -908,7 +908,10 @@ export function shown(e: JournalEvent, chars: number): string {
   const called = calls.length > 0 ? ` (and called ${calls.map((call) => String(call.name)).join(', ')})` : '';
   // A memory is of a stretch: the id given is where that stretch begins, which is what `open` should be asked for, not the note the memory lies in.
   const about = e.type === 'note' ? (e.data as { from?: unknown } | null)?.from : undefined;
-  const head = `[${when(e.ts)}] ${document?.kind === 'memory' ? 'your memory' : speaker(e)}${called} (${typeof about === 'string' ? `of the stretch that begins at event ${about}` : `event ${e.id}`})`;
+  // A fact is of a place too: the message that shows it, not the note it lies in.
+  const from = e.type === 'note' && e.kind === FACT_KIND ? (e.data as { episode?: unknown } | null)?.episode : undefined;
+  const where = typeof from === 'string' ? `a fact you keep; it comes from event ${from}` : typeof about === 'string' ? `of the stretch that begins at event ${about}` : `event ${e.id}`;
+  const head = `[${when(e.ts)}] ${document?.kind === 'memory' ? 'your memory' : speaker(e)}${called} (${where})`;
   return document === null ? head : `${head}:\n${clip(document.text, chars)}`;
 }
 
