@@ -46,8 +46,9 @@ process.on('message', (message: unknown) => {
     process.send!({ done: true, ok, value });
     let left = 2;
     const gone = (): void => { if (--left === 0) process.exit(0); };
-    process.stdout.write('', gone);
-    process.stderr.write('', gone);
+    // Ended, not written to once more: an empty write is answered while earlier writes are still on their way out.
+    process.stdout.end(gone);
+    process.stderr.end(gone);
   };
   run(tools).then(
     (value) => end(true, shown(value)),
