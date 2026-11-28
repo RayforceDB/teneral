@@ -4,7 +4,7 @@ import { episodes, type Episode } from './episodes';
 import { BACK_KIND, standing, wasSaid, fromOwner } from './owned';
 import { libraryAt, openRay, type Ray, toRayDay } from './ray';
 import { serverAt, startRayServer, type RayServer } from './rayserver';
-import { documentOf, fused, FUSED, keyed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
+import { documentOf, FUSED, keyed, placed, recall, scanIndex, type Hit, type Index, type Kind } from './recall';
 import { openVectors } from './vectors';
 import { LINE_MAX, OUTDATED_KIND, links, tiesOf, type Since } from './links';
 import { FACT_KIND, known, type Known } from './known';
@@ -645,7 +645,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
         return event === null || !stands(ranges, one.doc, event) ? [] : [{ doc: one.doc, kind: one.kind, score: 0, terms: [], cover: 0, event }];
       });
       for (const hit of near) if (!held.has(hit.doc)) held.set(hit.doc, hit);
-      return fused(byWords.map((hit) => hit.doc), near.map((hit) => hit.doc)).slice(0, limit).map(({ doc, score }) => ({ ...held.get(doc)!, score }));
+      return placed(byWords.map((hit) => hit.doc), near.map((hit) => hit.doc), limit).map(({ doc, score }) => ({ ...held.get(doc)!, score }));
     },
     asked() {
       store.sync();
