@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { JournalEvent } from '../../brain/journal';
 import { projections, storePast, type Past } from '../../brain/past';
-import { fused, FUSE_K } from '../../brain/recall';
+import { fused, FUSE_K, placed } from '../../brain/recall';
 import { EPISODE_KIND } from '../../brain/remembered';
 import { openStore } from '../../brain/store';
 import { modelDir, openVectors, passage, PORTION, TEXT_MAX, vectorsDir } from '../../brain/vectors';
@@ -134,4 +134,19 @@ test.skipIf(!capable)('what shares no word with a question is found by its meani
   // The questions of the exam are found among themselves by their words, as they were.
   expect(past.find('world', { kinds: ['key'] })).toEqual([]);
   past.close();
+});
+
+test('an answer keeps its first places for the best by words, and fills the rest from the two rankings made one', () => {
+  // Made one, the two rankings would give 9, 8, 1, 2, 7: what both place middling comes before what the words put first.
+  const [words, meaning] = [[1, 2, 3, 8, 9], [9, 8, 7, 6, 5]];
+  expect(fused(words, meaning).slice(0, 5).map((one) => one.doc)).toEqual([9, 8, 1, 2, 7]);
+  expect(placed(words, meaning, 5).map((one) => one.doc)).toEqual([1, 2, 3, 9, 8]);
+  // Each with what it counts for in the two made one; nothing twice; no more than was asked for.
+  expect(placed(words, meaning, 5)[3]!.score).toBeCloseTo(1 / (FUSE_K + 4) + 1 / FUSE_K, 12);
+  expect(placed(words, meaning, 2).map((one) => one.doc)).toEqual([1, 2]);
+  expect(placed(words, meaning, 8).map((one) => one.doc)).toEqual([1, 2, 3, 8, 9, 7, 6, 5]);
+  // Words that find little leave their places to the meaning, and with no words at all it answers alone.
+  expect(placed([1], [9, 8, 7], 5).map((one) => one.doc)).toEqual([1, 9, 8, 7]);
+  expect(placed([], [9, 8], 5).map((one) => one.doc)).toEqual([9, 8]);
+  expect(placed([], [], 5)).toEqual([]);
 });
