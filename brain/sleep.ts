@@ -157,7 +157,7 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     `${MEMORY_MARK} It is time to form a memory. It is of the stretch of the conversation above from ${when(episode.start)} to ${when(episode.end)}: `
     + `${begins === '' ? 'the last part of it' : `it begins with the message that starts "${begins}"`} and ends with the last message above. `
     + 'What came before that stretch you already remember or still see above; do not tell it again.',
-    'Write in the first person, as yourself, in the language you were speaking. Keep what you would need later: what was asked and by whom, '
+    'Write in the first person, as yourself, and in English, whatever language was spoken: the memory and every list after it. Names, paths, commands and the words you quote stay exactly as they were, in their own language. Keep what you would need later: what was asked and by whom, '
     + 'what you did, what you decided and why, exact names, paths, numbers and commands, what failed, and what is left open. '
     + 'Where your owner\'s own words matter, quote them. Do not copy long output, and do not say anything that the conversation above does not show.',
     'Keep apart what you lived and what you only read. Say of each thing how you came by it: your owner told you, you did it yourself, a tool returned it, '
@@ -720,7 +720,7 @@ function mergeQuestion(lived: boolean, parts: number, start: string, end: string
       : `${MEMORY_MARK} Above stand ${parts} memories of yours, of the stretch from ${when(start)} to ${when(end)}. `)
     + 'Together they take more room than can be kept in front of you, '
     + 'so form one memory of that whole stretch to stand in their place. Nothing is lost by it: each of them stays in your journal, and `recall` finds it.',
-    'Write in the first person, as yourself, in the language you were speaking. Keep the line through it: what it was about, what was decided and why, what it led to, what was left open, '
+    'Write in the first person, as yourself, and in English, whatever language the memories are in. Names, paths, commands and quoted words stay exactly as they were, in their own language. Keep the line through it: what it was about, what was decided and why, what it led to, what was left open, '
     + 'and the names, places and numbers you would need to pick the thread up again. Leave out what mattered only on the day. '
     + `Say nothing that ${lived ? 'what stands above does not show' : 'the memories above do not say'}. `
     + 'Keep apart what you lived and what you only read: what stood in a page, a file or a message from someone else is told as that, not in your own voice as a thing you know.',
