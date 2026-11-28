@@ -9,7 +9,7 @@ import { known as knownIn } from '../../brain/known';
 import { PROCEDURE_CALLS, PROCEDURE_KIND } from '../../brain/sleep';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import { OUTDATED_KIND, outdatedStretches } from '../../brain/links';
-import { journalPast } from '../../brain/past';
+import { journalPast, shown } from '../../brain/past';
 import { EPISODE_KIND, QUARANTINE_KIND, remembered } from '../../brain/remembered';
 import { memoryHealth, parseMemory, question, sleep, targetChars, waiting } from '../../brain/sleep';
 
@@ -381,4 +381,21 @@ test('a stretch may teach a lesson: it is set down as a proposal of that stretch
     expect(String(off.seen[0]!.at(-1)!.content)).not.toContain('Lessons:');
     expect(readEvents(off.journal).some((e) => e.type === 'note' && e.kind === LESSON_KIND)).toBe(false);
   } finally { delete process.env.TENERAL_LESSONS; }
+});
+
+test('a fact leads to the message that shows it: named by how it begins, in whatever language it was said; with no such message it is kept whole and leads to where the stretch begins', async () => {
+  const asked = said('где у нас стоит стенд для проверок?', LONG);
+  const told = said('Стенд стоит на хосте alpha, порт 8443', 1000);
+  const did = replied('Noted: alpha, port 8443.');
+  const now = said('thanks', LONG);
+  const s = setup([asked, told, did, now], [answer(`${MEMORY}\n\nFacts:\n- [owner] The staging stand is on the host alpha, port 8443 => Стенд стоит на хосте alpha\n- [seen] In this shell a => b is how a rule is written\n- [seen] The deploy takes four minutes on alpha`)]);
+  expect(await sleep(s.deps)).toBe('remembered');
+  const facts = readEvents(s.journal).filter((e) => e.type === 'note' && e.kind === 'memory.fact.v1');
+  expect(facts.map((e) => (e as { data: { text: string; episode: string } }).data).map((d) => [d.text, d.episode])).toEqual([
+    ['The staging stand is on the host alpha, port 8443', told.id],
+    ['In this shell a => b is how a rule is written', asked.id],
+    ['The deploy takes four minutes on alpha', asked.id],
+  ]);
+  // Found again, it is shown with that place, not with the note it lies in.
+  expect(shown(facts[0]!, 200)).toContain(`a fact you keep; it comes from event ${told.id}`);
 });

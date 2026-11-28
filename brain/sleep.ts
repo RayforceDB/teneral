@@ -169,11 +169,12 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'dropped when it was given up or set aside, open only when work on it was left unfinished and you meant to go on with it. '
     + 'Your life going on is no reason to say open: most stretches end with something done.',
     'After the memory you may add these lists, each only when there is something for it.',
-    'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own>\n'
+    'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own> => <the first words of the message above that shows it>\n'
     + 'A fact is worth a line only if knowing it would change what you do some later week: who your owner is and what they want, how they want things done, '
     + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
     + `In the brackets say where it comes from: ${SOURCES.join(', ')} (owner: your owner said it; seen: you saw it yourself, as in a tool's output; `
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
+    + 'After => copy exactly, as they stand there, the first six words or so of the one message in this stretch that shows the fact: it is how the fact leads back to the place it comes from. '
     + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
     + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, with who they are as you were shown it when they spoke, since several people may bear one name: - [seen] (about Ivan Petrov, zulip:7) <the fact>\n'
     + 'And when this stretch shows that a fact you already hold, listed above with its mark, still holds, say so in a line of its own, with nothing after it: - [seen] (confirms F1a2b3c4)\n'
@@ -259,7 +260,8 @@ export function nearest(past: Pick<Past, 'find'> | undefined, asOf: JournalEvent
 const plain = (line: string): string => line.replace(/^[\s#*_>-]+/, '').replace(/[*_]+/g, '').trim();
 
 /** A fact as the agent set it down: the fact it replaces is still only a mark. */
-export interface NotedFact { text: string; source: Source; replaces: string[]; about?: string; who?: string }
+/** A fact as a reply gives it. `begins` is how the message that shows it begins, when the reply says; `whole` is then the line as it was written, for when no message begins so. */
+export interface NotedFact { text: string; source: Source; replaces: string[]; about?: string; who?: string; begins?: string; whole?: string }
 export interface Formed {
   title: string;
   text: string;
@@ -327,7 +329,11 @@ function lists(lines: string[]): Pick<Formed, 'facts' | 'intentions' | 'done' | 
       if (m && confirms !== '') { found.confirmed.push(...confirms.split(/[\s,]+/).filter((mark) => mark !== '')); continue; }
       if (m && source !== undefined && m[3]!.trim().length >= 8) {
         const whom = named(about);
-        found.facts.push({ source, text: m[3]!.trim(), replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about: whom.name }), ...(whom.who === '' ? {} : { who: whom.who }) });
+        const whole = m[3]!.trim();
+        const cut = whole.lastIndexOf('=>');
+        const [said, begins] = cut > 0 ? [whole.slice(0, cut).trim(), whole.slice(cut + 2).trim()] : [whole, ''];
+        const led = said.length >= 8 && begins !== '';
+        found.facts.push({ source, text: led ? said : whole, replaces: replaces.split(/[\s,]+/).filter((mark) => mark !== ''), ...(about === '' ? {} : { about: whom.name }), ...(whom.who === '' ? {} : { who: whom.who }), ...(led ? { begins, whole } : {}) });
       }
     } else if (list === 'intentions' && found.intentions.length < LIST_MAX) {
       const m = INTENTION_LINE.exec(item);
@@ -553,10 +559,16 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     usage = reply.usage;
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
-      const { facts, intentions, done, questions, outdated, confirmed, about, procedures, lessons: taught, ...kept } = memory;
+      const { facts: noted, intentions, done, questions, outdated, confirmed, about, procedures, lessons: taught, ...kept } = memory;
       // Whether what this stretch gave is something already held is decided apart, by a request that never sees the stretch
       // (brain/identity.ts), before anything is written: should the agent be woken meanwhile, the memory is formed another time.
       const held = read.knownAsOf(episode);
+      // A fact leads to the message that shows it. Where the reply named none that this stretch holds, what stood after => may have been
+      // part of the fact: it is kept whole, and leads to where the stretch begins.
+      const facts = noted.map(({ begins, whole, ...fact }) => {
+        const place = begins === undefined ? null : answering(lived, begins);
+        return place !== null ? { ...fact, at: place.id } : { ...fact, text: whole ?? fact.text, at: episode.first };
+      });
       const heldFacts: Held[] = held.facts.map((f) => ({ mark: f.mark, text: f.text }));
       const things = (d.asked?.entities() ?? []).filter((one) => one.kind !== 'person').map((one, i) => ({ mark: `E${i + 1}`, text: `[${one.kind}] ${one.name}`, kind: one.kind, name: one.name }));
       const items = [
@@ -588,7 +600,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
         const replaces = [...fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id), ...(verdict.is === 'replaces' && other !== undefined ? [other.id] : [])];
         put(d, {
           type: 'note', kind: FACT_KIND,
-          data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }), ...held2(fact) } satisfies FactData,
+          data: { text: fact.text, source: fact.source, episode: fact.at, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }), ...(fact.who === undefined ? {} : { who: fact.who }), ...held2(fact) } satisfies FactData,
         });
       }
       // A fact this stretch showed to hold still is known to hold as of now: only one held then, named by the mark it was shown with.

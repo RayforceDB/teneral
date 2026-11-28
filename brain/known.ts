@@ -53,7 +53,7 @@ export type Source = (typeof SOURCES)[number];
 export interface FactData {
   text: string;
   source: Source;
-  /** The id of the first event of the episode it was learned in: where to open the journal to see it said. */
+  /** Where to open the journal to see it said: the id of the message that shows it, or of the first event of the episode it was learned in when no one message was named. */
   episode: string;
   /** Ids of the fact notes this one takes the place of. */
   replaces?: string[];
